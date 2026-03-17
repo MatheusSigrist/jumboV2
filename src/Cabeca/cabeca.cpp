@@ -533,6 +533,7 @@ void iniciarOperacao() {
   } else if (IRdetectado) {
     estado = IR;
   }
+  
 
   if (atacante) {
     switch (estado) {
