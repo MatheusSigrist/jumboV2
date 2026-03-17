@@ -92,6 +92,17 @@ struct StatusComunicacao {
   bool allOK;  // tudo funcionando
 };
 
+enum CasoComandoMusculo : uint8_t {
+  CMD_NENHUM = 0,
+  CMD_IR = 1,
+  CMD_LINHA = 2
+};
+
+struct ComandoMusculo {
+  uint8_t caso;
+  int16_t angulo;  // escalado em x10
+};
+
 PacoteCima placaCima;
 PacoteBaixo placaBaixo;
 
@@ -250,6 +261,16 @@ void EnviarStatusComunicacao() {
   Serial.write(0xFF);  // marcador especial para status
   Serial.write((uint8_t*)&status, sizeof(StatusComunicacao));
   Serial.write(0xFE);  // fim do status
+}
+
+void EnviarComandoParaMusculo(uint8_t caso, float anguloGraus) {
+  ComandoMusculo cmd;
+  cmd.caso = caso;
+  cmd.angulo = (int16_t)round(anguloGraus * 10.0);
+
+  Serial.write(0xAB);
+  Serial.write((uint8_t*)&cmd, sizeof(ComandoMusculo));
+  Serial.write(0xBA);
 }
 
 // Testar comunicacao com todas as placas
@@ -540,17 +561,20 @@ void iniciarOperacao() {
       case LINHA:
         // ATACANTE + LINHA:
         // Prioridade máxima é fugir da linha usando anguloLinha.
+        EnviarComandoParaMusculo(CMD_LINHA, anguloLinha);
         break;
 
       case IR:
         // ATACANTE + IR:
         // Seguir/alinhar a bola usando anguloBola e intensidade.
+        EnviarComandoParaMusculo(CMD_IR, anguloBola);
         break;
 
       case NENHUM:
       default:
         // ATACANTE + NENHUM:
         // Procurar a bola ou reposicionar para ataque.
+        EnviarComandoParaMusculo(CMD_NENHUM, 0.0);
         break;
     }
   } else {
@@ -558,17 +582,20 @@ void iniciarOperacao() {
       case LINHA:
         // DEFENSOR + LINHA:
         // Prioridade máxima é fugir da linha usando anguloLinha.
+        EnviarComandoParaMusculo(CMD_LINHA, anguloLinha);
         break;
 
       case IR:
         // DEFENSOR + IR:
         // Interceptar a bola e manter comportamento defensivo.
+        EnviarComandoParaMusculo(CMD_IR, anguloBola);
         break;
 
       case NENHUM:
       default:
         // DEFENSOR + NENHUM:
         // Reposicionar e proteger a área defensiva.
+        EnviarComandoParaMusculo(CMD_NENHUM, 0.0);
         break;
     }
   }
