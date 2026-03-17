@@ -30,8 +30,8 @@ bool bussolaOK = false;    // se a bussola está funcionando
 
 // Botões
 #define BOTAO_1 3  // RTC_GPIO3
-#define BOTAO_2 46 // GPIO46
-#define BOTAO_3 37 // GPIO37
+#define BOTAO_2 37 // GPIO37
+#define BOTAO_3 46 // GPIO46
 
 // Máquina de Estados
 enum Estado { MENU, CALIBRACAO, INICIAR };
@@ -59,6 +59,9 @@ struct PacoteCima {
   int16_t uT;
   int16_t angulo;
   int16_t intensidade;
+  int16_t erroGol;
+  uint16_t pixelsGol;
+  uint8_t golDetectado;
 };
 
 struct PacoteBaixo {
@@ -94,10 +97,13 @@ PacoteBaixo placaBaixo;
 
 bool linhaDetectada = false;  // true se linha foi detectada, false caso contrário
 bool IRdetectado = false; // true se ângulo IR válido recebido
+bool golDetectado = false; // true se a camera detectou o gol selecionado
 float uD, uE, uF, uT;
 float intensidade;
 float anguloBola;
 float anguloLinha;  // armazena o valor do ângulo da linha
+float erroGol = 0.0;
+uint16_t pixelsGol = 0;
 
 // Flags de comunicação
 bool olhoRespondeu = false;
@@ -127,6 +133,9 @@ void LeituraSerial() {
                     // ângulo -10 corresponde a -1.0 (não detectado)
                     IRdetectado = (placaCima.angulo != -10);
                     intensidade = placaCima.intensidade / 10.0;
+                  erroGol = placaCima.erroGol / 10.0;
+                  pixelsGol = placaCima.pixelsGol;
+                  golDetectado = (placaCima.golDetectado != 0);
                     olhoRespondeu = true;
                 }
             }
@@ -525,25 +534,50 @@ void iniciarOperacao() {
     estado = IR;
   }
 
-  switch (estado) { 
-    case LINHA:
-      // função que envia para o musculo sobre aonde mover o robo
-      break;
-    case IR:
-      // função que envia para o musculo sobre aonde mover o robo
-      break;
-    case NENHUM:
-    default:
-      // nenhum sensor detectou
-      break;
+  if (atacante) {
+    switch (estado) {
+      case LINHA:
+        // ATACANTE + LINHA:
+        // Prioridade máxima é fugir da linha usando anguloLinha.
+        break;
+
+      case IR:
+        // ATACANTE + IR:
+        // Seguir/alinhar a bola usando anguloBola e intensidade.
+        break;
+
+      case NENHUM:
+      default:
+        // ATACANTE + NENHUM:
+        // Procurar a bola ou reposicionar para ataque.
+        break;
+    }
+  } else {
+    switch (estado) {
+      case LINHA:
+        // DEFENSOR + LINHA:
+        // Prioridade máxima é fugir da linha usando anguloLinha.
+        break;
+
+      case IR:
+        // DEFENSOR + IR:
+        // Interceptar a bola e manter comportamento defensivo.
+        break;
+
+      case NENHUM:
+      default:
+        // DEFENSOR + NENHUM:
+        // Reposicionar e proteger a área defensiva.
+        break;
+    }
   }
 }
 
 void loop(){
-  // Ler bussola continuamente (em todos os estados)
+
   LerBussola();
   
-  // Verificar pressionamento dos botões
+
   verificarBotoes();
 
   // Máquina de Estados

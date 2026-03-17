@@ -39,18 +39,8 @@ void L_Ultra() {     // <-- Função para leitura dos sensores ultrassonicos
 
 #define RX_CABECA 20
 #define TX_CABECA 30
-#define RX_CAMERA 40 
-#define TX_CAMERA 50
-//#define ID_PLACA_CIMA 0x01  // antigo
-
-
-
-
-
-
-
-
-
+#define RX_CAMERA 8 
+#define TX_CAMERA 3
 
 
 
@@ -131,6 +121,9 @@ struct Pacote {
   int16_t uT;
   int16_t angulo;
   int16_t intensidade;
+  int16_t erroGol;
+  uint16_t pixelsGol;
+  uint8_t golDetectado;
 };
 
 struct PacoteEstado {
@@ -222,6 +215,11 @@ void enviarDados() {
   p.uT = (int16_t)round(ultraT * 10.0);
   p.angulo = (int16_t)round(calculaAnguloBola() * 10.0);
   p.intensidade = (int16_t)round(intensidade * 10.0);
+
+  int16_t erroGolRaw = (int16_t)round(erroGolCamera * 10.0);
+  p.erroGol = erroGolRaw;
+  p.pixelsGol = pixelsGolCamera;
+  p.golDetectado = golDetectadoCamera ? 1 : 0;
 
   Serial1.write(BYTE_INICIA);
   Serial1.write(ID_PLACA_OLHO);
