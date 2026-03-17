@@ -185,17 +185,17 @@ void LeituraSerial() {
 // Função para ler o heading da bussola
 void LerBussola() {
   if (!bussolaOK) return;  // se a bussola não inicializou, não tenta ler
-  
-  // Ler valor bruto do magnetômetro
-  float heading = compass.getHeading();
-  
+
+  Vector norm = compass.readNormalize();
+  float heading = atan2(norm.YAxis, norm.XAxis) * 180.0 / PI;
+
   // Garantir que está entre 0-360
   if (heading < 0) {
     heading += 360;
   } else if (heading >= 360) {
     heading -= 360;
   }
-  
+
   headingAtual = heading;
 }
 

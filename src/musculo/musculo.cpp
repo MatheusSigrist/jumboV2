@@ -88,6 +88,10 @@ ComandoMusculo comandoRecebido = {CMD_NENHUM, 0};
 // Velocidade máxima dos motores (pode variar de 0 até 255)
 int velocidade_maxima = 200;
 
+// Forward declarations
+void receberDadosMenu();
+void exibirResultadoTeste();
+
 void setup() {
 
   // -------- I2C SETUP (para OLED) ----------
