@@ -20,6 +20,13 @@ bool jaSaudouCabeca = false;  // Flag para enviar "OK" no startup
 #define NUM_SENSORES 32
 #define PI 3.14
 
+// Limiar mínimo do sensor para considerar que há linha
+// Ajuste conforme seu piso/iluminação (0..4095 no ESP32)
+#define LIMIAR_LINHA 400 
+
+// Intervalo do debug serial para não poluir/travar monitor
+#define INTERVALO_DEBUG_MS 120
+
 uint8_t mapaSensores[NUM_SENSORES] = {
   0,  1,  2,  3,
   
@@ -51,6 +58,7 @@ int ldr[NUM_SENSORES];
 // vetores unitários dos sensores
 float sensorX[NUM_SENSORES];
 float sensorY[NUM_SENSORES];
+unsigned long ultimoDebugMs = 0;
 
 void selecionarCanalMUX(int s0, int s1, int s2, int s3, int canal) {
   digitalWrite(s0, bitRead(canal, 0));
@@ -97,7 +105,7 @@ int16_t calcularAngulo(bool repulsao) {
   for (int i = 0; i < NUM_SENSORES; i++) {
     int idxFisico = mapaSensores[i];
     float peso = ldr[idxFisico];
-    if (peso > 0) {
+    if (peso >= LIMIAR_LINHA) {
       Cx += peso * sensorX[i];
       Cy += peso * sensorY[i];
       soma += peso;
@@ -123,6 +131,23 @@ int16_t calcularAngulo(bool repulsao) {
   return (int16_t)round(anguloGraus * 10.0);
 }
 
+void imprimirLeituraSensores() {
+  Serial.print("Sensores: ");
+  for (int i = 0; i < NUM_SENSORES; i++) {
+    Serial.print("S");
+    Serial.print(i);
+    Serial.print("=");
+    Serial.print(ldr[i]);
+    if (ldr[i] >= LIMIAR_LINHA) {
+      Serial.print("*");
+    }
+    if (i < NUM_SENSORES - 1) {
+      Serial.print(" | ");
+    }
+  }
+  Serial.println();
+}
+
 
 
 
@@ -142,7 +167,7 @@ void setup() {
 
   pinMode(MUX1_SIG, INPUT);
   pinMode(MUX2_SIG, INPUT);
-
+  Serial.println("Placa PE inicializada");
   // ===== PRÉ-CÁLCULO DOS ÂNGULOS =====
   for (int i = 0; i < NUM_SENSORES; i++) {
     float angulo = (2.0 * PI / NUM_SENSORES) * i;
@@ -185,6 +210,18 @@ void loop() {
   Serial1.write((uint8_t*)&p, sizeof(Pacote));
   Serial1.write(BYTE_PARA);
 
+  // debug serial com taxa controlada
+  unsigned long agora = millis();
+  if (agora - ultimoDebugMs >= INTERVALO_DEBUG_MS) {
+    ultimoDebugMs = agora;
+    imprimirLeituraSensores();
+    if (p.angulo == -1) {
+      Serial.println("Linha: NAO detectada");
+    } else {
+      Serial.print("Linha angulo (deg): ");
+      Serial.println(p.angulo / 10.0, 1);
+    }
+  }
 
 
 delay(50);
