@@ -83,7 +83,11 @@ MenuData menuRecebido = {0, 0};
 bool estaNoMenu = false;
 StatusComunicacao statusCom = {false, false, false};
 bool testeCompleto = false;
+bool comunicacaoCabecaOK = false;
 ComandoMusculo comandoRecebido = {CMD_NENHUM, 0};
+String bufferHandshake = "";
+unsigned long ultimoEnvioHandshake = 0;
+unsigned long ultimoByteHandshake = 0;
 
 // Velocidade máxima dos motores (pode variar de 0 até 255)
 int velocidade_maxima = 200;
@@ -146,10 +150,47 @@ void setup() {
   display.display();
   
   testeCompleto = false;
+  comunicacaoCabecaOK = false;
   unsigned long tempoInicio = millis();
+
   while (!testeCompleto && (millis() - tempoInicio) < 5000) {
-    receberDadosMenu();
-    delay(50);
+    if (millis() - ultimoEnvioHandshake >= 500) {
+      Serial1.println("oi");
+      ultimoEnvioHandshake = millis();
+    }
+
+    while (Serial1.available() > 0) {
+      char c = (char)Serial1.read();
+      ultimoByteHandshake = millis();
+
+      if (c == '\n' || c == '\r') {
+        bufferHandshake.trim();
+        bufferHandshake.toLowerCase();
+        if (bufferHandshake == "oi") {
+          comunicacaoCabecaOK = true;
+          testeCompleto = true;
+          break;
+        }
+        bufferHandshake = "";
+        continue;
+      }
+
+      if (bufferHandshake.length() < 32) {
+        bufferHandshake += c;
+      }
+    }
+
+    if (!testeCompleto && bufferHandshake.length() > 0 && (millis() - ultimoByteHandshake) > 80) {
+      bufferHandshake.trim();
+      bufferHandshake.toLowerCase();
+      if (bufferHandshake == "oi") {
+        comunicacaoCabecaOK = true;
+        testeCompleto = true;
+      }
+      bufferHandshake = "";
+    }
+
+    delay(10);
   }
                                                                           
   // Exibir resultado
@@ -461,6 +502,7 @@ void receberDadosMenu() {
         if (stop == 0xFE) {  // 0xFE é fim do status
           statusCom = temp;
           testeCompleto = true;
+          comunicacaoCabecaOK = true;
         }
       }
     }
@@ -502,15 +544,12 @@ void exibirResultadoTeste() {
   display.setCursor(0, 0);
   display.println("===== TESTE ======");
   display.println();
-  
-  display.print("OLHO: ");
-  display.println(statusCom.olhoOK ? "OK" : "FALHA");
-  
-  display.print("PE: ");
-  display.println(statusCom.peOK ? "OK" : "FALHA");
+
+  display.print("MUSC<->CABECA: ");
+  display.println(comunicacaoCabecaOK ? "OK" : "FALHA");
   
   display.println();
-  if (statusCom.allOK) {
+  if (comunicacaoCabecaOK) {
     display.println("TUDO OK!");
   } else {
     display.println("Verifique conexoes!");

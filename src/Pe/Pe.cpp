@@ -22,14 +22,13 @@ bool jaSaudouCabeca = false;  // Flag para enviar "OK" no startup
 
 // Limiar mínimo do sensor para considerar que há linha
 // Ajuste conforme seu piso/iluminação (0..4095 no ESP32)
-#define LIMIAR_LINHA 400 
+#define LIMIAR_LINHA 600 
 
 // Intervalo do debug serial para não poluir/travar monitor
 #define INTERVALO_DEBUG_MS 120
 
 uint8_t mapaSensores[NUM_SENSORES] = {
   0,  1,  2,  3,
-  
   4,  5,  6,  7,
   8,  9, 10, 11,
   12, 13, 14, 15,
@@ -40,7 +39,7 @@ uint8_t mapaSensores[NUM_SENSORES] = {
 };
 
 // ===== PINOS MUX 1 =====
-const int MUX1_SIG = 2;
+const int MUX1_SIG = 3;
 const int MUX1_S0  = 21;
 const int MUX1_S1  = 47;
 const int MUX1_S2  = 48;

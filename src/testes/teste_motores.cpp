@@ -112,21 +112,15 @@ void setup() {
 
 void loop() {
   // Coloque aqui os 4 valores de velocidade que voce quiser testar (-255 a 255)
-  int vel1 = 120;
-  int vel2 = 120;
-  int vel3 = 120;
-  int vel4 = 120;
+  int vel1 = 200;
+  int vel2 = 200;
+  int vel3 = 200;
+  int vel4 = 200;
 
-  moverRobo(vel1, vel2, vel3, vel4);
+  moverRobo(-vel1, -vel2, vel3, vel4);
+    delay(1000);
+  moverRobo(0, 0, 0, 0);
+    delay(2000);
 
-  Serial.print("M1=");
-  Serial.print(vel1);
-  Serial.print(" M2=");
-  Serial.print(vel2);
-  Serial.print(" M3=");
-  Serial.print(vel3);
-  Serial.print(" M4=");
-  Serial.println(vel4);
 
-  delay(200);
 }

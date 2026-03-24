@@ -19,6 +19,12 @@ bool sozinho = false;
 #define RX_PE 20
 #define TX_PE 10
 
+#define RX_MUSCULO 44
+#define TX_MUSCULO 43
+
+HardwareSerial SerialMusculo(0);
+#define SERIAL_MUSCULO SerialMusculo
+
 // I2C pins (SDA/SCL) usados para módulos como compass HMC5883L
 #define SDA_PIN 8  // RTC_GPIO8
 #define SCL_PIN 9  // RTC_GPIO9
@@ -122,6 +128,41 @@ bool peRespondeu = false;
 bool atacante = true;  // true = atacante, false = defensor
 float ultraT_parceiro = 0;  // valor de ultraT recebido do outro robô
 bool corGolAzul = false;    // false = amarelo (padrao), true = azul
+
+String bufferHandshakeMusculo = "";
+unsigned long ultimoByteHandshakeMusculo = 0;
+unsigned long ultimoEnvioMenuMusculo = 0;
+const unsigned long INTERVALO_ENVIO_MENU_MUSCULO_MS = 150;
+
+void ProcessarHandshakeMusculo() {
+  while (SERIAL_MUSCULO.available() > 0) {
+    char c = (char)SERIAL_MUSCULO.read();
+    ultimoByteHandshakeMusculo = millis();
+
+    if (c == '\n' || c == '\r') {
+      bufferHandshakeMusculo.trim();
+      bufferHandshakeMusculo.toLowerCase();
+      if (bufferHandshakeMusculo == "oi") {
+        SERIAL_MUSCULO.println("oi");
+      }
+      bufferHandshakeMusculo = "";
+      continue;
+    }
+
+    if (bufferHandshakeMusculo.length() < 32) {
+      bufferHandshakeMusculo += c;
+    }
+  }
+
+  if (bufferHandshakeMusculo.length() > 0 && (millis() - ultimoByteHandshakeMusculo) > 80) {
+    bufferHandshakeMusculo.trim();
+    bufferHandshakeMusculo.toLowerCase();
+    if (bufferHandshakeMusculo == "oi") {
+      SERIAL_MUSCULO.println("oi");
+    }
+    bufferHandshakeMusculo = "";
+  }
+}
 
 
 void LeituraSerial() {
@@ -246,9 +287,16 @@ void EnviarMenuParaMusculo() {
   menuData.itemSubMenuCal = itemSubMenu;  // 0=Gol, 1=Bussola
   menuData.headingBussola = (int16_t)round(headingAtual);  // ângulo da bussola
   
-  Serial.write(BYTE_INICIA);
-  Serial.write((uint8_t*)&menuData, sizeof(MenuData));
-  Serial.write(BYTE_PARA);
+  SERIAL_MUSCULO.write(BYTE_INICIA);
+  SERIAL_MUSCULO.write((uint8_t*)&menuData, sizeof(MenuData));
+  SERIAL_MUSCULO.write(BYTE_PARA);
+  ultimoEnvioMenuMusculo = millis();
+}
+
+void AtualizarMenuMusculoPeriodicamente() {
+  if ((millis() - ultimoEnvioMenuMusculo) >= INTERVALO_ENVIO_MENU_MUSCULO_MS) {
+    EnviarMenuParaMusculo();
+  }
 }
 
 // Enviar status de comunicacao para musculo via Serial
@@ -258,9 +306,9 @@ void EnviarStatusComunicacao() {
   status.peOK = peRespondeu;
   status.allOK = (olhoRespondeu && peRespondeu);
   
-  Serial.write(0xFF);  // marcador especial para status
-  Serial.write((uint8_t*)&status, sizeof(StatusComunicacao));
-  Serial.write(0xFE);  // fim do status
+  SERIAL_MUSCULO.write(0xFF);  // marcador especial para status
+  SERIAL_MUSCULO.write((uint8_t*)&status, sizeof(StatusComunicacao));
+  SERIAL_MUSCULO.write(0xFE);  // fim do status
 }
 
 void EnviarComandoParaMusculo(uint8_t caso, float anguloGraus) {
@@ -268,9 +316,9 @@ void EnviarComandoParaMusculo(uint8_t caso, float anguloGraus) {
   cmd.caso = caso;
   cmd.angulo = (int16_t)round(anguloGraus * 10.0);
 
-  Serial.write(0xAB);
-  Serial.write((uint8_t*)&cmd, sizeof(ComandoMusculo));
-  Serial.write(0xBA);
+  SERIAL_MUSCULO.write(0xAB);
+  SERIAL_MUSCULO.write((uint8_t*)&cmd, sizeof(ComandoMusculo));
+  SERIAL_MUSCULO.write(0xBA);
 }
 
 // Testar comunicacao com todas as placas
@@ -281,6 +329,8 @@ void TestarComunicacao() {
   // Aguardar respostas do OLHO e PE
   unsigned long tempoInicio = millis();
   while ((millis() - tempoInicio) < 2000) {
+    ProcessarHandshakeMusculo();
+
     if (Serial1.available()) {
       String msg = "";
       while (Serial1.available()) {
@@ -449,7 +499,8 @@ void onReceive(const uint8_t *mac, const uint8_t *data, int len) {
 
 
 void setup(){
-  Serial.begin(9600);
+  Serial.begin(115200);
+  SERIAL_MUSCULO.begin(9600, SERIAL_8N1, RX_MUSCULO, TX_MUSCULO);
   Serial1.begin(9600, SERIAL_8N1, RX_OLHO, TX_OLHO);
   Serial2.begin(9600, SERIAL_8N1, RX_PE, TX_PE);
   
@@ -603,6 +654,8 @@ void iniciarOperacao() {
 
 void loop(){
 
+  ProcessarHandshakeMusculo();
+
   LerBussola();
   
 
@@ -611,6 +664,7 @@ void loop(){
   // Máquina de Estados
   switch (estadoAtual) {
     case MENU:
+      AtualizarMenuMusculoPeriodicamente();
       delay(100);
       break;
     case CALIBRACAO:
@@ -618,24 +672,22 @@ void loop(){
       if (subMenuCalibracao == SUBMENU_PRINCIPAL) {
         // Exibir submenu (Gol / Bussola)
         // MenuData será usado para passagem de dados ao Musculo
-        EnviarMenuParaMusculo();
+        AtualizarMenuMusculoPeriodicamente();
       } else if (subMenuCalibracao == SUBMENU_GOL) {
         // Exibir opções de cor do gol (AMARELO / AZUL)
-        EnviarMenuParaMusculo();
+        AtualizarMenuMusculoPeriodicamente();
       } else if (subMenuCalibracao == SUBMENU_BUSSOLA) {
         // Monitorar bussola em tempo real e enviar valor para Musculo exibir
         // A bussola já está sendo lida no loop principal
         // Aqui apenas enviamos o valor para o display mostrar "Aperte para gravar: XXX°"
-        EnviarMenuParaMusculo();
+        AtualizarMenuMusculoPeriodicamente();
       }
       delay(100);
       break;
     case INICIAR:
       iniciarOperacao();
       // Enviar dados atualizados periodicamente para musculo exibir
-      if (millis() % 200 == 0) {  // a cada 200ms para dados ao vivo
-        EnviarMenuParaMusculo();
-      }
+      AtualizarMenuMusculoPeriodicamente();
       break;
   }
   delay(50);
