@@ -19,28 +19,233 @@ String bufferSerial = "";
 String mensagemBotao = "NENHUM";
 unsigned long ultimoEnvioOi = 0;
 unsigned long ultimoRxCabeca = 0;
+bool corGolAzul = false;
+
+enum Estado { MENU, CALIBRACAO, INICIAR };
+Estado estadoAtual = MENU;
+int itemSelecionado = 0;
+
+enum SubMenuCalibracao { SUBMENU_PRINCIPAL, SUBMENU_GOL, SUBMENU_BUSSOLA };
+SubMenuCalibracao subMenuCalibracao = SUBMENU_PRINCIPAL;
+int itemSubMenu = 0;
+int headingBussolaTeste = 0;
 
 const unsigned long INTERVALO_OI_MS = 1000;
 const unsigned long TIMEOUT_COM_MS = 3000;
 
-void mostrarTelaTeste() {
+void desenharMenu() {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, 0);
+  display.println("==== MENU ====");
+  display.println();
+
+  if (itemSelecionado == 0) {
+    display.fillRect(0, 16, 128, 10, SSD1306_WHITE);
+    display.setTextColor(SSD1306_BLACK);
+    display.setCursor(4, 18);
+    display.println("CALIBRACAO");
+    display.setTextColor(SSD1306_WHITE);
+  } else {
+    display.setCursor(4, 18);
+    display.println("CALIBRACAO");
+  }
+
+  if (itemSelecionado == 1) {
+    display.fillRect(0, 32, 128, 10, SSD1306_WHITE);
+    display.setTextColor(SSD1306_BLACK);
+    display.setCursor(4, 34);
+    display.println("INICIAR");
+    display.setTextColor(SSD1306_WHITE);
+  } else {
+    display.setCursor(4, 34);
+    display.println("INICIAR");
+  }
+
+  display.setCursor(0, 54);
+  display.print("COM:");
+  display.print(comunicacaoCabecaOK ? "OK" : "FALHA");
+  display.print("  ");
+  display.print(mensagemBotao);
+  display.display();
+}
+
+void desenharSubmenuCalibracao() {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, 0);
+  display.println("=== CALIBRACAO ===");
+  display.println();
+
+  if (subMenuCalibracao == SUBMENU_PRINCIPAL) {
+    if (itemSubMenu == 0) {
+      display.fillRect(0, 16, 128, 10, SSD1306_WHITE);
+      display.setTextColor(SSD1306_BLACK);
+      display.setCursor(4, 18);
+      display.println("GOL");
+      display.setTextColor(SSD1306_WHITE);
+    } else {
+      display.setCursor(4, 18);
+      display.println("GOL");
+    }
+
+    if (itemSubMenu == 1) {
+      display.fillRect(0, 32, 128, 10, SSD1306_WHITE);
+      display.setTextColor(SSD1306_BLACK);
+      display.setCursor(4, 34);
+      display.println("BUSSOLA");
+      display.setTextColor(SSD1306_WHITE);
+    } else {
+      display.setCursor(4, 34);
+      display.println("BUSSOLA");
+    }
+  } else if (subMenuCalibracao == SUBMENU_GOL) {
+    display.println("Selecione cor do gol");
+
+    if (itemSubMenu == 0) {
+      display.fillRect(0, 24, 128, 10, SSD1306_WHITE);
+      display.setTextColor(SSD1306_BLACK);
+      display.setCursor(4, 26);
+      display.println("AMARELO");
+      display.setTextColor(SSD1306_WHITE);
+    } else {
+      display.setCursor(4, 26);
+      display.println("AMARELO");
+    }
+
+    if (itemSubMenu == 1) {
+      display.fillRect(0, 40, 128, 10, SSD1306_WHITE);
+      display.setTextColor(SSD1306_BLACK);
+      display.setCursor(4, 42);
+      display.println("AZUL");
+      display.setTextColor(SSD1306_WHITE);
+    } else {
+      display.setCursor(4, 42);
+      display.println("AZUL");
+    }
+  } else if (subMenuCalibracao == SUBMENU_BUSSOLA) {
+    display.println("CAL BUSSOLA");
+    display.println();
+    display.print("Heading: ");
+    display.print(headingBussolaTeste);
+    display.println(" graus");
+    display.println();
+    display.println("Aperte BTN3 p/ gravar");
+  }
+
+  display.display();
+}
+
+void desenharOperacao() {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, 0);
+  display.println("=== OPERACAO TESTE ===");
+  display.println();
+  display.print("COM CABECA: ");
+  display.println(comunicacaoCabecaOK ? "OK" : "FALHA");
+  display.print("GOL: ");
+  display.println(corGolAzul ? "AZUL" : "AMARELO");
+  display.println();
+  display.println("BTN3 volta MENU");
+  display.print("Ultimo: ");
+  display.println(mensagemBotao);
+  display.display();
+}
+
+void mostrarTelaFalhaComunicacao() {
   display.clearDisplay();
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
   display.setCursor(0, 0);
   display.println("=== TESTE COM/BTN ===");
   display.println();
-  display.print("COM CABECA: ");
-  display.println(comunicacaoCabecaOK ? "OK" : "FALHA");
-  display.println("EVENTO BOTAO:");
-  display.println(mensagemBotao);
+  display.println("COM CABECA: FALHA");
+  display.println("Verifique serial 17/18");
   display.println();
-  if (comunicacaoCabecaOK) {
-    display.println("Aguardando botoes...");
-  } else {
-    display.println("Verifique serial 17/18");
-  }
+  display.print("Ultimo: ");
+  display.println(mensagemBotao);
   display.display();
+}
+
+void desenharTelaAtual() {
+  if (!comunicacaoCabecaOK) {
+    mostrarTelaFalhaComunicacao();
+    return;
+  }
+
+  if (estadoAtual == MENU) {
+    desenharMenu();
+  } else if (estadoAtual == CALIBRACAO) {
+    desenharSubmenuCalibracao();
+  } else {
+    desenharOperacao();
+  }
+}
+
+void processarEventoBotao(uint8_t botao) {
+  if (estadoAtual == MENU) {
+    if (botao == 1) {
+      itemSelecionado--;
+      if (itemSelecionado < 0) itemSelecionado = 1;
+    } else if (botao == 2) {
+      itemSelecionado++;
+      if (itemSelecionado > 1) itemSelecionado = 0;
+    } else if (botao == 3) {
+      if (itemSelecionado == 0) {
+        estadoAtual = CALIBRACAO;
+        subMenuCalibracao = SUBMENU_PRINCIPAL;
+        itemSubMenu = 0;
+      } else {
+        estadoAtual = INICIAR;
+      }
+    }
+    return;
+  }
+
+  if (estadoAtual == CALIBRACAO && subMenuCalibracao == SUBMENU_PRINCIPAL) {
+    if (botao == 1) {
+      itemSubMenu--;
+      if (itemSubMenu < 0) itemSubMenu = 1;
+    } else if (botao == 2) {
+      itemSubMenu++;
+      if (itemSubMenu > 1) itemSubMenu = 0;
+    } else if (botao == 3) {
+      if (itemSubMenu == 0) {
+        subMenuCalibracao = SUBMENU_GOL;
+        itemSubMenu = corGolAzul ? 1 : 0;
+      } else {
+        subMenuCalibracao = SUBMENU_BUSSOLA;
+      }
+    }
+    return;
+  }
+
+  if (estadoAtual == CALIBRACAO && subMenuCalibracao == SUBMENU_GOL) {
+    if (botao == 1 || botao == 2) {
+      itemSubMenu = (itemSubMenu == 0) ? 1 : 0;
+    } else if (botao == 3) {
+      corGolAzul = (itemSubMenu == 1);
+      subMenuCalibracao = SUBMENU_PRINCIPAL;
+      itemSubMenu = 0;
+    }
+    return;
+  }
+
+  if (estadoAtual == CALIBRACAO && subMenuCalibracao == SUBMENU_BUSSOLA) {
+    if (botao == 3) {
+      subMenuCalibracao = SUBMENU_PRINCIPAL;
+      itemSubMenu = 0;
+    }
+    return;
+  }
+
+  if (estadoAtual == INICIAR && botao == 3) {
+    estadoAtual = MENU;
+  }
 }
 
 void processarMensagemCabeca(String msg) {
@@ -60,6 +265,7 @@ void processarMensagemCabeca(String msg) {
       mensagemBotao = "BOTAO " + valor + " APERTADO";
       comunicacaoCabecaOK = true;
       ultimoRxCabeca = millis();
+      processarEventoBotao((uint8_t)valor.toInt());
     }
   }
 }
@@ -113,7 +319,7 @@ void setup() {
     delay(10);
   }
 
-  mostrarTelaTeste();
+  desenharTelaAtual();
 }
 
 void loop() {
@@ -128,9 +334,11 @@ void loop() {
     comunicacaoCabecaOK = false;
   }
 
+  headingBussolaTeste = (headingBussolaTeste + 2) % 360;
+
   static unsigned long ultimaTela = 0;
   if ((millis() - ultimaTela) > 120) {
-    mostrarTelaTeste();
+    desenharTelaAtual();
     ultimaTela = millis();
   }
 

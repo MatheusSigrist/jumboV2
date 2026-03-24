@@ -116,7 +116,7 @@ void loop() {
   int vel2 = 200;
   int vel3 = 200;
   int vel4 = 200;
-
+  //obs -vel1 - vel2 vel3 e vel4 == frente
   moverRobo(-vel1, -vel2, vel3, vel4);
     delay(1000);
   moverRobo(0, 0, 0, 0);
