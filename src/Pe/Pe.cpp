@@ -1,30 +1,18 @@
 #include <Arduino.h>
 #include <math.h>
-
-
+#include <stdint.h>
 
 #define BYTE_INICIA 0xAA
-#define BYTE_PARA   0x55
-
-bool atacante = false;  // true = atacante (repulsao), false = defensor (atraçao)
-bool jaSaudouCabeca = false;  // Flag para enviar "OK" no startup
+#define BYTE_PARA 0x55
 
 #define ID_PLACA_OLHO 0x01
 #define ID_PLACA_PE 0x02
-#define RX_CABECA 10
-#define TX_CABECA 17
 
-
-
+#define RX_CABECA 17
+#define TX_CABECA 18
 
 #define NUM_SENSORES 32
-#define PI 3.14
-
-// Limiar mínimo do sensor para considerar que há linha
-// Ajuste conforme seu piso/iluminação (0..4095 no ESP32)
-#define LIMIAR_LINHA 600 
-
-// Intervalo do debug serial para não poluir/travar monitor
+#define LIMIAR_LINHA 600
 #define INTERVALO_DEBUG_MS 120
 
 uint8_t mapaSensores[NUM_SENSORES] = {
@@ -38,26 +26,35 @@ uint8_t mapaSensores[NUM_SENSORES] = {
   28, 29, 30, 31
 };
 
-// ===== PINOS MUX 1 =====
 const int MUX1_SIG = 3;
-const int MUX1_S0  = 21;
-const int MUX1_S1  = 47;
-const int MUX1_S2  = 48;
-const int MUX1_S3  = 45;
+const int MUX1_S0 = 21;
+const int MUX1_S1 = 47;
+const int MUX1_S2 = 48;
+const int MUX1_S3 = 45;
 
-// ===== PINOS MUX 2 =====
 const int MUX2_SIG = 12;
-const int MUX2_S0  = 4;
-const int MUX2_S1  = 5;
-const int MUX2_S2  = 6;
-const int MUX2_S3  = 7;
+const int MUX2_S0 = 4;
+const int MUX2_S1 = 5;
+const int MUX2_S2 = 6;
+const int MUX2_S3 = 7;
 
 int ldr[NUM_SENSORES];
-
-// vetores unitários dos sensores
 float sensorX[NUM_SENSORES];
 float sensorY[NUM_SENSORES];
+bool atacante = false;
 unsigned long ultimoDebugMs = 0;
+String bufferHandshakeCabeca = "";
+unsigned long ultimoByteHandshakeCabeca = 0;
+
+struct Pacote {
+  int16_t angulo;
+};
+
+struct PacoteEstado {
+  bool sozinho;
+  bool atacante;
+  bool corGolAzul;
+};
 
 void selecionarCanalMUX(int s0, int s1, int s2, int s3, int canal) {
   digitalWrite(s0, bitRead(canal, 0));
@@ -66,18 +63,41 @@ void selecionarCanalMUX(int s0, int s1, int s2, int s3, int canal) {
   digitalWrite(s3, bitRead(canal, 3));
 }
 
+void ProcessarPingCabeca() {
+  while (Serial1.available() > 0) {
+    if (Serial1.peek() == BYTE_INICIA) {
+      return;
+    }
 
-#include <stdint.h>
+    char c = (char)Serial1.read();
+    ultimoByteHandshakeCabeca = millis();
 
-struct Pacote {
-  int16_t angulo;
-};
+    if (c == '\n' || c == '\r') {
+      bufferHandshakeCabeca.trim();
+      bufferHandshakeCabeca.toLowerCase();
+      if (bufferHandshakeCabeca == "oi") {
+        Serial1.println("OI");
+      }
+      bufferHandshakeCabeca = "";
+      continue;
+    }
 
-struct PacoteEstado {
-  bool sozinho;    // mantido para compatibilidade
-  bool atacante;   // true = atacante (repulsao), false = defensor (atraçao)
-  bool corGolAzul; // compatibilidade com pacote enviado pela Cabeça
-};
+    if (isPrintable(c) && bufferHandshakeCabeca.length() < 16) {
+      bufferHandshakeCabeca += c;
+    } else {
+      bufferHandshakeCabeca = "";
+    }
+  }
+
+  if (bufferHandshakeCabeca.length() > 0 && (millis() - ultimoByteHandshakeCabeca) > 80) {
+    bufferHandshakeCabeca.trim();
+    bufferHandshakeCabeca.toLowerCase();
+    if (bufferHandshakeCabeca == "oi") {
+      Serial1.println("OI");
+    }
+    bufferHandshakeCabeca = "";
+  }
+}
 
 void LeituraSerial() {
   while (Serial1.available() >= 2) {
@@ -89,7 +109,7 @@ void LeituraSerial() {
           Serial1.readBytes((uint8_t*)&temp, sizeof(PacoteEstado));
           byte stop = Serial1.read();
           if (stop == BYTE_PARA) {
-            atacante = temp.atacante;  // recebe o papel (atacante/defensor)
+            atacante = temp.atacante;
           }
         }
       }
@@ -98,34 +118,35 @@ void LeituraSerial() {
 }
 
 int16_t calcularAngulo(bool repulsao) {
-  // ===== CENTROIDE =====
-  float Cx = 0.0, Cy = 0.0, soma = 0.0;
-  
+  float centroX = 0.0;
+  float centroY = 0.0;
+  float soma = 0.0;
+
   for (int i = 0; i < NUM_SENSORES; i++) {
     int idxFisico = mapaSensores[i];
     float peso = ldr[idxFisico];
     if (peso >= LIMIAR_LINHA) {
-      Cx += peso * sensorX[i];
-      Cy += peso * sensorY[i];
+      centroX += peso * sensorX[i];
+      centroY += peso * sensorY[i];
       soma += peso;
     }
   }
 
   if (soma == 0) {
-    Serial.println("Nenhuma linha detectada");
-    return -1;  // erro: nenhuma linha detectada
+    return -1;
   }
 
-  Cx /= soma;
-  Cy /= soma;
+  centroX /= soma;
+  centroY /= soma;
 
-  // ===== REPULSÃO OU ATRAÇÃO =====
-  float Vx = repulsao ? -Cx : Cx;
-  float Vy = repulsao ? -Cy : Cy;
+  float vetorX = repulsao ? -centroX : centroX;
+  float vetorY = repulsao ? -centroY : centroY;
 
-  float anguloRad = atan2(Vy, Vx);
+  float anguloRad = atan2(vetorY, vetorX);
   float anguloGraus = anguloRad * 180.0 / PI;
-  if (anguloGraus < 0) anguloGraus += 360.0;
+  if (anguloGraus < 0) {
+    anguloGraus += 360.0;
+  }
 
   return (int16_t)round(anguloGraus * 10.0);
 }
@@ -147,18 +168,14 @@ void imprimirLeituraSensores() {
   Serial.println();
 }
 
-
-
-
 void setup() {
-
-  Serial.begin(9600);
+  Serial.begin(115200);
   Serial1.begin(9600, SERIAL_8N1, RX_CABECA, TX_CABECA);
+
   pinMode(MUX1_S0, OUTPUT);
   pinMode(MUX1_S1, OUTPUT);
   pinMode(MUX1_S2, OUTPUT);
   pinMode(MUX1_S3, OUTPUT);
-
   pinMode(MUX2_S0, OUTPUT);
   pinMode(MUX2_S1, OUTPUT);
   pinMode(MUX2_S2, OUTPUT);
@@ -166,63 +183,49 @@ void setup() {
 
   pinMode(MUX1_SIG, INPUT);
   pinMode(MUX2_SIG, INPUT);
-  Serial.println("Placa PE inicializada");
-  // ===== PRÉ-CÁLCULO DOS ÂNGULOS =====
+
   for (int i = 0; i < NUM_SENSORES; i++) {
     float angulo = (2.0 * PI / NUM_SENSORES) * i;
     sensorX[i] = cos(angulo);
     sensorY[i] = sin(angulo);
   }
+
+  Serial.println("Placa PE inicializada com leitura de sensores");
 }
 
 void loop() {
+  ProcessarPingCabeca();
 
-  // Na primeira iteração, enviar "OK" para a cabeça (para comunicação teste)
-  if (!jaSaudouCabeca) {
-    Serial1.print("OK");
-    jaSaudouCabeca = true;
-    delay(100);
-  }
-
-  // ===== LEITURA FÍSICA =====
   for (int canal = 0; canal < 16; canal++) {
     selecionarCanalMUX(MUX1_S0, MUX1_S1, MUX1_S2, MUX1_S3, canal);
     selecionarCanalMUX(MUX2_S0, MUX2_S1, MUX2_S2, MUX2_S3, canal);
-
     delayMicroseconds(10);
-
-    ldr[canal]      = analogRead(MUX1_SIG);
+    ldr[canal] = analogRead(MUX1_SIG);
     ldr[canal + 16] = analogRead(MUX2_SIG);
   }
 
-  // atualiza estado recebido da cabeça
   LeituraSerial();
 
-  // preparar pacote de ângulo
-  Pacote p;
-  int16_t angulo = calcularAngulo(atacante);  // true=repulsão (atacante), false=atração (defensor)
-  p.angulo = angulo;  // envia -1 se nenhuma linha detectada, ou o ângulo
+  Pacote pacote;
+  pacote.angulo = calcularAngulo(atacante);
 
-  // enviar pacote
   Serial1.write(BYTE_INICIA);
   Serial1.write(ID_PLACA_PE);
-  Serial1.write((uint8_t*)&p, sizeof(Pacote));
+  Serial1.write((uint8_t*)&pacote, sizeof(Pacote));
   Serial1.write(BYTE_PARA);
 
-  // debug serial com taxa controlada
   unsigned long agora = millis();
   if (agora - ultimoDebugMs >= INTERVALO_DEBUG_MS) {
     ultimoDebugMs = agora;
     imprimirLeituraSensores();
-    if (p.angulo == -1) {
+    if (pacote.angulo == -1) {
       Serial.println("Linha: NAO detectada");
     } else {
       Serial.print("Linha angulo (deg): ");
-      Serial.println(p.angulo / 10.0, 1);
+      Serial.println(pacote.angulo / 10.0, 1);
     }
   }
 
-
-delay(50);
+  delay(50);
 }
 

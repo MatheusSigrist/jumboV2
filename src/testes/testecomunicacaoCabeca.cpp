@@ -7,7 +7,7 @@
 #define BOTAO_1 3
 #define BOTAO_2 37
 #define BOTAO_3 46
-
+#define moduloRobocup 10
 const unsigned long DEBOUNCE_BOTAO_MS = 180;
 
 HardwareSerial SerialMusculo(0);
@@ -67,7 +67,7 @@ void verificarBotoes() {
 void setup() {
   Serial.begin(115200);
   SerialMusculo.begin(9600, SERIAL_8N1, RX_MUSCULO, TX_MUSCULO);
-
+  pinMode(moduloRobocup, INPUT);
   pinMode(BOTAO_1, INPUT_PULLUP);
   pinMode(BOTAO_2, INPUT_PULLUP);
   pinMode(BOTAO_3, INPUT_PULLUP);
@@ -99,6 +99,6 @@ void loop() {
     processarMensagem(bufferEntrada);
     bufferEntrada = "";
   }
-
+  Serial.println(digitalRead(moduloRobocup));
   delay(5);
 }

@@ -3,10 +3,15 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 
+#define RX_CABECA 17
+#define TX_CABECA 18
 
+#define SDA_PIN 8
+#define SCL_PIN 9
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+#define OLED_ADDR 0x3C
 
-
-// MOTOR A
 #define IN1_1_A 5
 #define IN2_1_A 6
 #define PWM_1_A 4
@@ -15,7 +20,6 @@
 #define IN2_2_A 46
 #define PWM_2_A 7
 
-// MOTOR B
 #define IN1_1_B 11
 #define IN2_1_B 12
 #define PWM_1_B 10
@@ -24,7 +28,6 @@
 #define IN2_2_B 14
 #define PWM_2_B 47
 
-// ----------- CANAIS PWM ------------
 #define PWM_CH1 0
 #define PWM_CH2 1
 #define PWM_CH3 2
@@ -33,313 +36,129 @@
 #define PWM_FREQ 20000
 #define PWM_RES 8
 
-// ----------- SERIAL CABECA-MUSCULO ---------
-#define RX_CABECA 17
-#define TX_CABECA 18
-
-// ----------- I2C OLED DISPLAY ---------
-#define SDA_PIN 8
-#define SCL_PIN 9
-#define SCREEN_WIDTH 128
-#define SCREEN_HEIGHT 64
-#define OLED_ADDR 0x3C  // endereço padrão do SSD1306
-
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
-// Definições para menu
-#define BYTE_INICIA 0xAA
-#define BYTE_PARA 0x55
-
-struct MenuData {
-  int itemSelecionado;
-  int estadoMenu;  // 0 = MENU, 1 = CALIBRACAO, 2 = INICIAR
-  int16_t anguloBola;
-  int16_t anguloLinha;
-  bool linhaDetectada;
-  bool IRdetectado;
-  int subMenuCal;           // 0 = SUBMENU_PRINCIPAL, 1 = SUBMENU_GOL, 2 = SUBMENU_BUSSOLA
-  int itemSubMenuCal;       // 0 = Gol, 1 = Bussola
-  int16_t headingBussola;   // heading atual da bussola para calibração
-};
-
-struct StatusComunicacao {
-  bool olhoOK;
-  bool peOK;
-  bool allOK;  // tudo funcionando
-};
-
-enum CasoComandoMusculo : uint8_t {
-  CMD_NENHUM = 0,
-  CMD_IR = 1,
-  CMD_LINHA = 2
-};
-
-struct ComandoMusculo {
-  uint8_t caso;
-  int16_t angulo;  // escalado em x10
-};
-
-MenuData menuRecebido = {0, 0};
-bool estaNoMenu = false;
-StatusComunicacao statusCom = {false, false, false};
-bool testeCompleto = false;
 bool comunicacaoCabecaOK = false;
-ComandoMusculo comandoRecebido = {CMD_NENHUM, 0};
-String bufferHandshake = "";
-unsigned long ultimoEnvioHandshake = 0;
-unsigned long ultimoByteHandshake = 0;
+String bufferSerial = "";
+String mensagemBotao = "NENHUM";
+unsigned long ultimoEnvioOi = 0;
+unsigned long ultimoRxCabeca = 0;
+unsigned long mostrarStatusAte = 0;
+bool olhoOK = false;
+bool peOK = false;
 
-// Velocidade máxima dos motores (pode variar de 0 até 255)
-int velocidade_maxima = 200;
+bool corGolAzul = false;
+int headingBussolaTeste = 0;
+float anguloIr = -1.0;
+bool irDetectado = false;
 
-// Forward declarations
-void receberDadosMenu();
-void exibirResultadoTeste();
+enum Estado { MENU, CALIBRACAO, INICIAR };
+Estado estadoAtual = MENU;
+int itemSelecionado = 0;
 
-void setup() {
+enum SubMenuCalibracao { SUBMENU_PRINCIPAL, SUBMENU_GOL, SUBMENU_BUSSOLA };
+SubMenuCalibracao subMenuCalibracao = SUBMENU_PRINCIPAL;
+int itemSubMenu = 0;
 
-  // -------- I2C SETUP (para OLED) ----------
-  Wire.begin(SDA_PIN, SCL_PIN);
+const unsigned long INTERVALO_OI_MS = 1000;
+const unsigned long TIMEOUT_COM_MS = 3000;
+const int velocidade_maxima = 255;
 
-  // -------- OLED DISPLAY SETUP ----------
-  if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR)) {
-    Serial.println(F("SSD1306 OLED nao encontrado!"));
-    while (1);
+void Motor_1(int vel1) {
+  int pwm1 = constrain(abs(vel1), 0, 255);
+  ledcWrite(PWM_CH1, pwm1);
+  if (vel1 <= 0) {
+    digitalWrite(IN1_1_A, HIGH);
+    digitalWrite(IN2_1_A, LOW);
+  } else {
+    digitalWrite(IN1_1_A, LOW);
+    digitalWrite(IN2_1_A, HIGH);
   }
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 0);
-  display.println(F("MUSCULO INICIALIZADO"));
-  display.display();
-  delay(2000);
-  display.clearDisplay();
-  
-  // -------- SERIAL SETUP ----------
-  Serial1.begin(9600, SERIAL_8N1, RX_CABECA, TX_CABECA);
+}
 
-  // -------- OUTPUTS ----------
-  pinMode(IN1_1_A, OUTPUT);
-  pinMode(IN2_1_A, OUTPUT);
-  pinMode(IN1_2_A, OUTPUT);
-  pinMode(IN2_2_A, OUTPUT);
-
-  pinMode(IN1_1_B, OUTPUT);
-  pinMode(IN2_1_B, OUTPUT);
-  pinMode(IN1_2_B, OUTPUT);
-  pinMode(IN2_2_B, OUTPUT);
-
-  // -------- PWM SETUP ----------
-  ledcSetup(PWM_CH1, PWM_FREQ, PWM_RES);
-  ledcAttachPin(PWM_1_A, PWM_CH1);
-
-  ledcSetup(PWM_CH2, PWM_FREQ, PWM_RES);
-  ledcAttachPin(PWM_2_A, PWM_CH2);
-
-  ledcSetup(PWM_CH3, PWM_FREQ, PWM_RES);
-  ledcAttachPin(PWM_1_B, PWM_CH3);
-
-  ledcSetup(PWM_CH4, PWM_FREQ, PWM_RES);
-  ledcAttachPin(PWM_2_B, PWM_CH4);
-  
-  // -------- TESTE DE COMUNICAÇÃO ----------
-  display.clearDisplay();
-  display.setTextSize(2);
-  display.setCursor(20, 25);
-  display.println("TESTANDO...");
-  display.display();
-  
-  testeCompleto = false;
-  comunicacaoCabecaOK = false;
-  unsigned long tempoInicio = millis();
-
-  while (!testeCompleto && (millis() - tempoInicio) < 5000) {
-    if (millis() - ultimoEnvioHandshake >= 500) {
-      Serial1.println("oi");
-      ultimoEnvioHandshake = millis();
-    }
-
-    while (Serial1.available() > 0) {
-      char c = (char)Serial1.read();
-      ultimoByteHandshake = millis();
-
-      if (c == '\n' || c == '\r') {
-        bufferHandshake.trim();
-        bufferHandshake.toLowerCase();
-        if (bufferHandshake == "oi") {
-          comunicacaoCabecaOK = true;
-          testeCompleto = true;
-          break;
-        }
-        bufferHandshake = "";
-        continue;
-      }
-
-      if (bufferHandshake.length() < 32) {
-        bufferHandshake += c;
-      }
-    }
-
-    if (!testeCompleto && bufferHandshake.length() > 0 && (millis() - ultimoByteHandshake) > 80) {
-      bufferHandshake.trim();
-      bufferHandshake.toLowerCase();
-      if (bufferHandshake == "oi") {
-        comunicacaoCabecaOK = true;
-        testeCompleto = true;
-      }
-      bufferHandshake = "";
-    }
-
-    delay(10);
+void Motor_2(int vel2) {
+  int pwm2 = constrain(abs(vel2), 0, 255);
+  ledcWrite(PWM_CH2, pwm2);
+  if (vel2 <= 0) {
+    digitalWrite(IN1_2_A, HIGH);
+    digitalWrite(IN2_2_A, LOW);
+  } else {
+    digitalWrite(IN1_2_A, LOW);
+    digitalWrite(IN2_2_A, HIGH);
   }
-                                                                          
-  // Exibir resultado
-  exibirResultadoTeste();
-  delay(3000);  // Mostrar resultado por 3 segundos
-  
-  // Marcar que estamos no menu
-  estaNoMenu = true;
-  display.clearDisplay();
-  display.display();
 }
 
-
-void Motor_1(int vel1){
-int pwm1 = constrain(abs(vel1), 0, 255);
-ledcWrite(PWM_CH1, pwm1);
-if(vel1 >= 0){                     
-digitalWrite(IN1_1_A, HIGH);
-digitalWrite(IN2_1_A, LOW);
-} else {
-digitalWrite(IN1_1_A, LOW);
-digitalWrite(IN2_1_A, HIGH);
-}
-}
-  
-
-void Motor_2(int vel2){
-int pwm2 = constrain(abs(vel2), 0, 255);
-ledcWrite(PWM_CH2, pwm2);
-if(vel2 >= 0){
-digitalWrite(IN1_2_A, HIGH);
-digitalWrite(IN2_2_A, LOW);
-} else {
-digitalWrite(IN1_2_A, LOW);
-digitalWrite(IN2_2_A, HIGH);
-}
+void Motor_4(int vel3) {
+  int pwm3 = constrain(abs(vel3), 0, 255);
+  ledcWrite(PWM_CH3, pwm3);
+  if (vel3 <= 0) {
+    digitalWrite(IN1_1_B, HIGH);
+    digitalWrite(IN2_1_B, LOW);
+  } else {
+    digitalWrite(IN1_1_B, LOW);
+    digitalWrite(IN2_1_B, HIGH);
+  }
 }
 
-void Motor_3(int vel3){
-int pwm3 = constrain(abs(vel3), 0, 255);
-ledcWrite(PWM_CH3, pwm3);
-if(vel3 >= 0){
-digitalWrite(IN1_1_B, HIGH);
-digitalWrite(IN2_1_B, LOW);
-} else {
-digitalWrite(IN1_1_B, LOW);
-digitalWrite(IN2_1_B, HIGH);
-}
-}
-
-void Motor_4(int vel4){
-int pwm4 = constrain(abs(vel4), 0, 255);
-ledcWrite(PWM_CH4, pwm4);
-if(vel4 >= 0){
-digitalWrite(IN1_2_B, HIGH);
-digitalWrite(IN2_2_B, LOW);
-} else {
-digitalWrite(IN1_2_B, LOW);
-digitalWrite(IN2_2_B, HIGH);
-}
+void Motor_3(int vel4) {
+  int pwm4 = constrain(abs(vel4), 0, 255);
+  ledcWrite(PWM_CH4, pwm4);
+  if (vel4 <= 0) {
+    digitalWrite(IN1_2_B, HIGH);
+    digitalWrite(IN2_2_B, LOW);
+  } else {
+    digitalWrite(IN1_2_B, LOW);
+    digitalWrite(IN2_2_B, HIGH);
+  }
 }
 
-// ----------- KINEMÁTICA OMNIDIRECIONAL ---------
-// Calcula velocidade de cada motor baseado no ângulo da bola
-// anguloBola: 0-360 graus (0=frente, 90=direita, 180=trás, 270=esquerda)
-// velocidade: 0-255 (magnitude da velocidade)
-void seguirBola(int anguloBola, int velocidade) {
-  // Converter ângulo para radianos (PI com 4 casas decimais)
-  float theta = anguloBola * 3.1416 / 180.0;
-  
-  // Calcular componentes X e Y
-  float vx = velocidade * sin(theta);
-  float vy = velocidade * cos(theta);
-  
-  // Ângulos das rodas em radianos (45°, 135°, 225°, 315°)
-  float theta1 = 45 * 3.1416 / 180.0;
-  float theta2 = 135 * 3.1416 / 180.0;
-  float theta3 = 225 * 3.1416 / 180.0;
-  float theta4 = 315 * 3.1416 / 180.0;
-  
-  // Calcular velocidade de cada motor
+void seguirDirecaoPorAngulo(float anguloGraus, int velocidade) {
+  int velocidadeAlvo = constrain(velocidade, 0, velocidade_maxima);
+  float theta = anguloGraus * PI / 180.0;
+  float vx = velocidadeAlvo * sin(theta);
+  float vy = velocidadeAlvo * cos(theta);
+
+  float theta1 = 45.0 * PI / 180.0;
+  float theta2 = 135.0 * PI / 180.0;
+  float theta3 = 225.0 * PI / 180.0;
+  float theta4 = 315.0 * PI / 180.0;
+
   float v1 = vx * cos(theta1) + vy * sin(theta1);
   float v2 = vx * cos(theta2) + vy * sin(theta2);
   float v3 = vx * cos(theta3) + vy * sin(theta3);
   float v4 = vx * cos(theta4) + vy * sin(theta4);
-  
-  // Normalizar se necessário (encontrar máximo)
-  float maxVel = max({abs(v1), abs(v2), abs(v3), abs(v4)});
+
+  float maxVel = max(max(abs(v1), abs(v2)), max(abs(v3), abs(v4)));
   if (maxVel > velocidade_maxima) {
-    float escala = velocidade_maxima / maxVel;
+    float escala = (float)velocidade_maxima / maxVel;
     v1 *= escala;
     v2 *= escala;
     v3 *= escala;
     v4 *= escala;
   }
-  
-  // Aplicar aos motores
+
   Motor_1((int)v1);
   Motor_2((int)v2);
   Motor_3((int)v3);
   Motor_4((int)v4);
 }
 
-void executarComandoMotores() {
-  float angulo = comandoRecebido.angulo / 10.0;
+void pararMotores() {
+  ledcWrite(PWM_CH1, 0);
+  ledcWrite(PWM_CH2, 0);
+  ledcWrite(PWM_CH3, 0);
+  ledcWrite(PWM_CH4, 0);
 
-  switch (comandoRecebido.caso) {
-    case CMD_IR:
-      seguirBola((int)angulo, velocidade_maxima);
-      break;
-
-    case CMD_LINHA:
-      seguirBola((int)angulo, velocidade_maxima);
-      break;
-
-    case CMD_NENHUM:
-    default:
-      Motor_1(0);
-      Motor_2(0);
-      Motor_3(0);
-      Motor_4(0);
-      break;
-  }
+  digitalWrite(IN1_1_A, LOW);
+  digitalWrite(IN2_1_A, LOW);
+  digitalWrite(IN1_2_A, LOW);
+  digitalWrite(IN2_2_A, LOW);
+  digitalWrite(IN1_1_B, LOW);
+  digitalWrite(IN2_1_B, LOW);
+  digitalWrite(IN1_2_B, LOW);
+  digitalWrite(IN2_2_B, LOW);
 }
 
-// ----------- FUNCOES DISPLAY OLED ---------
-void exibirDisplay(String linha1, String linha2 = "", String linha3 = "", String linha4 = "") {
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 0);
-  
-  if (linha1 != "") {
-    display.println(linha1);
-  }
-  if (linha2 != "") {
-    display.println(linha2);
-  }
-  if (linha3 != "") {
-    display.println(linha3);
-  }
-  if (linha4 != "") {
-    display.println(linha4);
-  }
-  
-  display.display();
-}
-
-// Desenhar menu no display com opção selecionada invertida
 void desenharMenu() {
   display.clearDisplay();
   display.setTextSize(1);
@@ -347,238 +166,419 @@ void desenharMenu() {
   display.setCursor(0, 0);
   display.println("==== MENU ====");
   display.println();
-  
-  // Opção 0: Calibração
-  if (menuRecebido.itemSelecionado == 0) {
-    // Invertido (preto com texto branco)
-    display.fillRect(0, 24, 128, 8, SSD1306_WHITE);
+
+  if (itemSelecionado == 0) {
+    display.fillRect(0, 16, 128, 10, SSD1306_WHITE);
     display.setTextColor(SSD1306_BLACK);
-    display.setCursor(5, 25);
+    display.setCursor(4, 18);
     display.println("CALIBRACAO");
     display.setTextColor(SSD1306_WHITE);
   } else {
-    display.setCursor(5, 25);
+    display.setCursor(4, 18);
     display.println("CALIBRACAO");
   }
-  
-  // Opção 1: Iniciar
-  if (menuRecebido.itemSelecionado == 1) {
-    // Invertido (preto com texto branco)
-    display.fillRect(0, 40, 128, 8, SSD1306_WHITE);
+
+  if (itemSelecionado == 1) {
+    display.fillRect(0, 32, 128, 10, SSD1306_WHITE);
     display.setTextColor(SSD1306_BLACK);
-    display.setCursor(5, 41);
+    display.setCursor(4, 34);
     display.println("INICIAR");
     display.setTextColor(SSD1306_WHITE);
   } else {
-    display.setCursor(5, 41);
+    display.setCursor(4, 34);
     display.println("INICIAR");
   }
-  
+
+  display.setCursor(0, 54);
+  display.print("COM:");
+  display.print(comunicacaoCabecaOK ? "OK" : "FALHA");
+  display.print("  ");
+  display.print(mensagemBotao);
   display.display();
 }
 
-// Desenhar submenu de calibração
 void desenharSubmenuCalibracao() {
   display.clearDisplay();
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
   display.setCursor(0, 0);
-  display.println("==== CALIBRACAO ====");
+  display.println("=== CALIBRACAO ===");
   display.println();
-  
-  // Se está no menu principal de calibração
-  if (menuRecebido.subMenuCal == 0) {
-    // Mostra opções: Gol / Bussola
-    if (menuRecebido.itemSubMenuCal == 0) {
-      display.fillRect(0, 24, 128, 8, SSD1306_WHITE);
+
+  if (subMenuCalibracao == SUBMENU_PRINCIPAL) {
+    if (itemSubMenu == 0) {
+      display.fillRect(0, 16, 128, 10, SSD1306_WHITE);
       display.setTextColor(SSD1306_BLACK);
-      display.setCursor(5, 25);
+      display.setCursor(4, 18);
       display.println("GOL");
       display.setTextColor(SSD1306_WHITE);
     } else {
-      display.setCursor(5, 25);
+      display.setCursor(4, 18);
       display.println("GOL");
     }
-    
-    if (menuRecebido.itemSubMenuCal == 1) {
-      display.fillRect(0, 40, 128, 8, SSD1306_WHITE);
+
+    if (itemSubMenu == 1) {
+      display.fillRect(0, 32, 128, 10, SSD1306_WHITE);
       display.setTextColor(SSD1306_BLACK);
-      display.setCursor(5, 41);
+      display.setCursor(4, 34);
       display.println("BUSSOLA");
       display.setTextColor(SSD1306_WHITE);
     } else {
-      display.setCursor(5, 41);
+      display.setCursor(4, 34);
       display.println("BUSSOLA");
     }
-  }
-  // Se está calibrando a bussola
-  else if (menuRecebido.subMenuCal == 2) {
-    display.println("=== CAL BUSSOLA ===");
+
+    if (itemSubMenu == 2) {
+      display.fillRect(0, 48, 128, 10, SSD1306_WHITE);
+      display.setTextColor(SSD1306_BLACK);
+      display.setCursor(4, 50);
+      display.println("VOLTAR");
+      display.setTextColor(SSD1306_WHITE);
+    } else {
+      display.setCursor(4, 50);
+      display.println("VOLTAR");
+    }
+  } else if (subMenuCalibracao == SUBMENU_GOL) {
+    display.println("Selecione cor do gol");
+
+    if (itemSubMenu == 0) {
+      display.fillRect(0, 24, 128, 10, SSD1306_WHITE);
+      display.setTextColor(SSD1306_BLACK);
+      display.setCursor(4, 26);
+      display.println("AMARELO");
+      display.setTextColor(SSD1306_WHITE);
+    } else {
+      display.setCursor(4, 26);
+      display.println("AMARELO");
+    }
+
+    if (itemSubMenu == 1) {
+      display.fillRect(0, 40, 128, 10, SSD1306_WHITE);
+      display.setTextColor(SSD1306_BLACK);
+      display.setCursor(4, 42);
+      display.println("AZUL");
+      display.setTextColor(SSD1306_WHITE);
+    } else {
+      display.setCursor(4, 42);
+      display.println("AZUL");
+    }
+
+    if (itemSubMenu == 2) {
+      display.fillRect(0, 54, 128, 10, SSD1306_WHITE);
+      display.setTextColor(SSD1306_BLACK);
+      display.setCursor(4, 56);
+      display.println("VOLTAR");
+      display.setTextColor(SSD1306_WHITE);
+    } else {
+      display.setCursor(4, 56);
+      display.println("VOLTAR");
+    }
+  } else {
+    display.println("CAL BUSSOLA");
     display.println();
     display.print("Heading: ");
-    display.print(menuRecebido.headingBussola);
+    display.print(headingBussolaTeste);
     display.println(" graus");
     display.println();
-    display.println("Aperte para gravar");
-    display.println("o valor!");
+    display.println("BTN1/BTN2 alterna");
+    display.println("BTN3 confirma");
   }
-  // Se está calibrando o gol
-  else if (menuRecebido.subMenuCal == 1) {
-    display.println("=== CAL GOL ===");
-    display.println();
 
-    if (menuRecebido.itemSubMenuCal == 0) {
-      display.fillRect(0, 24, 128, 8, SSD1306_WHITE);
-      display.setTextColor(SSD1306_BLACK);
-      display.setCursor(5, 25);
-      display.println("AMARELO");
-      display.setTextColor(SSD1306_WHITE);
-    } else {
-      display.setCursor(5, 25);
-      display.println("AMARELO");
-    }
-
-    if (menuRecebido.itemSubMenuCal == 1) {
-      display.fillRect(0, 40, 128, 8, SSD1306_WHITE);
-      display.setTextColor(SSD1306_BLACK);
-      display.setCursor(5, 41);
-      display.println("AZUL");
-      display.setTextColor(SSD1306_WHITE);
-    } else {
-      display.setCursor(5, 41);
-      display.println("AZUL");
-    }
-  }
-  
   display.display();
 }
 
-// Desenhar dados ao vivo quando em estado INICIAR
-void desenharDadosOperacao() {
+void desenharOperacao() {
   display.clearDisplay();
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
   display.setCursor(0, 0);
-  display.println("==== OPERACAO ====");
+  display.println("=== OPERACAO TESTE ===");
   display.println();
-  
-  // Exibir ângulo da bola (IR)
-  display.print("IR: ");
-  if (menuRecebido.IRdetectado) {
-    display.print(menuRecebido.anguloBola / 10.0, 1);  // divide por 10 para desescalar
-    display.println(" deg");
-  } else {
-    display.println("Não detectado");
-  }
-  
-  // Exibir ângulo da linha
-  display.print("Linha: ");
-  if (menuRecebido.linhaDetectada) {
-    display.print(menuRecebido.anguloLinha / 10.0, 1);  // divide por 10 para desescalar
-    display.println(" deg");
-  } else {
-    display.println("Não detectada");
-  }
-  
-  display.println();
-  display.println("Pressione Botão 3");
-  display.println("para voltar ao MENU");
-  
-  display.display();
-}
-
-// Receber dados do menu via Serial1
-void receberDadosMenu() {
-  while (Serial1.available() >= 4) {
-    byte marcador = Serial1.peek();
-    
-    // Verificar se é mensagem de status de comunicação (0xFF)
-    if (marcador == 0xFF) {
-      Serial1.read();  // consome 0xFF
-      if (Serial1.available() >= sizeof(StatusComunicacao) + 1) {
-        StatusComunicacao temp;
-        Serial1.readBytes((uint8_t*)&temp, sizeof(StatusComunicacao));
-        byte stop = Serial1.read();
-        if (stop == 0xFE) {  // 0xFE é fim do status
-          statusCom = temp;
-          testeCompleto = true;
-          comunicacaoCabecaOK = true;
-        }
-      }
-    }
-    // Mensagem de comando de movimento (0xAB)
-    else if (marcador == 0xAB) {
-      Serial1.read();  // consome 0xAB
-      if (Serial1.available() >= sizeof(ComandoMusculo) + 1) {
-        ComandoMusculo temp;
-        Serial1.readBytes((uint8_t*)&temp, sizeof(ComandoMusculo));
-        byte stop = Serial1.read();
-        if (stop == 0xBA) {
-          comandoRecebido = temp;
-        }
-      }
-    }
-    // Caso contrário, é MenuData (começa com BYTE_INICIA)
-    else if (marcador == BYTE_INICIA) {
-      Serial1.read();  // consome BYTE_INICIA
-      if (Serial1.available() >= sizeof(MenuData) + 1) {
-        MenuData temp;
-        Serial1.readBytes((uint8_t*)&temp, sizeof(MenuData));
-        byte stop = Serial1.read();
-        if (stop == BYTE_PARA) {
-          menuRecebido = temp;
-          estaNoMenu = (menuRecebido.estadoMenu == 0);  // se estado é MENU (0)
-        }
-      }
-    } else {
-      Serial1.read();  // descarta byte inválido
-    }
-  }
-}
-
-// Exibir resultado do teste de comunicação
-void exibirResultadoTeste() {
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 0);
-  display.println("===== TESTE ======");
-  display.println();
-
-  display.print("MUSC<->CABECA: ");
+  display.print("COM CABECA: ");
   display.println(comunicacaoCabecaOK ? "OK" : "FALHA");
-  
-  display.println();
-  if (comunicacaoCabecaOK) {
-    display.println("TUDO OK!");
+  display.print("IR ANG: ");
+  if (irDetectado) {
+    display.print(anguloIr, 1);
+    display.println(" deg");
   } else {
-    display.println("Verifique conexoes!");
+    display.println("NAO DETECTADO");
   }
-  
+  display.println();
+  display.println("BTN3 volta MENU");
+  display.print("Ultimo: ");
+  display.println(mensagemBotao);
   display.display();
 }
- 
-void loop(){
-  // Receber dados do menu e sensores da cabeça
-  receberDadosMenu();
-  
-  // Se estamos no estado MENU, desenhar o menu
-  if (menuRecebido.estadoMenu == 0) {
+
+void desenharStatusPlacas() {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, 0);
+  display.println("=== TESTE PLACAS ===");
+  display.println();
+  display.print("MUSC<->CAB: ");
+  display.println(comunicacaoCabecaOK ? "OK" : "FALHA");
+  display.print("OLHO: ");
+  display.println(olhoOK ? "OK" : "FALHA");
+  display.print("PE: ");
+  display.println(peOK ? "OK" : "FALHA");
+  display.display();
+}
+
+void mostrarTelaFalhaComunicacao() {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, 0);
+  display.println("=== TESTE COM/BTN ===");
+  display.println();
+  display.println("COM CABECA: FALHA");
+  display.println("Verifique serial 17/18");
+  display.println();
+  display.print("Ultimo: ");
+  display.println(mensagemBotao);
+  display.display();
+}
+
+void desenharTelaAtual() {
+  if (millis() < mostrarStatusAte) {
+    desenharStatusPlacas();
+    return;
+  }
+
+  if (!comunicacaoCabecaOK) {
+    mostrarTelaFalhaComunicacao();
+    return;
+  }
+
+  if (estadoAtual == MENU) {
     desenharMenu();
-  } 
-  // Se estamos em CALIBRACAO
-  else if (menuRecebido.estadoMenu == 1) {
+  } else if (estadoAtual == CALIBRACAO) {
     desenharSubmenuCalibracao();
+  } else {
+    desenharOperacao();
   }
-  // Se estamos em INICIAR, mostrar dados ao vivo
-  else if (menuRecebido.estadoMenu == 2) {
-    desenharDadosOperacao();
-    executarComandoMotores();
+}
+
+void processarEventoBotao(uint8_t botao) {
+  if (estadoAtual == MENU) {
+    if (botao == 1) {
+      itemSelecionado--;
+      if (itemSelecionado < 0) itemSelecionado = 1;
+    } else if (botao == 2) {
+      itemSelecionado++;
+      if (itemSelecionado > 1) itemSelecionado = 0;
+    } else if (botao == 3) {
+      if (itemSelecionado == 0) {
+        estadoAtual = CALIBRACAO;
+        subMenuCalibracao = SUBMENU_PRINCIPAL;
+        itemSubMenu = 0;
+      } else {
+        estadoAtual = INICIAR;
+      }
+    }
+    return;
   }
-  
 
+  if (estadoAtual == CALIBRACAO && subMenuCalibracao == SUBMENU_PRINCIPAL) {
+    if (botao == 1) {
+      itemSubMenu--;
+      if (itemSubMenu < 0) itemSubMenu = 2;
+    } else if (botao == 2) {
+      itemSubMenu++;
+      if (itemSubMenu > 2) itemSubMenu = 0;
+    } else if (botao == 3) {
+      if (itemSubMenu == 0) {
+        subMenuCalibracao = SUBMENU_GOL;
+        itemSubMenu = corGolAzul ? 1 : 0;
+      } else if (itemSubMenu == 1) {
+        subMenuCalibracao = SUBMENU_BUSSOLA;
+        itemSubMenu = 0;
+      } else {
+        estadoAtual = MENU;
+        itemSelecionado = 0;
+      }
+    }
+    return;
+  }
 
+  if (estadoAtual == CALIBRACAO && subMenuCalibracao == SUBMENU_GOL) {
+    if (botao == 1) {
+      itemSubMenu--;
+      if (itemSubMenu < 0) itemSubMenu = 2;
+    } else if (botao == 2) {
+      itemSubMenu++;
+      if (itemSubMenu > 2) itemSubMenu = 0;
+    } else if (botao == 3) {
+      if (itemSubMenu == 0 || itemSubMenu == 1) {
+        corGolAzul = (itemSubMenu == 1);
+      }
+      subMenuCalibracao = SUBMENU_PRINCIPAL;
+      itemSubMenu = 0;
+    }
+    return;
+  }
 
+  if (estadoAtual == CALIBRACAO && subMenuCalibracao == SUBMENU_BUSSOLA) {
+    if (botao == 1 || botao == 2) {
+      itemSubMenu = (itemSubMenu == 0) ? 1 : 0;
+    } else if (botao == 3) {
+      mensagemBotao = "BUSSOLA GRAVADA";
+      subMenuCalibracao = SUBMENU_PRINCIPAL;
+      itemSubMenu = 0;
+    }
+    return;
+  }
 
-  delay(50);
+  if (estadoAtual == INICIAR && botao == 3) {
+    estadoAtual = MENU;
+  }
+}
+
+void processarMensagemCabeca(String msg) {
+  msg.trim();
+  msg.toUpperCase();
+
+  if (msg == "OI") {
+    comunicacaoCabecaOK = true;
+    ultimoRxCabeca = millis();
+    return;
+  }
+
+  if (msg.startsWith("STS:")) {
+    int separador = msg.indexOf(',');
+    if (separador > 4) {
+      String olho = msg.substring(4, separador);
+      String pe = msg.substring(separador + 1);
+      olho.trim();
+      pe.trim();
+      olhoOK = (olho == "1");
+      peOK = (pe == "1");
+      comunicacaoCabecaOK = true;
+      ultimoRxCabeca = millis();
+      mostrarStatusAte = millis() + 3000;
+    }
+    return;
+  }
+
+  if (msg.startsWith("BTN:")) {
+    String valor = msg.substring(4);
+    valor.trim();
+    if (valor == "1" || valor == "2" || valor == "3") {
+      mensagemBotao = "BOTAO " + valor + " APERTADO";
+      comunicacaoCabecaOK = true;
+      ultimoRxCabeca = millis();
+      processarEventoBotao((uint8_t)valor.toInt());
+    }
+    return;
+  }
+
+  if (msg.startsWith("IR:")) {
+    String valorIr = msg.substring(3);
+    valorIr.trim();
+    float novoAngulo = valorIr.toFloat();
+    irDetectado = (novoAngulo >= 0.0);
+    anguloIr = novoAngulo;
+    comunicacaoCabecaOK = true;
+    ultimoRxCabeca = millis();
+  }
+}
+
+void lerSerialCabeca() {
+  while (Serial1.available() > 0) {
+    char c = (char)Serial1.read();
+    if (c == '\n' || c == '\r') {
+      if (bufferSerial.length() > 0) {
+        processarMensagemCabeca(bufferSerial);
+        bufferSerial = "";
+      }
+      continue;
+    }
+
+    if (bufferSerial.length() < 32) {
+      bufferSerial += c;
+    }
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  Serial1.begin(9600, SERIAL_8N1, RX_CABECA, TX_CABECA);
+
+  pinMode(IN1_1_A, OUTPUT);
+  pinMode(IN2_1_A, OUTPUT);
+  pinMode(IN1_2_A, OUTPUT);
+  pinMode(IN2_2_A, OUTPUT);
+  pinMode(IN1_1_B, OUTPUT);
+  pinMode(IN2_1_B, OUTPUT);
+  pinMode(IN1_2_B, OUTPUT);
+  pinMode(IN2_2_B, OUTPUT);
+
+  ledcSetup(PWM_CH1, PWM_FREQ, PWM_RES);
+  ledcAttachPin(PWM_1_A, PWM_CH1);
+  ledcSetup(PWM_CH2, PWM_FREQ, PWM_RES);
+  ledcAttachPin(PWM_2_A, PWM_CH2);
+  ledcSetup(PWM_CH3, PWM_FREQ, PWM_RES);
+  ledcAttachPin(PWM_1_B, PWM_CH3);
+  ledcSetup(PWM_CH4, PWM_FREQ, PWM_RES);
+  ledcAttachPin(PWM_2_B, PWM_CH4);
+  pararMotores();
+
+  Wire.begin(SDA_PIN, SCL_PIN);
+  if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR)) {
+    while (1) {
+      delay(100);
+    }
+  }
+
+  display.clearDisplay();
+  display.setTextSize(2);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(20, 25);
+  display.println("TESTANDO...");
+  display.display();
+
+  unsigned long inicio = millis();
+  while ((millis() - inicio) < 3000) {
+    if (millis() - ultimoEnvioOi >= 300) {
+      Serial1.println("oi");
+      ultimoEnvioOi = millis();
+    }
+    lerSerialCabeca();
+    if (comunicacaoCabecaOK) {
+      break;
+    }
+    delay(10);
+  }
+
+  desenharTelaAtual();
+}
+
+void loop() {
+  if (millis() - ultimoEnvioOi >= INTERVALO_OI_MS) {
+    Serial1.println("oi");
+    ultimoEnvioOi = millis();
+  }
+
+  lerSerialCabeca();
+
+  if ((millis() - ultimoRxCabeca) > TIMEOUT_COM_MS) {
+    comunicacaoCabecaOK = false;
+  }
+
+  headingBussolaTeste = (headingBussolaTeste + 2) % 360;
+  if (estadoAtual == INICIAR && comunicacaoCabecaOK && irDetectado) {
+    seguirDirecaoPorAngulo(anguloIr, velocidade_maxima);
+  } else {
+    pararMotores();
+  }
+
+  static unsigned long ultimaTela = 0;
+  if ((millis() - ultimaTela) > 120) {
+    desenharTelaAtual();
+    ultimaTela = millis();
+  }
+
+  delay(5);
 }

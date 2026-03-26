@@ -37,8 +37,8 @@ void L_Ultra() {     // <-- Função para leitura dos sensores ultrassonicos
 }
 
 
-#define RX_CABECA 20
-#define TX_CABECA 30
+#define RX_CABECA 17
+#define TX_CABECA 18
 #define RX_CAMERA 8 
 #define TX_CAMERA 3
 
@@ -137,6 +137,44 @@ struct PacoteEstado {
 bool golDetectadoCamera = false;
 float erroGolCamera = 0.0;
 uint16_t pixelsGolCamera = 0;
+String bufferHandshakeCabeca = "";
+unsigned long ultimoByteHandshakeCabeca = 0;
+
+void ProcessarPingCabeca() {
+  while (Serial1.available() > 0) {
+    if (Serial1.peek() == BYTE_INICIA) {
+      return;
+    }
+
+    char c = (char)Serial1.read();
+    ultimoByteHandshakeCabeca = millis();
+
+    if (c == '\n' || c == '\r') {
+      bufferHandshakeCabeca.trim();
+      bufferHandshakeCabeca.toLowerCase();
+      if (bufferHandshakeCabeca == "oi") {
+        Serial1.println("OI");
+      }
+      bufferHandshakeCabeca = "";
+      continue;
+    }
+
+    if (isPrintable(c) && bufferHandshakeCabeca.length() < 16) {
+      bufferHandshakeCabeca += c;
+    } else {
+      bufferHandshakeCabeca = "";
+    }
+  }
+
+  if (bufferHandshakeCabeca.length() > 0 && (millis() - ultimoByteHandshakeCabeca) > 80) {
+    bufferHandshakeCabeca.trim();
+    bufferHandshakeCabeca.toLowerCase();
+    if (bufferHandshakeCabeca == "oi") {
+      Serial1.println("OI");
+    }
+    bufferHandshakeCabeca = "";
+  }
+}
 
 void EnviarCorParaCamera() {
   Serial2.write(BYTE_INICIA);
@@ -249,12 +287,7 @@ void setup() {
 }
 
 void loop(){
-  // Na primeira iteração, enviar "OK" para a cabeça (para comunicação teste)
-  if (!jaSaudouCabeca) {
-    Serial1.print("OK");
-    jaSaudouCabeca = true;
-    delay(100);
-  }
+  ProcessarPingCabeca();
 
   contarPulsosSensores(); // Leitura IR SEEKER
   L_Ultra(); // Leitura dos ultras

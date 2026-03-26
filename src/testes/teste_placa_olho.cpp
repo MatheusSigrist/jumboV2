@@ -3,8 +3,8 @@
 
 const int NUM_SENSORES = 12;
 const int sensoresTSOP[NUM_SENSORES] = {
-  6, 7, 46, 11, 12, 13, 14, 48,
-  45, 35, 38, 39
+  39, 6, 7, 46, 11, 12, 13, 14, 48,
+  45, 35, 38
 };
 
 float angulos[NUM_SENSORES] = {
@@ -67,7 +67,7 @@ float calcularAnguloBola() {
 
 void setup() {
   Serial.begin(115200);
-
+  Serial.println("Iniciando teste da placa Olho...");
   for (int i = 0; i < NUM_SENSORES; i++) {
     pinMode(sensoresTSOP[i], INPUT);
   }

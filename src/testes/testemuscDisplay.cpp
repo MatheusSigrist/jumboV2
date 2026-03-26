@@ -101,6 +101,17 @@ void desenharSubmenuCalibracao() {
       display.setCursor(4, 34);
       display.println("BUSSOLA");
     }
+
+    if (itemSubMenu == 2) {
+      display.fillRect(0, 48, 128, 10, SSD1306_WHITE);
+      display.setTextColor(SSD1306_BLACK);
+      display.setCursor(4, 50);
+      display.println("VOLTAR");
+      display.setTextColor(SSD1306_WHITE);
+    } else {
+      display.setCursor(4, 50);
+      display.println("VOLTAR");
+    }
   } else if (subMenuCalibracao == SUBMENU_GOL) {
     display.println("Selecione cor do gol");
 
@@ -125,6 +136,17 @@ void desenharSubmenuCalibracao() {
       display.setCursor(4, 42);
       display.println("AZUL");
     }
+
+    if (itemSubMenu == 2) {
+      display.fillRect(0, 54, 128, 10, SSD1306_WHITE);
+      display.setTextColor(SSD1306_BLACK);
+      display.setCursor(4, 56);
+      display.println("VOLTAR");
+      display.setTextColor(SSD1306_WHITE);
+    } else {
+      display.setCursor(4, 56);
+      display.println("VOLTAR");
+    }
   } else if (subMenuCalibracao == SUBMENU_BUSSOLA) {
     display.println("CAL BUSSOLA");
     display.println();
@@ -132,7 +154,28 @@ void desenharSubmenuCalibracao() {
     display.print(headingBussolaTeste);
     display.println(" graus");
     display.println();
-    display.println("Aperte BTN3 p/ gravar");
+
+    if (itemSubMenu == 0) {
+      display.fillRect(0, 40, 128, 10, SSD1306_WHITE);
+      display.setTextColor(SSD1306_BLACK);
+      display.setCursor(4, 42);
+      display.println("GRAVAR");
+      display.setTextColor(SSD1306_WHITE);
+    } else {
+      display.setCursor(4, 42);
+      display.println("GRAVAR");
+    }
+
+    if (itemSubMenu == 1) {
+      display.fillRect(0, 54, 128, 10, SSD1306_WHITE);
+      display.setTextColor(SSD1306_BLACK);
+      display.setCursor(4, 56);
+      display.println("VOLTAR");
+      display.setTextColor(SSD1306_WHITE);
+    } else {
+      display.setCursor(4, 56);
+      display.println("VOLTAR");
+    }
   }
 
   display.display();
@@ -209,26 +252,36 @@ void processarEventoBotao(uint8_t botao) {
   if (estadoAtual == CALIBRACAO && subMenuCalibracao == SUBMENU_PRINCIPAL) {
     if (botao == 1) {
       itemSubMenu--;
-      if (itemSubMenu < 0) itemSubMenu = 1;
+      if (itemSubMenu < 0) itemSubMenu = 2;
     } else if (botao == 2) {
       itemSubMenu++;
-      if (itemSubMenu > 1) itemSubMenu = 0;
+      if (itemSubMenu > 2) itemSubMenu = 0;
     } else if (botao == 3) {
       if (itemSubMenu == 0) {
         subMenuCalibracao = SUBMENU_GOL;
         itemSubMenu = corGolAzul ? 1 : 0;
-      } else {
+      } else if (itemSubMenu == 1) {
         subMenuCalibracao = SUBMENU_BUSSOLA;
+        itemSubMenu = 0;
+      } else {
+        estadoAtual = MENU;
+        itemSelecionado = 0;
       }
     }
     return;
   }
 
   if (estadoAtual == CALIBRACAO && subMenuCalibracao == SUBMENU_GOL) {
-    if (botao == 1 || botao == 2) {
-      itemSubMenu = (itemSubMenu == 0) ? 1 : 0;
+    if (botao == 1) {
+      itemSubMenu--;
+      if (itemSubMenu < 0) itemSubMenu = 2;
+    } else if (botao == 2) {
+      itemSubMenu++;
+      if (itemSubMenu > 2) itemSubMenu = 0;
     } else if (botao == 3) {
-      corGolAzul = (itemSubMenu == 1);
+      if (itemSubMenu == 0 || itemSubMenu == 1) {
+        corGolAzul = (itemSubMenu == 1);
+      }
       subMenuCalibracao = SUBMENU_PRINCIPAL;
       itemSubMenu = 0;
     }
@@ -236,7 +289,12 @@ void processarEventoBotao(uint8_t botao) {
   }
 
   if (estadoAtual == CALIBRACAO && subMenuCalibracao == SUBMENU_BUSSOLA) {
-    if (botao == 3) {
+    if (botao == 1 || botao == 2) {
+      itemSubMenu = (itemSubMenu == 0) ? 1 : 0;
+    } else if (botao == 3) {
+      if (itemSubMenu == 0) {
+        mensagemBotao = "BUSSOLA GRAVADA";
+      }
       subMenuCalibracao = SUBMENU_PRINCIPAL;
       itemSubMenu = 0;
     }
