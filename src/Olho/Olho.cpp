@@ -55,43 +55,68 @@ float angulos[NUM_SENSORES] = {
   0, 30, 60, 90, 120, 150, 180, 210,
   240, 270, 300, 330 
 };
-const unsigned long JANELA_TEMPO = 10;    // <-- Janela de tempo para contagens de pulso de IR (10ms)
+const unsigned long JANELA_TEMPO = 15;    // <-- Janela de tempo para contagens de pulso de IR (10ms)
 const int LIMIAR_PULSOS = 2;    // <-- Limiar de pulsos para identificar que é a bola
 unsigned int pulsos[NUM_SENSORES];
-unsigned int intensidade = 0;  // <-- Declarada globalmente para ser usada em enviarDados()
+unsigned int nivelBaixo[NUM_SENSORES];
+float pesosIr[NUM_SENSORES];
+unsigned long amostrasJanela = 1;
+float intensidade = 0;  // <-- Declarada globalmente para ser usada em enviarDados()
 
 
 
 void contarPulsosSensores() {     // <-- Função de contagens de pulsos IR emitidos pela bola (IR SEEKER)
-  for (int i = 0; i < NUM_SENSORES; i++) pulsos[i] = 0;
+  for (int i = 0; i < NUM_SENSORES; i++) {
+    pulsos[i] = 0;
+    nivelBaixo[i] = 0;
+    pesosIr[i] = 0;
+  }
   unsigned long t0 = millis();
+  amostrasJanela = 0;
   int oldState[NUM_SENSORES];
   for (int i = 0; i < NUM_SENSORES; i++)
     oldState[i] = digitalRead(sensoresTSOP[i]);
+
   while (millis() - t0 < JANELA_TEMPO) {
+    amostrasJanela++;
     for (int i = 0; i < NUM_SENSORES; i++) {
       int s = digitalRead(sensoresTSOP[i]);
+      if (s == LOW) {
+        nivelBaixo[i]++;
+      }
       if (oldState[i] == HIGH && s == LOW) {
         pulsos[i]++;
       }
       oldState[i] = s;
     } 
   }
+
+  if (amostrasJanela == 0) {
+    amostrasJanela = 1;
+  }
+
   // Atualizar intensidade global
   intensidade = 0;
   for (int i = 0; i < NUM_SENSORES; i++) {
-    intensidade += pulsos[i];
+    float dutyLow = (float)nivelBaixo[i] / (float)amostrasJanela;
+    bool detectou = (pulsos[i] >= LIMIAR_PULSOS) || (dutyLow >= 0.18f);
+
+    if (detectou) {
+      // Mistura contagem de pulsos com tempo em LOW para funcionar com bola pulsada e continua.
+      pesosIr[i] = (float)pulsos[i] + (dutyLow * 8.0f);
+      intensidade += pesosIr[i];
+    }
   }
 }
 
 float calculaAnguloBola() {     // <-- Função para cálculo do angulo da bola pelos pulsos de IR lidos (IR SEEKER)
   float x = 0, y = 0, soma_pesos = 0;
   for (int i = 0; i < NUM_SENSORES; i++) {
-    if (pulsos[i] >= LIMIAR_PULSOS) {
+    if (pesosIr[i] > 0.0f) {
       float rad = angulos[i] * PI / 180.0;
-      x += pulsos[i] * cos(rad);
-      y += pulsos[i] * sin(rad);
-      soma_pesos += pulsos[i];
+      x += pesosIr[i] * cos(rad);
+      y += pesosIr[i] * sin(rad);
+      soma_pesos += pesosIr[i];
     }
   }
   if (soma_pesos == 0) return -1.0;
@@ -124,6 +149,7 @@ struct Pacote {
   int16_t erroGol;
   uint16_t pixelsGol;
   uint8_t golDetectado;
+  uint8_t cameraOK;  // 1 = camera enviando dados, 0 = sem sinal
 };
 
 struct PacoteEstado {
@@ -137,6 +163,7 @@ struct PacoteEstado {
 bool golDetectadoCamera = false;
 float erroGolCamera = 0.0;
 uint16_t pixelsGolCamera = 0;
+unsigned long ultimoRxCameraMs = 0;  // timestamp do ultimo pacote valido recebido da camera
 String bufferHandshakeCabeca = "";
 unsigned long ultimoByteHandshakeCabeca = 0;
 
@@ -240,6 +267,7 @@ void LeituraCamera() {
     erroGolCamera = erroRaw / 10.0;
 
     pixelsGolCamera = (uint16_t)((payload[3] << 8) | payload[4]);
+    ultimoRxCameraMs = millis();  // marca que camea esta viva
   }
 }
 
@@ -258,6 +286,7 @@ void enviarDados() {
   p.erroGol = erroGolRaw;
   p.pixelsGol = pixelsGolCamera;
   p.golDetectado = golDetectadoCamera ? 1 : 0;
+  p.cameraOK = ((ultimoRxCameraMs > 0) && ((millis() - ultimoRxCameraMs) < 3000)) ? 1 : 0;
 
   Serial1.write(BYTE_INICIA);
   Serial1.write(ID_PLACA_OLHO);

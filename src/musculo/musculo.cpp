@@ -1,7 +1,13 @@
 #include <Arduino.h>
 #include <Wire.h>
+#include <EEPROM.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+
+// ===================== GIRO ALINHAMENTO - ALTERE AQUI =====================
+#define VELOCIDADE_GIRO  60
+#define SINAL_GIRO       -1
+// ==========================================================================
 
 #define RX_CABECA 17
 #define TX_CABECA 18
@@ -51,18 +57,33 @@ bool corGolAzul = false;
 int headingBussolaTeste = 0;
 float anguloIr = -1.0;
 bool irDetectado = false;
+bool bussolaDetectada = false;
+bool cameraOK = false;  // camera se comunicando com o olho
 
 enum Estado { MENU, CALIBRACAO, INICIAR };
 Estado estadoAtual = MENU;
 int itemSelecionado = 0;
 
-enum SubMenuCalibracao { SUBMENU_PRINCIPAL, SUBMENU_GOL, SUBMENU_BUSSOLA };
+enum SubMenuCalibracao { SUBMENU_PRINCIPAL, SUBMENU_GOL, SUBMENU_BUSSOLA, SUBMENU_CAMERA };
 SubMenuCalibracao subMenuCalibracao = SUBMENU_PRINCIPAL;
 int itemSubMenu = 0;
 
 const unsigned long INTERVALO_OI_MS = 1000;
 const unsigned long TIMEOUT_COM_MS = 3000;
-const int velocidade_maxima = 255;
+const int velocidade_maxima = 180;
+const int EEPROM_SIZE = 64;
+const int EEPROM_ADDR_BUSSOLA = 0;
+const float TOLERANCIA_ALINHAMENTO_GRAUS = 20.0f;
+const int VELOCIDADE_GIRO_ALINHAMENTO = VELOCIDADE_GIRO;
+const int SINAL_GIRO_PID = SINAL_GIRO;
+const float ALPHA_FILTRO_BUSSOLA = 0.12f;
+
+int headingBussolaSalvo = 0;
+float erroAlinhamentoGraus = 0.0f;
+bool alinhandoAgora = false;
+bool corGolPendenteEnvio = true;
+unsigned long ultimoEnvioCorGolMs = 0;
+const unsigned long INTERVALO_ENVIO_COR_GOL_MS = 500;
 
 void Motor_1(int vel1) {
   int pwm1 = constrain(abs(vel1), 0, 255);
@@ -159,6 +180,51 @@ void pararMotores() {
   digitalWrite(IN2_2_B, LOW);
 }
 
+void girarNoEixo(int velocidade) {
+  int vel = constrain(velocidade, -velocidade_maxima, velocidade_maxima);
+
+  // Mapeamento de giro da base:
+  // horario: M1/M2 frente e M3/M4 tras
+  // anti-horario: inverso
+  Motor_1(vel);
+  Motor_2(vel);
+  Motor_3(vel);
+  Motor_4(vel);
+}
+
+float normalizarErro180(float erro) {
+  while (erro > 180.0f) erro -= 360.0f;
+  while (erro < -180.0f) erro += 360.0f;
+  return erro;
+}
+
+float normalizarAngulo360(float ang) {
+  while (ang >= 360.0f) ang -= 360.0f;
+  while (ang < 0.0f) ang += 360.0f;
+  return ang;
+}
+
+bool filtroBussolaInicializado = false;
+float bussolaFiltroX = 1.0f;
+float bussolaFiltroY = 0.0f;
+float erroGolGraus = 0.0f;
+bool golDetectado = false;
+uint16_t golPixels = 0;
+
+void enviarCorGolParaCabeca() {
+  if (!corGolPendenteEnvio) {
+    return;
+  }
+
+  if ((millis() - ultimoEnvioCorGolMs) < INTERVALO_ENVIO_COR_GOL_MS) {
+    return;
+  }
+
+  Serial1.print("CFG:GOL:");
+  Serial1.println(corGolAzul ? "1" : "0");
+  ultimoEnvioCorGolMs = millis();
+}
+
 void desenharMenu() {
   display.clearDisplay();
   display.setTextSize(1);
@@ -187,6 +253,15 @@ void desenharMenu() {
   } else {
     display.setCursor(4, 34);
     display.println("INICIAR");
+  }
+
+  display.setCursor(0, 44);
+  display.print("GOL ERR:");
+  if (golDetectado) {
+    display.print(erroGolGraus, 1);
+    display.print("deg");
+  } else {
+    display.print("SEM GOL");
   }
 
   display.setCursor(0, 54);
@@ -229,13 +304,24 @@ void desenharSubmenuCalibracao() {
     }
 
     if (itemSubMenu == 2) {
-      display.fillRect(0, 48, 128, 10, SSD1306_WHITE);
+      display.fillRect(0, 40, 128, 10, SSD1306_WHITE);
       display.setTextColor(SSD1306_BLACK);
-      display.setCursor(4, 50);
+      display.setCursor(4, 42);
+      display.println("TESTE CAM");
+      display.setTextColor(SSD1306_WHITE);
+    } else {
+      display.setCursor(4, 42);
+      display.println("TESTE CAM");
+    }
+
+    if (itemSubMenu == 3) {
+      display.fillRect(0, 54, 128, 10, SSD1306_WHITE);
+      display.setTextColor(SSD1306_BLACK);
+      display.setCursor(4, 56);
       display.println("VOLTAR");
       display.setTextColor(SSD1306_WHITE);
     } else {
-      display.setCursor(4, 50);
+      display.setCursor(4, 56);
       display.println("VOLTAR");
     }
   } else if (subMenuCalibracao == SUBMENU_GOL) {
@@ -273,15 +359,43 @@ void desenharSubmenuCalibracao() {
       display.setCursor(4, 56);
       display.println("VOLTAR");
     }
+  } else if (subMenuCalibracao == SUBMENU_CAMERA) {
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+    display.setCursor(0, 0);
+    display.println("=== TESTE CAMERA ===");
+    display.println();
+    display.print("MUSC<->CAB: ");
+    display.println(comunicacaoCabecaOK ? "OK" : "FALHA");
+    display.print("CAM->OLHO:  ");
+    display.println(cameraOK ? "OK" : "SEM SINAL");
+    display.print("GOL: ");
+    display.println(golDetectado ? "DETECTADO" : "NAO VE");
+    display.print("ERRO: ");
+    if (golDetectado) {
+      display.print(erroGolGraus, 1);
+      display.println(" deg");
+    } else {
+      display.println("---");
+    }
+    display.print("PIXELS: ");
+    display.println(golPixels);
+    display.println("BTN1/2 VOLTAR");
   } else {
-    display.println("CAL BUSSOLA");
+    display.setCursor(0, 0);
+    display.println("BUSSOLA AGORA");
     display.println();
-    display.print("Heading: ");
+    display.setTextSize(3);
+    display.setCursor(8, 20);
     display.print(headingBussolaTeste);
-    display.println(" graus");
-    display.println();
-    display.println("BTN1/BTN2 alterna");
-    display.println("BTN3 confirma");
+    display.print((char)247);
+    display.setTextSize(1);
+    display.setCursor(0, 54);
+    display.print("SALVO:");
+    display.print(headingBussolaSalvo);
+    display.print((char)247);
+    display.print("  BTN3 SALVA");
   }
 
   display.display();
@@ -303,10 +417,21 @@ void desenharOperacao() {
   } else {
     display.println("NAO DETECTADO");
   }
-  display.println();
-  display.println("BTN3 volta MENU");
-  display.print("Ultimo: ");
-  display.println(mensagemBotao);
+  display.print("ERRO GOL: ");
+  if (golDetectado) {
+    display.print(erroGolGraus, 1);
+    display.println(" deg");
+  } else {
+    display.println("SEM GOL");
+  }
+  if (golDetectado) {
+    display.print("ERRO: ");
+    display.print(erroAlinhamentoGraus, 1);
+    display.println(" deg");
+    display.println(alinhandoAgora ? "MODO: ALINHANDO" : "MODO: SEGUINDO");
+    display.print("PIX: ");
+    display.println(golPixels);
+  }
   display.display();
 }
 
@@ -384,16 +509,19 @@ void processarEventoBotao(uint8_t botao) {
   if (estadoAtual == CALIBRACAO && subMenuCalibracao == SUBMENU_PRINCIPAL) {
     if (botao == 1) {
       itemSubMenu--;
-      if (itemSubMenu < 0) itemSubMenu = 2;
+      if (itemSubMenu < 0) itemSubMenu = 3;
     } else if (botao == 2) {
       itemSubMenu++;
-      if (itemSubMenu > 2) itemSubMenu = 0;
+      if (itemSubMenu > 3) itemSubMenu = 0;
     } else if (botao == 3) {
       if (itemSubMenu == 0) {
         subMenuCalibracao = SUBMENU_GOL;
         itemSubMenu = corGolAzul ? 1 : 0;
       } else if (itemSubMenu == 1) {
         subMenuCalibracao = SUBMENU_BUSSOLA;
+        itemSubMenu = 0;
+      } else if (itemSubMenu == 2) {
+        subMenuCalibracao = SUBMENU_CAMERA;
         itemSubMenu = 0;
       } else {
         estadoAtual = MENU;
@@ -413,6 +541,8 @@ void processarEventoBotao(uint8_t botao) {
     } else if (botao == 3) {
       if (itemSubMenu == 0 || itemSubMenu == 1) {
         corGolAzul = (itemSubMenu == 1);
+        corGolPendenteEnvio = true;
+        mensagemBotao = corGolAzul ? "ENVIA GOL AZUL" : "ENVIA GOL AMARELO";
       }
       subMenuCalibracao = SUBMENU_PRINCIPAL;
       itemSubMenu = 0;
@@ -421,12 +551,24 @@ void processarEventoBotao(uint8_t botao) {
   }
 
   if (estadoAtual == CALIBRACAO && subMenuCalibracao == SUBMENU_BUSSOLA) {
-    if (botao == 1 || botao == 2) {
-      itemSubMenu = (itemSubMenu == 0) ? 1 : 0;
-    } else if (botao == 3) {
-      mensagemBotao = "BUSSOLA GRAVADA";
+    if (botao == 3) {
+      headingBussolaSalvo = headingBussolaTeste;
+      EEPROM.put(EEPROM_ADDR_BUSSOLA, headingBussolaSalvo);
+      bool ok = EEPROM.commit();
+      mensagemBotao = ok ? "BUSSOLA GRAVADA" : "ERRO EEPROM";
       subMenuCalibracao = SUBMENU_PRINCIPAL;
       itemSubMenu = 0;
+    } else if (botao == 1 || botao == 2) {
+      subMenuCalibracao = SUBMENU_PRINCIPAL;
+      itemSubMenu = 1;
+    }
+    return;
+  }
+
+  if (estadoAtual == CALIBRACAO && subMenuCalibracao == SUBMENU_CAMERA) {
+    if (botao == 1 || botao == 2 || botao == 3) {
+      subMenuCalibracao = SUBMENU_PRINCIPAL;
+      itemSubMenu = 2;
     }
     return;
   }
@@ -482,6 +624,77 @@ void processarMensagemCabeca(String msg) {
     anguloIr = novoAngulo;
     comunicacaoCabecaOK = true;
     ultimoRxCabeca = millis();
+    return;
+  }
+
+  if (msg == "CFG:GOL:OK") {
+    corGolPendenteEnvio = false;
+    mensagemBotao = corGolAzul ? "GOL AZUL OK" : "GOL AMARELO OK";
+    comunicacaoCabecaOK = true;
+    ultimoRxCabeca = millis();
+    return;
+  }
+
+  if (msg.startsWith("BUS:")) {
+    String valorBus = msg.substring(4);
+    valorBus.trim();
+    float angBus = normalizarAngulo360(valorBus.toFloat());
+
+    float rad = angBus * PI / 180.0f;
+    float xNovo = cosf(rad);
+    float yNovo = sinf(rad);
+
+    if (!filtroBussolaInicializado) {
+      bussolaFiltroX = xNovo;
+      bussolaFiltroY = yNovo;
+      filtroBussolaInicializado = true;
+    } else {
+      bussolaFiltroX = (1.0f - ALPHA_FILTRO_BUSSOLA) * bussolaFiltroX + ALPHA_FILTRO_BUSSOLA * xNovo;
+      bussolaFiltroY = (1.0f - ALPHA_FILTRO_BUSSOLA) * bussolaFiltroY + ALPHA_FILTRO_BUSSOLA * yNovo;
+    }
+
+    float angFiltrado = atan2f(bussolaFiltroY, bussolaFiltroX) * 180.0f / PI;
+    angFiltrado = normalizarAngulo360(angFiltrado);
+
+    headingBussolaTeste = (int)(angFiltrado + 0.5f);
+    if (headingBussolaTeste >= 360) {
+      headingBussolaTeste = 0;
+    }
+    bussolaDetectada = true;
+    comunicacaoCabecaOK = true;
+    ultimoRxCabeca = millis();
+    return;
+  }
+
+  if (msg.startsWith("GOL:")) {
+    String payload = msg.substring(4);
+    int p1 = payload.indexOf(',');
+    int p2 = payload.indexOf(',', p1 + 1);
+    int p3 = payload.indexOf(',', p2 + 1);
+    if (p1 > 0 && p2 > p1) {
+      String sErro = payload.substring(0, p1);
+      String sDet = payload.substring(p1 + 1, p2);
+      String sPix = payload.substring(p2 + 1, (p3 > p2) ? p3 : payload.length());
+      sErro.trim();
+      sDet.trim();
+      sPix.trim();
+
+      erroGolGraus = sErro.toFloat();
+      golDetectado = (sDet == "1");
+      int pix = sPix.toInt();
+      if (pix < 0) pix = 0;
+      if (pix > 65535) pix = 65535;
+      golPixels = (uint16_t)pix;
+
+      if (p3 > p2) {
+        String sCam = payload.substring(p3 + 1);
+        sCam.trim();
+        cameraOK = (sCam == "1");
+      }
+
+      comunicacaoCabecaOK = true;
+      ultimoRxCabeca = millis();
+    }
   }
 }
 
@@ -505,6 +718,11 @@ void lerSerialCabeca() {
 void setup() {
   Serial.begin(115200);
   Serial1.begin(9600, SERIAL_8N1, RX_CABECA, TX_CABECA);
+  EEPROM.begin(EEPROM_SIZE);
+  EEPROM.get(EEPROM_ADDR_BUSSOLA, headingBussolaSalvo);
+  if (headingBussolaSalvo < 0 || headingBussolaSalvo >= 360) {
+    headingBussolaSalvo = 0;
+  }
 
   pinMode(IN1_1_A, OUTPUT);
   pinMode(IN2_1_A, OUTPUT);
@@ -562,15 +780,29 @@ void loop() {
   }
 
   lerSerialCabeca();
+  enviarCorGolParaCabeca();
 
   if ((millis() - ultimoRxCabeca) > TIMEOUT_COM_MS) {
     comunicacaoCabecaOK = false;
   }
 
-  headingBussolaTeste = (headingBussolaTeste + 2) % 360;
-  if (estadoAtual == INICIAR && comunicacaoCabecaOK && irDetectado) {
-    seguirDirecaoPorAngulo(anguloIr, velocidade_maxima);
+  if (estadoAtual == INICIAR && comunicacaoCabecaOK) {
+    erroAlinhamentoGraus = erroGolGraus;
+
+    if (golDetectado && fabsf(erroAlinhamentoGraus) > TOLERANCIA_ALINHAMENTO_GRAUS) {
+      alinhandoAgora = true;
+      int direcao = (erroAlinhamentoGraus > 0) ? 1 : -1;
+      girarNoEixo(SINAL_GIRO_PID * direcao * VELOCIDADE_GIRO_ALINHAMENTO);
+    } else {
+      alinhandoAgora = false;
+      if (irDetectado) {
+        seguirDirecaoPorAngulo(anguloIr, velocidade_maxima);
+      } else {
+        pararMotores();
+      }
+    }
   } else {
+    alinhandoAgora = false;
     pararMotores();
   }
 

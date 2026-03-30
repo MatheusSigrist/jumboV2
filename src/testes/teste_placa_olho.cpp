@@ -12,7 +12,7 @@ float angulos[NUM_SENSORES] = {
   240, 270, 300, 330
 };
 
-const unsigned long JANELA_TEMPO_MS = 10;
+const unsigned long JANELA_TEMPO_MS = 15;
 const int LIMIAR_PULSOS = 2;
 
 unsigned int pulsos[NUM_SENSORES];
