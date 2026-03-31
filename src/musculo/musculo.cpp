@@ -5,7 +5,7 @@
 #include <Adafruit_SSD1306.h>
 
 // ===================== GIRO ALINHAMENTO - ALTERE AQUI =====================
-#define VELOCIDADE_GIRO  60
+#define VELOCIDADE_GIRO  140
 #define SINAL_GIRO       -1
 // ==========================================================================
 
@@ -57,26 +57,33 @@ bool corGolAzul = false;
 int headingBussolaTeste = 0;
 float anguloIr = -1.0;
 bool irDetectado = false;
-bool bussolaDetectada = false;
 bool cameraOK = false;  // camera se comunicando com o olho
 
 enum Estado { MENU, CALIBRACAO, INICIAR };
 Estado estadoAtual = MENU;
 int itemSelecionado = 0;
 
-enum SubMenuCalibracao { SUBMENU_PRINCIPAL, SUBMENU_GOL, SUBMENU_BUSSOLA, SUBMENU_CAMERA };
+enum SubMenuCalibracao { SUBMENU_PRINCIPAL, SUBMENU_GOL, SUBMENU_BUSSOLA, SUBMENU_CAMERA, SUBMENU_INTENSIDADE };
 SubMenuCalibracao subMenuCalibracao = SUBMENU_PRINCIPAL;
 int itemSubMenu = 0;
 
 const unsigned long INTERVALO_OI_MS = 1000;
 const unsigned long TIMEOUT_COM_MS = 3000;
-const int velocidade_maxima = 180;
+const int velocidade_maxima = 200;
 const int EEPROM_SIZE = 64;
 const int EEPROM_ADDR_BUSSOLA = 0;
 const float TOLERANCIA_ALINHAMENTO_GRAUS = 20.0f;
 const int VELOCIDADE_GIRO_ALINHAMENTO = VELOCIDADE_GIRO;
 const int SINAL_GIRO_PID = SINAL_GIRO;
 const float ALPHA_FILTRO_BUSSOLA = 0.12f;
+const float PID_BUS_KP = 1.0f;
+const float PID_BUS_KI = 0.00f;
+const float PID_BUS_KD = 0.8;
+const float PID_BUS_INTEGRAL_MAX = 120.0f;
+const int PID_BUS_SAIDA_MIN = 25;
+const int PID_BUS_SAIDA_MAX = 180;
+const float GANHO_GIRO_MISTO = 1.0f;
+const int VELOCIDADE_MIN_BOLA = 60;
 
 int headingBussolaSalvo = 0;
 float erroAlinhamentoGraus = 0.0f;
@@ -84,6 +91,9 @@ bool alinhandoAgora = false;
 bool corGolPendenteEnvio = true;
 unsigned long ultimoEnvioCorGolMs = 0;
 const unsigned long INTERVALO_ENVIO_COR_GOL_MS = 500;
+float pidBusIntegral = 0.0f;
+float pidBusErroAnterior = 0.0f;
+unsigned long pidBusUltimoMs = 0;
 
 void Motor_1(int vel1) {
   int pwm1 = constrain(abs(vel1), 0, 255);
@@ -164,6 +174,44 @@ void seguirDirecaoPorAngulo(float anguloGraus, int velocidade) {
   Motor_4((int)v4);
 }
 
+void seguirDirecaoComGiro(float anguloGraus, int velocidade, int cmdGiro) {
+  int velocidadeAlvo = constrain(velocidade, 0, velocidade_maxima);
+  float theta = anguloGraus * PI / 180.0f;
+  float vx = velocidadeAlvo * sinf(theta);
+  float vy = velocidadeAlvo * cosf(theta);
+
+  float theta1 = 45.0f * PI / 180.0f;
+  float theta2 = 135.0f * PI / 180.0f;
+  float theta3 = 225.0f * PI / 180.0f;
+  float theta4 = 315.0f * PI / 180.0f;
+
+  float v1 = vx * cosf(theta1) + vy * sinf(theta1);
+  float v2 = vx * cosf(theta2) + vy * sinf(theta2);
+  float v3 = vx * cosf(theta3) + vy * sinf(theta3);
+  float v4 = vx * cosf(theta4) + vy * sinf(theta4);
+
+  // Mesmo sentido de giro da funcao girarNoEixo: Motor_X(-vel)
+  float termoGiro = -GANHO_GIRO_MISTO * (float)cmdGiro;
+  v1 += termoGiro;
+  v2 += termoGiro;
+  v3 += termoGiro;
+  v4 += termoGiro;
+
+  float maxVel = max(max(fabsf(v1), fabsf(v2)), max(fabsf(v3), fabsf(v4)));
+  if (maxVel > velocidade_maxima) {
+    float escala = (float)velocidade_maxima / maxVel;
+    v1 *= escala;
+    v2 *= escala;
+    v3 *= escala;
+    v4 *= escala;
+  }
+
+  Motor_1((int)v1);
+  Motor_2((int)v2);
+  Motor_3((int)v3);
+  Motor_4((int)v4);
+}
+
 void pararMotores() {
   ledcWrite(PWM_CH1, 0);
   ledcWrite(PWM_CH2, 0);
@@ -186,10 +234,10 @@ void girarNoEixo(int velocidade) {
   // Mapeamento de giro da base:
   // horario: M1/M2 frente e M3/M4 tras
   // anti-horario: inverso
-  Motor_1(vel);
-  Motor_2(vel);
-  Motor_3(vel);
-  Motor_4(vel);
+  Motor_1(-vel);
+  Motor_2(-vel);
+  Motor_3(-vel);
+  Motor_4(-vel);
 }
 
 float normalizarErro180(float erro) {
@@ -204,12 +252,62 @@ float normalizarAngulo360(float ang) {
   return ang;
 }
 
+void resetPidBussola() {
+  pidBusIntegral = 0.0f;
+  pidBusErroAnterior = 0.0f;
+  pidBusUltimoMs = 0;
+}
+
+int calcularSaidaPidBussola(float erroGraus) {
+  unsigned long agora = millis();
+  float dt = 0.02f;
+  if (pidBusUltimoMs != 0) {
+    dt = (agora - pidBusUltimoMs) / 1000.0f;
+    if (dt < 0.005f) dt = 0.005f;
+    if (dt > 0.2f) dt = 0.2f;
+  }
+  pidBusUltimoMs = agora;
+
+  pidBusIntegral += erroGraus * dt;
+  if (pidBusIntegral > PID_BUS_INTEGRAL_MAX) pidBusIntegral = PID_BUS_INTEGRAL_MAX;
+  if (pidBusIntegral < -PID_BUS_INTEGRAL_MAX) pidBusIntegral = -PID_BUS_INTEGRAL_MAX;
+
+  float derivada = (erroGraus - pidBusErroAnterior) / dt;
+  pidBusErroAnterior = erroGraus;
+
+  float u = PID_BUS_KP * erroGraus + PID_BUS_KI * pidBusIntegral + PID_BUS_KD * derivada;
+  int saida = (int)fabsf(u);
+  if (saida < PID_BUS_SAIDA_MIN) saida = PID_BUS_SAIDA_MIN;
+  if (saida > PID_BUS_SAIDA_MAX) saida = PID_BUS_SAIDA_MAX;
+  if (saida > VELOCIDADE_GIRO_ALINHAMENTO) saida = VELOCIDADE_GIRO_ALINHAMENTO;
+
+  return (u >= 0.0f) ? saida : -saida;
+}
+
 bool filtroBussolaInicializado = false;
 float bussolaFiltroX = 1.0f;
 float bussolaFiltroY = 0.0f;
 float erroGolGraus = 0.0f;
 bool golDetectado = false;
 uint16_t golPixels = 0;
+float anguloLinhaPe = -1.0f;
+bool linhaDetectada = false;
+float intensidadeIrAtual = 0.0f;
+float distanciaBolaD = 0.0f;
+const float INTENSIDADE_MIN_BOLA = 16.0f;
+const float INTENSIDADE_MAX_BOLA = 45.0f;
+const int VELOCIDADE_FUGA_LINHA = 170;
+bool fugindoLinhaAgora = false;
+float anguloFugaLinhaCmd = 0.0f;
+
+float mapearDistanciaBola(float intensidadeIr) {
+  float intensidade = intensidadeIr;
+  if (intensidade < INTENSIDADE_MIN_BOLA) intensidade = INTENSIDADE_MIN_BOLA;
+  if (intensidade > INTENSIDADE_MAX_BOLA) intensidade = INTENSIDADE_MAX_BOLA;
+
+  // Intensidade maior significa bola mais proxima: distancia D deve diminuir.
+  return ((INTENSIDADE_MAX_BOLA - intensidade) * 100.0f) / (INTENSIDADE_MAX_BOLA - INTENSIDADE_MIN_BOLA);
+}
 
 void enviarCorGolParaCabeca() {
   if (!corGolPendenteEnvio) {
@@ -315,6 +413,17 @@ void desenharSubmenuCalibracao() {
     }
 
     if (itemSubMenu == 3) {
+      display.fillRect(0, 48, 128, 10, SSD1306_WHITE);
+      display.setTextColor(SSD1306_BLACK);
+      display.setCursor(4, 50);
+      display.println("INTENSIDADE");
+      display.setTextColor(SSD1306_WHITE);
+    } else {
+      display.setCursor(4, 50);
+      display.println("INTENSIDADE");
+    }
+
+    if (itemSubMenu == 4) {
       display.fillRect(0, 54, 128, 10, SSD1306_WHITE);
       display.setTextColor(SSD1306_BLACK);
       display.setCursor(4, 56);
@@ -382,6 +491,23 @@ void desenharSubmenuCalibracao() {
     display.print("PIXELS: ");
     display.println(golPixels);
     display.println("BTN1/2 VOLTAR");
+  } else if (subMenuCalibracao == SUBMENU_INTENSIDADE) {
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+    display.setCursor(0, 0);
+    display.println("=== INTENSIDADE IR ===");
+    display.println();
+    display.setTextSize(3);
+    display.setCursor(8, 22);
+    display.print(intensidadeIrAtual, 1);
+    display.setTextSize(1);
+    display.setCursor(0, 0);
+    display.print("D MAP: ");
+    display.print(distanciaBolaD, 1);
+    display.setTextSize(1);
+    display.setCursor(0, 56);
+    display.println("BTN1/2/3 VOLTAR");
   } else {
     display.setCursor(0, 0);
     display.println("BUSSOLA AGORA");
@@ -417,6 +543,8 @@ void desenharOperacao() {
   } else {
     display.println("NAO DETECTADO");
   }
+  display.print("D MAP: ");
+  display.println(distanciaBolaD, 1);
   display.print("ERRO GOL: ");
   if (golDetectado) {
     display.print(erroGolGraus, 1);
@@ -424,13 +552,29 @@ void desenharOperacao() {
   } else {
     display.println("SEM GOL");
   }
+  display.print("LINHA ANG: ");
+  if (linhaDetectada) {
+    display.print(anguloLinhaPe, 1);
+    display.println(" deg");
+    display.print("FUGA CMD: ");
+    display.print(anguloFugaLinhaCmd, 1);
+    display.println(" deg");
+  } else {
+    display.println("SEM LINHA");
+  }
   if (golDetectado) {
     display.print("ERRO: ");
     display.print(erroAlinhamentoGraus, 1);
     display.println(" deg");
-    display.println(alinhandoAgora ? "MODO: ALINHANDO" : "MODO: SEGUINDO");
+    if (fugindoLinhaAgora) {
+      display.println("MODO: FUGINDO LINHA");
+    } else {
+      display.println(alinhandoAgora ? "MODO: ALINHANDO GOL" : "MODO: SEGUINDO BOLA");
+    }
     display.print("PIX: ");
     display.println(golPixels);
+  } else if (fugindoLinhaAgora) {
+    display.println("MODO: FUGINDO LINHA");
   }
   display.display();
 }
@@ -509,10 +653,10 @@ void processarEventoBotao(uint8_t botao) {
   if (estadoAtual == CALIBRACAO && subMenuCalibracao == SUBMENU_PRINCIPAL) {
     if (botao == 1) {
       itemSubMenu--;
-      if (itemSubMenu < 0) itemSubMenu = 3;
+      if (itemSubMenu < 0) itemSubMenu = 4;
     } else if (botao == 2) {
       itemSubMenu++;
-      if (itemSubMenu > 3) itemSubMenu = 0;
+      if (itemSubMenu > 4) itemSubMenu = 0;
     } else if (botao == 3) {
       if (itemSubMenu == 0) {
         subMenuCalibracao = SUBMENU_GOL;
@@ -522,6 +666,9 @@ void processarEventoBotao(uint8_t botao) {
         itemSubMenu = 0;
       } else if (itemSubMenu == 2) {
         subMenuCalibracao = SUBMENU_CAMERA;
+        itemSubMenu = 0;
+      } else if (itemSubMenu == 3) {
+        subMenuCalibracao = SUBMENU_INTENSIDADE;
         itemSubMenu = 0;
       } else {
         estadoAtual = MENU;
@@ -569,6 +716,14 @@ void processarEventoBotao(uint8_t botao) {
     if (botao == 1 || botao == 2 || botao == 3) {
       subMenuCalibracao = SUBMENU_PRINCIPAL;
       itemSubMenu = 2;
+    }
+    return;
+  }
+
+  if (estadoAtual == CALIBRACAO && subMenuCalibracao == SUBMENU_INTENSIDADE) {
+    if (botao == 1 || botao == 2 || botao == 3) {
+      subMenuCalibracao = SUBMENU_PRINCIPAL;
+      itemSubMenu = 3;
     }
     return;
   }
@@ -627,6 +782,17 @@ void processarMensagemCabeca(String msg) {
     return;
   }
 
+  if (msg.startsWith("INT:")) {
+    String valorInt = msg.substring(4);
+    valorInt.trim();
+    intensidadeIrAtual = valorInt.toFloat();
+    if (intensidadeIrAtual < 0.0f) intensidadeIrAtual = 0.0f;
+    distanciaBolaD = mapearDistanciaBola(intensidadeIrAtual);
+    comunicacaoCabecaOK = true;
+    ultimoRxCabeca = millis();
+    return;
+  }
+
   if (msg == "CFG:GOL:OK") {
     corGolPendenteEnvio = false;
     mensagemBotao = corGolAzul ? "GOL AZUL OK" : "GOL AMARELO OK";
@@ -660,7 +826,6 @@ void processarMensagemCabeca(String msg) {
     if (headingBussolaTeste >= 360) {
       headingBussolaTeste = 0;
     }
-    bussolaDetectada = true;
     comunicacaoCabecaOK = true;
     ultimoRxCabeca = millis();
     return;
@@ -695,6 +860,17 @@ void processarMensagemCabeca(String msg) {
       comunicacaoCabecaOK = true;
       ultimoRxCabeca = millis();
     }
+    return;
+  }
+
+  if (msg.startsWith("LIN:")) {
+    String sLinha = msg.substring(4);
+    sLinha.trim();
+    float novoAng = sLinha.toFloat();
+    linhaDetectada = (novoAng >= 0.0f);
+    anguloLinhaPe = novoAng;
+    comunicacaoCabecaOK = true;
+    ultimoRxCabeca = millis();
   }
 }
 
@@ -787,22 +963,42 @@ void loop() {
   }
 
   if (estadoAtual == INICIAR && comunicacaoCabecaOK) {
+    // Alinhamento usa erro do gol (camera), igual ao teste PIDBussola.
     erroAlinhamentoGraus = erroGolGraus;
+    fugindoLinhaAgora = false;
 
-    if (golDetectado && fabsf(erroAlinhamentoGraus) > TOLERANCIA_ALINHAMENTO_GRAUS) {
-      alinhandoAgora = true;
-      int direcao = (erroAlinhamentoGraus > 0) ? 1 : -1;
-      girarNoEixo(SINAL_GIRO_PID * direcao * VELOCIDADE_GIRO_ALINHAMENTO);
-    } else {
+    // Prioridade de movimento: LINHA > BOLA > ALINHAR NO EIXO
+    if (linhaDetectada) {
+      fugindoLinhaAgora = true;
       alinhandoAgora = false;
+      resetPidBussola();
+      anguloFugaLinhaCmd = normalizarErro180(anguloLinhaPe - 180.0f);
+      seguirDirecaoPorAngulo(anguloFugaLinhaCmd, VELOCIDADE_FUGA_LINHA);
+    } else {
+      int cmdPidAssinado = 0;
+      bool precisaAlinhar = golDetectado && (fabsf(erroAlinhamentoGraus) > TOLERANCIA_ALINHAMENTO_GRAUS);
+      if (precisaAlinhar) {
+        alinhandoAgora = true;
+        int cmdPid = calcularSaidaPidBussola(erroAlinhamentoGraus);
+        cmdPidAssinado = -SINAL_GIRO_PID * cmdPid;
+      } else {
+        alinhandoAgora = false;
+        resetPidBussola();
+      }
+
       if (irDetectado) {
-        seguirDirecaoPorAngulo(anguloIr, velocidade_maxima);
+        int velocidadeBola = constrain((int)(distanciaBolaD * 2.0f), VELOCIDADE_MIN_BOLA, velocidade_maxima);
+        seguirDirecaoComGiro(anguloIr, velocidadeBola, cmdPidAssinado);
+      } else if (precisaAlinhar) {
+        girarNoEixo(cmdPidAssinado);
       } else {
         pararMotores();
       }
     }
   } else {
     alinhandoAgora = false;
+    fugindoLinhaAgora = false;
+    resetPidBussola();
     pararMotores();
   }
 

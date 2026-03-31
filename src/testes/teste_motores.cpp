@@ -82,6 +82,93 @@ void moverRobo(int vel1, int vel2, int vel3, int vel4) {
   Motor_4(vel4);
 }
 
+void moverPorAnguloCardinal(int anguloGraus, int velocidadeBase) {
+  int v = constrain(velocidadeBase, 0, 255);
+
+  switch (anguloGraus) {
+    case 0:
+      // 0: -vel1, -vel2, vel3, vel4
+      moverRobo(-v, -v, v, v);
+      break;
+    case 90:
+      // 90: -vel1, vel2, -vel3, vel4
+      moverRobo(-v, v, -v, v);
+      break;
+    case 180:
+      // 180: vel1, vel2, -vel3, -vel4
+      moverRobo(v, v, -v, -v);
+      break;
+    case 270:
+      // 270: vel1, -vel2, vel3, -vel4
+      moverRobo(v, -v, v, -v);
+      break;
+    default:
+      moverRobo(0, 0, 0, 0);
+      break;
+  }
+}
+
+float normalizarAngulo360(float ang) {
+  while (ang >= 360.0f) ang -= 360.0f;
+  while (ang < 0.0f) ang += 360.0f;
+  return ang;
+}
+
+float lerpFloat(float a, float b, float t) {
+  return a + (b - a) * t;
+}
+
+void moverPorAnguloVetorialPlaca(float anguloGraus, int velocidadeBase) {
+  float ang = normalizarAngulo360(anguloGraus);
+  float v = (float)constrain(velocidadeBase, 0, 255);
+  float t = 0.0f;
+
+  float m1 = 0.0f;
+  float m2 = 0.0f;
+  float m3 = 0.0f;
+  float m4 = 0.0f;
+
+  if (ang < 90.0f) {
+    // Interpola entre 0 e 90:
+    // 0   -> [-v, -v, +v, +v]
+    // 90  -> [-v, +v, -v, +v]
+    t = ang / 90.0f;
+    m1 = -v;
+    m2 = lerpFloat(-v, v, t);
+    m3 = lerpFloat(v, -v, t);
+    m4 = v;
+  } else if (ang < 180.0f) {
+    // Interpola entre 90 e 180:
+    // 90  -> [-v, +v, -v, +v]
+    // 180 -> [+v, +v, -v, -v]
+    t = (ang - 90.0f) / 90.0f;
+    m1 = lerpFloat(-v, v, t);
+    m2 = v;
+    m3 = -v;
+    m4 = lerpFloat(v, -v, t);
+  } else if (ang < 270.0f) {
+    // Interpola entre 180 e 270:
+    // 180 -> [+v, +v, -v, -v]
+    // 270 -> [+v, -v, +v, -v]
+    t = (ang - 180.0f) / 90.0f;
+    m1 = v;
+    m2 = lerpFloat(v, -v, t);
+    m3 = lerpFloat(-v, v, t);
+    m4 = -v;
+  } else {
+    // Interpola entre 270 e 360(0):
+    // 270 -> [+v, -v, +v, -v]
+    // 360 -> [-v, -v, +v, +v]
+    t = (ang - 270.0f) / 90.0f;
+    m1 = lerpFloat(v, -v, t);
+    m2 = -v;
+    m3 = v;
+    m4 = lerpFloat(-v, v, t);
+  }
+
+  moverRobo((int)m1, (int)m2, (int)m3, (int)m4);
+}
+
 void setup() {
   Serial.begin(115200);
 
@@ -111,16 +198,12 @@ void setup() {
 }
 
 void loop() {
-  // Coloque aqui os 4 valores de velocidade que voce quiser testar (-255 a 255)
-  int vel1 = 200;
-  int vel2 = 200;
-  int vel3 = 200;
-  int vel4 = 200;
-  //obs -vel1 - vel2 vel3 e vel4 == frente
-  moverRobo(-vel1, -vel2, vel3, vel4);
-    delay(1000);
-  moverRobo(0, 0, 0, 0);
-    delay(2000);
+  float angulo = 10.0f;  // Ex.: bola em 10 graus (setor 0-90)
+  int velocidade = 200;
 
+  moverPorAnguloVetorialPlaca(angulo, velocidade);
+  delay(1000);
+  moverRobo(0, 0, 0, 0);
+  delay(2000);
 
 }

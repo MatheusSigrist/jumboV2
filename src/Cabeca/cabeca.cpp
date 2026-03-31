@@ -14,6 +14,7 @@
 #define TX_OLHO 7
 #define RX_PE 4
 #define TX_PE 5
+#define BAUD_PE_CABECA 19200
 
 #define BOTAO_1 3
 #define BOTAO_2 37
@@ -61,6 +62,8 @@ unsigned long ultimoEnvioIrMs = 0;
 unsigned long ultimoEnvioBussolaMs = 0;
 unsigned long ultimoEnvioBussolaMusculoMs = 0;
 unsigned long ultimoEnvioGolMusculoMs = 0;
+unsigned long ultimoEnvioLinhaMusculoMs = 0;
+unsigned long ultimoEnvioIntMusculoMs = 0;
 unsigned long ultimoEnvioEstadoOlhoMs = 0;
 
 bool botao1Anterior = HIGH;
@@ -76,6 +79,8 @@ String bufferPe = "";
 unsigned long ultimoPingOlhoMs = 0;
 unsigned long ultimoPingPeMs = 0;
 int16_t ultimoAnguloIrX10 = -10;
+int16_t ultimaIntensidadeIrX10 = 0;
+int16_t ultimoAnguloLinhaX10 = -10;
 float ultimoErroGolGraus = 0.0f;
 uint16_t ultimoPixelsGol = 0;
 bool golDetectadoOlho = false;
@@ -96,6 +101,8 @@ int16_t maxY = -32768;
 const unsigned long INTERVALO_ENVIO_IR_MS = 120;
 const unsigned long INTERVALO_ENVIO_BUSSOLA_MS = 120;
 const unsigned long INTERVALO_ENVIO_GOL_MS = 120;
+const unsigned long INTERVALO_ENVIO_LINHA_MS = 20;
+const unsigned long INTERVALO_ENVIO_INT_MS = 120;
 const unsigned long INTERVALO_ENVIO_ESTADO_OLHO_MS = 700;
 const float ALPHA_FILTRO_XY = 0.18f;
 
@@ -305,6 +312,28 @@ void enviarGolParaMusculo() {
   ultimoEnvioGolMusculoMs = millis();
 }
 
+void enviarLinhaParaMusculo() {
+  if ((millis() - ultimoEnvioLinhaMusculoMs) < INTERVALO_ENVIO_LINHA_MS) {
+    return;
+  }
+
+  float angLinha = ultimoAnguloLinhaX10 / 10.0f;
+  SerialMusculo.print("LIN:");
+  SerialMusculo.println(angLinha, 1);
+  ultimoEnvioLinhaMusculoMs = millis();
+}
+
+void enviarIntensidadeParaMusculo() {
+  if ((millis() - ultimoEnvioIntMusculoMs) < INTERVALO_ENVIO_INT_MS) {
+    return;
+  }
+
+  float intensidadeIr = ultimaIntensidadeIrX10 / 10.0f;
+  SerialMusculo.print("INT:");
+  SerialMusculo.println(intensidadeIr, 1);
+  ultimoEnvioIntMusculoMs = millis();
+}
+
 void processarTextoResposta(String &buffer, bool &flagResposta) {
   buffer.trim();
   buffer.toUpperCase();
@@ -330,6 +359,7 @@ void lerRespostaOlho() {
         if (stop == BYTE_PARA) {
           comunicacaoOlhoOK = true;
           ultimoAnguloIrX10 = pacote.angulo;
+          ultimaIntensidadeIrX10 = pacote.intensidade;
           ultimoErroGolGraus = pacote.erroGol / 10.0f;
           ultimoPixelsGol = pacote.pixelsGol;
           golDetectadoOlho = (pacote.golDetectado != 0);
@@ -370,6 +400,7 @@ void lerRespostaPe() {
         byte stop = SerialPe.read();
         if (stop == BYTE_PARA) {
           comunicacaoPeOK = true;
+          ultimoAnguloLinhaX10 = pacote.angulo;
         }
       }
       continue;
@@ -470,7 +501,7 @@ void setup() {
   Serial.begin(115200);
   SerialMusculo.begin(9600, SERIAL_8N1, RX_MUSCULO, TX_MUSCULO);
   SerialOlho.begin(9600, SERIAL_8N1, RX_OLHO, TX_OLHO);
-  SerialPe.begin(9600, SERIAL_8N1, RX_PE, TX_PE);
+  SerialPe.begin(BAUD_PE_CABECA, SERIAL_8N1, RX_PE, TX_PE);
   Wire.begin(I2C_SDA, I2C_SCL);
 
   pinMode(BOTAO_1, INPUT_PULLUP);
@@ -511,6 +542,8 @@ void loop() {
   atualizarBussola();
   enviarBussolaParaMusculo();
   enviarGolParaMusculo();
+  enviarLinhaParaMusculo();
+  enviarIntensidadeParaMusculo();
   enviarEstadoParaOlho();
 
   delay(5);

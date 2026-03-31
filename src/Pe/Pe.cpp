@@ -12,8 +12,11 @@
 #define TX_CABECA 18
 
 #define NUM_SENSORES 32
-#define LIMIAR_LINHA 600
-#define INTERVALO_DEBUG_MS 120
+#define LIMIAR_LINHA 3600
+#define INTERVALO_DEBUG_MS 250
+#define BAUD_PE_CABECA 19200
+#define DEBUG_LINHA 0
+#define DELAY_LOOP_MS 2
 
 uint8_t mapaSensores[NUM_SENSORES] = {
   0,  1,  2,  3,
@@ -170,7 +173,7 @@ void imprimirLeituraSensores() {
 
 void setup() {
   Serial.begin(115200);
-  Serial1.begin(9600, SERIAL_8N1, RX_CABECA, TX_CABECA);
+  Serial1.begin(BAUD_PE_CABECA, SERIAL_8N1, RX_CABECA, TX_CABECA);
 
   pinMode(MUX1_S0, OUTPUT);
   pinMode(MUX1_S1, OUTPUT);
@@ -215,7 +218,7 @@ void loop() {
   Serial1.write(BYTE_PARA);
 
   unsigned long agora = millis();
-  if (agora - ultimoDebugMs >= INTERVALO_DEBUG_MS) {
+  if (DEBUG_LINHA && (agora - ultimoDebugMs >= INTERVALO_DEBUG_MS)) {
     ultimoDebugMs = agora;
     imprimirLeituraSensores();
     if (pacote.angulo == -1) {
@@ -226,6 +229,6 @@ void loop() {
     }
   }
 
-  delay(50);
+  delay(DELAY_LOOP_MS);
 }
 
