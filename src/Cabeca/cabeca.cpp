@@ -19,6 +19,7 @@
 #define BOTAO_1 3
 #define BOTAO_2 37
 #define BOTAO_3 46
+#define KICKER_PIN 45
 #define I2C_SDA 8
 #define I2C_SCL 9
 
@@ -65,6 +66,7 @@ unsigned long ultimoEnvioGolMusculoMs = 0;
 unsigned long ultimoEnvioLinhaMusculoMs = 0;
 unsigned long ultimoEnvioIntMusculoMs = 0;
 unsigned long ultimoEnvioEstadoOlhoMs = 0;
+unsigned long ultimoEnvioKickerMusculoMs = 0;
 
 bool botao1Anterior = HIGH;
 bool botao2Anterior = HIGH;
@@ -85,6 +87,8 @@ float ultimoErroGolGraus = 0.0f;
 uint16_t ultimoPixelsGol = 0;
 bool golDetectadoOlho = false;
 bool cameraOlhoOK = false;  // camera esta se comunicando com o olho
+bool kickerAtivado = false;
+int ultimoKickerEnviado = -1;
 float ultimoHeadingBussola = 0.0f;
 float ultimoX360 = 0.0f;
 float ultimoY360 = 0.0f;
@@ -103,6 +107,7 @@ const unsigned long INTERVALO_ENVIO_BUSSOLA_MS = 120;
 const unsigned long INTERVALO_ENVIO_GOL_MS = 120;
 const unsigned long INTERVALO_ENVIO_LINHA_MS = 20;
 const unsigned long INTERVALO_ENVIO_INT_MS = 120;
+const unsigned long INTERVALO_ENVIO_KICKER_MS = 120;
 const unsigned long INTERVALO_ENVIO_ESTADO_OLHO_MS = 700;
 const float ALPHA_FILTRO_XY = 0.18f;
 
@@ -334,6 +339,26 @@ void enviarIntensidadeParaMusculo() {
   ultimoEnvioIntMusculoMs = millis();
 }
 
+void enviarEstadoKickerParaMusculo() {
+  if ((millis() - ultimoEnvioKickerMusculoMs) < INTERVALO_ENVIO_KICKER_MS) {
+    return;
+  }
+
+  // INPUT_PULLUP: 0 = chave acionada, 1 = chave nao acionada
+  int leitura = digitalRead(KICKER_PIN);
+  kickerAtivado = (leitura == LOW);
+  int valorEnvio = kickerAtivado ? 0 : 1;
+
+  // Envia sempre quando muda e periodicamente para manter sincronismo.
+  if (valorEnvio != ultimoKickerEnviado || (millis() - ultimoEnvioKickerMusculoMs) >= 500) {
+    SerialMusculo.print("KIK:");
+    SerialMusculo.println(valorEnvio);
+    ultimoKickerEnviado = valorEnvio;
+  }
+
+  ultimoEnvioKickerMusculoMs = millis();
+}
+
 void processarTextoResposta(String &buffer, bool &flagResposta) {
   buffer.trim();
   buffer.toUpperCase();
@@ -507,6 +532,7 @@ void setup() {
   pinMode(BOTAO_1, INPUT_PULLUP);
   pinMode(BOTAO_2, INPUT_PULLUP);
   pinMode(BOTAO_3, INPUT_PULLUP);
+  pinMode(KICKER_PIN, INPUT_PULLUP);
 
   Serial.println("Cabeca principal em modo minimo de comunicacao");
   bussolaOK = iniciarBussola();
@@ -544,6 +570,7 @@ void loop() {
   enviarGolParaMusculo();
   enviarLinhaParaMusculo();
   enviarIntensidadeParaMusculo();
+  enviarEstadoKickerParaMusculo();
   enviarEstadoParaOlho();
 
   delay(5);

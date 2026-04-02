@@ -42,6 +42,10 @@
 #define PWM_FREQ 20000
 #define PWM_RES 8
 
+constexpr uint8_t KICKER_PIN = 21;
+constexpr unsigned long KICK_PULSE_MS = 100;
+constexpr unsigned long KICK_INTERVAL_MS = 1000;
+
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
 bool comunicacaoCabecaOK = false;
@@ -58,12 +62,17 @@ int headingBussolaTeste = 0;
 float anguloIr = -1.0;
 bool irDetectado = false;
 bool cameraOK = false;  // camera se comunicando com o olho
+bool kickerRecebido = false;
+bool kickerAtivado = false;  // true quando chave acionada (valor 0 vindo da cabeca)
+bool pulsoKickerAtivo = false;
+unsigned long inicioPulsoKickerMs = 0;
+unsigned long ultimoDisparoKickerMs = 0;
 
 enum Estado { MENU, CALIBRACAO, INICIAR };
 Estado estadoAtual = MENU;
 int itemSelecionado = 0;
 
-enum SubMenuCalibracao { SUBMENU_PRINCIPAL, SUBMENU_GOL, SUBMENU_BUSSOLA, SUBMENU_CAMERA, SUBMENU_INTENSIDADE };
+enum SubMenuCalibracao { SUBMENU_PRINCIPAL, SUBMENU_GOL, SUBMENU_BUSSOLA, SUBMENU_CAMERA };
 SubMenuCalibracao subMenuCalibracao = SUBMENU_PRINCIPAL;
 int itemSubMenu = 0;
 
@@ -83,7 +92,6 @@ const float PID_BUS_INTEGRAL_MAX = 120.0f;
 const int PID_BUS_SAIDA_MIN = 25;
 const int PID_BUS_SAIDA_MAX = 180;
 const float GANHO_GIRO_MISTO = 1.0f;
-const int VELOCIDADE_MIN_BOLA = 60;
 
 int headingBussolaSalvo = 0;
 float erroAlinhamentoGraus = 0.0f;
@@ -94,6 +102,32 @@ const unsigned long INTERVALO_ENVIO_COR_GOL_MS = 500;
 float pidBusIntegral = 0.0f;
 float pidBusErroAnterior = 0.0f;
 unsigned long pidBusUltimoMs = 0;
+
+void atualizarKicker() {
+  unsigned long agora = millis();
+
+  if (pulsoKickerAtivo && (agora - inicioPulsoKickerMs) >= KICK_PULSE_MS) {
+    digitalWrite(KICKER_PIN, LOW);
+    pulsoKickerAtivo = false;
+  }
+
+  bool podeChutar = (estadoAtual == INICIAR) && comunicacaoCabecaOK && kickerRecebido && kickerAtivado;
+  if (!podeChutar) {
+    if (pulsoKickerAtivo) {
+      digitalWrite(KICKER_PIN, LOW);
+      pulsoKickerAtivo = false;
+    }
+    return;
+  }
+
+  if (!pulsoKickerAtivo && (agora - ultimoDisparoKickerMs) >= KICK_INTERVAL_MS) {
+    digitalWrite(KICKER_PIN, HIGH);
+    inicioPulsoKickerMs = agora;
+    ultimoDisparoKickerMs = agora;
+    pulsoKickerAtivo = true;
+    Serial.println("Chutei");
+  }
+}
 
 void Motor_1(int vel1) {
   int pwm1 = constrain(abs(vel1), 0, 255);
@@ -252,6 +286,20 @@ float normalizarAngulo360(float ang) {
   return ang;
 }
 
+float mapearAnguloBolaParaMovimento(float anguloBolaGraus) {
+  float ang = normalizarAngulo360(anguloBolaGraus); // Compensa atraso de leitura do IR Seeker
+  if (ang >= 340.0f && ang < 360.0f) return (ang + 15.0f); // Compensa atraso de leitura do IR Seeker
+  if (ang >= 0.0f && ang < 20.0f) return (ang + 5.0f); // Compensa atraso de leitura do IR Seeker
+  if (ang >= 20.0f && ang < 45.0f) return 90.0f;
+  if (ang >= 45.0f && ang < 90.0f) return 135.0f;
+  if (ang >= 90.0f && ang < 135.0f) return 180.0f;
+  if (ang >= 315.0f && ang < 340.0f) return 270.0f;
+  if (ang >= 270.0f && ang <315.0f) return 180.0f;
+  if (ang >= 135.0f && ang < 180.0f) return 220.0f;
+  if (ang >= 180.0f && ang < 270.0f) return 140.0f;
+  return ang;
+}
+
 void resetPidBussola() {
   pidBusIntegral = 0.0f;
   pidBusErroAnterior = 0.0f;
@@ -292,22 +340,9 @@ bool golDetectado = false;
 uint16_t golPixels = 0;
 float anguloLinhaPe = -1.0f;
 bool linhaDetectada = false;
-float intensidadeIrAtual = 0.0f;
-float distanciaBolaD = 0.0f;
-const float INTENSIDADE_MIN_BOLA = 16.0f;
-const float INTENSIDADE_MAX_BOLA = 45.0f;
 const int VELOCIDADE_FUGA_LINHA = 170;
 bool fugindoLinhaAgora = false;
 float anguloFugaLinhaCmd = 0.0f;
-
-float mapearDistanciaBola(float intensidadeIr) {
-  float intensidade = intensidadeIr;
-  if (intensidade < INTENSIDADE_MIN_BOLA) intensidade = INTENSIDADE_MIN_BOLA;
-  if (intensidade > INTENSIDADE_MAX_BOLA) intensidade = INTENSIDADE_MAX_BOLA;
-
-  // Intensidade maior significa bola mais proxima: distancia D deve diminuir.
-  return ((INTENSIDADE_MAX_BOLA - intensidade) * 100.0f) / (INTENSIDADE_MAX_BOLA - INTENSIDADE_MIN_BOLA);
-}
 
 void enviarCorGolParaCabeca() {
   if (!corGolPendenteEnvio) {
@@ -413,17 +448,6 @@ void desenharSubmenuCalibracao() {
     }
 
     if (itemSubMenu == 3) {
-      display.fillRect(0, 48, 128, 10, SSD1306_WHITE);
-      display.setTextColor(SSD1306_BLACK);
-      display.setCursor(4, 50);
-      display.println("INTENSIDADE");
-      display.setTextColor(SSD1306_WHITE);
-    } else {
-      display.setCursor(4, 50);
-      display.println("INTENSIDADE");
-    }
-
-    if (itemSubMenu == 4) {
       display.fillRect(0, 54, 128, 10, SSD1306_WHITE);
       display.setTextColor(SSD1306_BLACK);
       display.setCursor(4, 56);
@@ -491,23 +515,6 @@ void desenharSubmenuCalibracao() {
     display.print("PIXELS: ");
     display.println(golPixels);
     display.println("BTN1/2 VOLTAR");
-  } else if (subMenuCalibracao == SUBMENU_INTENSIDADE) {
-    display.clearDisplay();
-    display.setTextSize(1);
-    display.setTextColor(SSD1306_WHITE);
-    display.setCursor(0, 0);
-    display.println("=== INTENSIDADE IR ===");
-    display.println();
-    display.setTextSize(3);
-    display.setCursor(8, 22);
-    display.print(intensidadeIrAtual, 1);
-    display.setTextSize(1);
-    display.setCursor(0, 0);
-    display.print("D MAP: ");
-    display.print(distanciaBolaD, 1);
-    display.setTextSize(1);
-    display.setCursor(0, 56);
-    display.println("BTN1/2/3 VOLTAR");
   } else {
     display.setCursor(0, 0);
     display.println("BUSSOLA AGORA");
@@ -543,8 +550,6 @@ void desenharOperacao() {
   } else {
     display.println("NAO DETECTADO");
   }
-  display.print("D MAP: ");
-  display.println(distanciaBolaD, 1);
   display.print("ERRO GOL: ");
   if (golDetectado) {
     display.print(erroGolGraus, 1);
@@ -653,10 +658,10 @@ void processarEventoBotao(uint8_t botao) {
   if (estadoAtual == CALIBRACAO && subMenuCalibracao == SUBMENU_PRINCIPAL) {
     if (botao == 1) {
       itemSubMenu--;
-      if (itemSubMenu < 0) itemSubMenu = 4;
+      if (itemSubMenu < 0) itemSubMenu = 3;
     } else if (botao == 2) {
       itemSubMenu++;
-      if (itemSubMenu > 4) itemSubMenu = 0;
+      if (itemSubMenu > 3) itemSubMenu = 0;
     } else if (botao == 3) {
       if (itemSubMenu == 0) {
         subMenuCalibracao = SUBMENU_GOL;
@@ -666,9 +671,6 @@ void processarEventoBotao(uint8_t botao) {
         itemSubMenu = 0;
       } else if (itemSubMenu == 2) {
         subMenuCalibracao = SUBMENU_CAMERA;
-        itemSubMenu = 0;
-      } else if (itemSubMenu == 3) {
-        subMenuCalibracao = SUBMENU_INTENSIDADE;
         itemSubMenu = 0;
       } else {
         estadoAtual = MENU;
@@ -716,14 +718,6 @@ void processarEventoBotao(uint8_t botao) {
     if (botao == 1 || botao == 2 || botao == 3) {
       subMenuCalibracao = SUBMENU_PRINCIPAL;
       itemSubMenu = 2;
-    }
-    return;
-  }
-
-  if (estadoAtual == CALIBRACAO && subMenuCalibracao == SUBMENU_INTENSIDADE) {
-    if (botao == 1 || botao == 2 || botao == 3) {
-      subMenuCalibracao = SUBMENU_PRINCIPAL;
-      itemSubMenu = 3;
     }
     return;
   }
@@ -777,17 +771,6 @@ void processarMensagemCabeca(String msg) {
     float novoAngulo = valorIr.toFloat();
     irDetectado = (novoAngulo >= 0.0);
     anguloIr = novoAngulo;
-    comunicacaoCabecaOK = true;
-    ultimoRxCabeca = millis();
-    return;
-  }
-
-  if (msg.startsWith("INT:")) {
-    String valorInt = msg.substring(4);
-    valorInt.trim();
-    intensidadeIrAtual = valorInt.toFloat();
-    if (intensidadeIrAtual < 0.0f) intensidadeIrAtual = 0.0f;
-    distanciaBolaD = mapearDistanciaBola(intensidadeIrAtual);
     comunicacaoCabecaOK = true;
     ultimoRxCabeca = millis();
     return;
@@ -871,6 +854,19 @@ void processarMensagemCabeca(String msg) {
     anguloLinhaPe = novoAng;
     comunicacaoCabecaOK = true;
     ultimoRxCabeca = millis();
+    return;
+  }
+
+  if (msg.startsWith("KIK:")) {
+    String sKik = msg.substring(4);
+    sKik.trim();
+    if (sKik == "0" || sKik == "1") {
+      // Protocolo: 0 = chave acionada, 1 = chave nao acionada
+      kickerAtivado = (sKik == "0");
+      kickerRecebido = true;
+      comunicacaoCabecaOK = true;
+      ultimoRxCabeca = millis();
+    }
   }
 }
 
@@ -908,6 +904,8 @@ void setup() {
   pinMode(IN2_1_B, OUTPUT);
   pinMode(IN1_2_B, OUTPUT);
   pinMode(IN2_2_B, OUTPUT);
+  pinMode(KICKER_PIN, OUTPUT);
+  digitalWrite(KICKER_PIN, LOW);
 
   ledcSetup(PWM_CH1, PWM_FREQ, PWM_RES);
   ledcAttachPin(PWM_1_A, PWM_CH1);
@@ -957,6 +955,7 @@ void loop() {
 
   lerSerialCabeca();
   enviarCorGolParaCabeca();
+  atualizarKicker();
 
   if ((millis() - ultimoRxCabeca) > TIMEOUT_COM_MS) {
     comunicacaoCabecaOK = false;
@@ -987,8 +986,8 @@ void loop() {
       }
 
       if (irDetectado) {
-        int velocidadeBola = constrain((int)(distanciaBolaD * 2.0f), VELOCIDADE_MIN_BOLA, velocidade_maxima);
-        seguirDirecaoComGiro(anguloIr, velocidadeBola, cmdPidAssinado);
+        float anguloMovimento = mapearAnguloBolaParaMovimento(anguloIr);
+        seguirDirecaoComGiro(anguloMovimento, velocidade_maxima, cmdPidAssinado);
       } else if (precisaAlinhar) {
         girarNoEixo(cmdPidAssinado);
       } else {
