@@ -56,7 +56,9 @@ float angulos[NUM_SENSORES] = {
   240, 270, 300, 330 
 };
 const unsigned long JANELA_TEMPO = 15;    // <-- Janela de tempo para contagens de pulso de IR (10ms)
-const int LIMIAR_PULSOS = 2;    // <-- Limiar de pulsos para identificar que é a bola
+const int LIMIAR_PULSOS = 8;    // <-- Limiar de pulsos para identificar que é a bola
+const int NUM_AMOSTRAS_VOTO = 5;          // <-- Qtd de amostras para votacao
+const float TOLERANCIA_VOTO_GRAUS = 45.0f; // <-- Tolerancia para considerar amostras do mesmo grupo
 unsigned int pulsos[NUM_SENSORES];
 unsigned int nivelBaixo[NUM_SENSORES];
 float pesosIr[NUM_SENSORES];
@@ -123,6 +125,57 @@ float calculaAnguloBola() {     // <-- Função para cálculo do angulo da bola 
   float angulo_bola = atan2(y, x) * 180.0 / PI;
   if (angulo_bola < 0) angulo_bola += 360.0;
   return angulo_bola;
+}
+
+float diferencaAngularAbsoluta(float a, float b) {
+  float d = fabs(a - b);
+  if (d > 180.0f) d = 360.0f - d;
+  return d;
+}
+
+float filtrarAnguloBola() {
+  // Coleta NUM_AMOSTRAS_VOTO amostras
+  float amostras[NUM_AMOSTRAS_VOTO];
+  int validas = 0;
+  for (int i = 0; i < NUM_AMOSTRAS_VOTO; i++) {
+    contarPulsosSensores();
+    float a = calculaAnguloBola();
+    if (a >= 0.0f) {
+      amostras[validas++] = a;
+    }
+  }
+
+  if (validas == 0) return -1.0f;
+  if (validas == 1) return amostras[0];
+
+  // Para cada amostra, conta quantas outras estão dentro da TOLERANCIA_VOTO_GRAUS
+  int melhorVotos = 0;
+  int melhorIdx = 0;
+  for (int i = 0; i < validas; i++) {
+    int votos = 0;
+    for (int j = 0; j < validas; j++) {
+      if (diferencaAngularAbsoluta(amostras[i], amostras[j]) <= TOLERANCIA_VOTO_GRAUS) {
+        votos++;
+      }
+    }
+    if (votos > melhorVotos) {
+      melhorVotos = votos;
+      melhorIdx = i;
+    }
+  }
+
+  // Retorna a média vetorial das amostras vencedoras do grupo
+  float sx = 0, sy = 0;
+  for (int i = 0; i < validas; i++) {
+    if (diferencaAngularAbsoluta(amostras[i], amostras[melhorIdx]) <= TOLERANCIA_VOTO_GRAUS) {
+      float rad = amostras[i] * PI / 180.0f;
+      sx += cosf(rad);
+      sy += sinf(rad);
+    }
+  }
+  float resultado = atan2f(sy, sx) * 180.0f / PI;
+  if (resultado < 0) resultado += 360.0f;
+  return resultado;
 }
 
 
@@ -279,7 +332,7 @@ void enviarDados() {
   p.uE = (int16_t)round(ultraE * 10.0);
   p.uF = (int16_t)round(ultraF * 10.0);
   p.uT = (int16_t)round(ultraT * 10.0);
-  p.angulo = (int16_t)round(calculaAnguloBola() * 10.0);
+  p.angulo = (int16_t)round(filtrarAnguloBola() * 10.0);
   p.intensidade = (int16_t)round(intensidade * 10.0);
 
   int16_t erroGolRaw = (int16_t)round(erroGolCamera * 10.0);

@@ -78,7 +78,7 @@ int itemSubMenu = 0;
 
 const unsigned long INTERVALO_OI_MS = 1000;
 const unsigned long TIMEOUT_COM_MS = 3000;
-const int velocidade_maxima = 200;
+const int velocidade_maxima = 160;
 const int EEPROM_SIZE = 64;
 const int EEPROM_ADDR_BUSSOLA = 0;
 const float TOLERANCIA_ALINHAMENTO_GRAUS = 20.0f;
@@ -92,6 +92,20 @@ const float PID_BUS_INTEGRAL_MAX = 120.0f;
 const int PID_BUS_SAIDA_MIN = 25;
 const int PID_BUS_SAIDA_MAX = 180;
 const float GANHO_GIRO_MISTO = 1.0f;
+
+// Compensação para alinhamento frontal (0°)
+const float GANHO_COMPENSACAO_IR_ANTES_ZERO = 0.15f;   // 315-360°
+const float GANHO_COMPENSACAO_IR_DEPOIS_ZERO = 2.20f;  // 0-45°
+
+// Compensação para alinhamento traseiro (180°)
+const float GANHO_COMPENSACAO_IR_ANTES_TRAS = 0.5f;   // 155-180°
+const float GANHO_COMPENSACAO_IR_DEPOIS_TRAS = 0.5f;  // 180-205°
+
+// Compensação para laterais esquerda (225-315, puxa para 180°)
+const float GANHO_COMPENSACAO_LATERAL_ESQUERDA = 0.6f;    // 225-315°
+
+// Compensação para laterais direita (45-155, empurra para >135°)
+const float GANHO_COMPENSACAO_LATERAL_DIREITA = 1.5f;  // 45-155°
 
 int headingBussolaSalvo = 0;
 float erroAlinhamentoGraus = 0.0f;
@@ -287,16 +301,17 @@ float normalizarAngulo360(float ang) {
 }
 
 float mapearAnguloBolaParaMovimento(float anguloBolaGraus) {
-  float ang = normalizarAngulo360(anguloBolaGraus); // Compensa atraso de leitura do IR Seeker
-  if (ang >= 340.0f && ang < 360.0f) return (ang + 15.0f); // Compensa atraso de leitura do IR Seeker
-  if (ang >= 0.0f && ang < 20.0f) return (ang + 5.0f); // Compensa atraso de leitura do IR Seeker
+  float ang = normalizarAngulo360(anguloBolaGraus);
+  if (ang >= 340.0f && ang < 360.0f) return (ang + 5.0f);
+  if (ang >= 0.0f && ang < 20.0f) return (ang + 5.0f);
   if (ang >= 20.0f && ang < 45.0f) return 90.0f;
   if (ang >= 45.0f && ang < 90.0f) return 135.0f;
   if (ang >= 90.0f && ang < 135.0f) return 180.0f;
   if (ang >= 315.0f && ang < 340.0f) return 270.0f;
-  if (ang >= 270.0f && ang <315.0f) return 180.0f;
+  if (ang >= 270.0f && ang < 315.0f) return 180.0f;
   if (ang >= 135.0f && ang < 180.0f) return 220.0f;
   if (ang >= 180.0f && ang < 270.0f) return 140.0f;
+  
   return ang;
 }
 
