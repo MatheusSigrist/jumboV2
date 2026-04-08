@@ -1,3 +1,7 @@
+// Teste isolado de alinhamento por PID usando erro de gol.
+// Funcao: receber "GOL:erro,det,..." da Cabeca e girar no eixo ate alinhar.
+// Entrada: erro angular do gol via serial.
+// Saida: comando de giro nos quatro motores para validar KP/KI/KD.
 #include <Arduino.h>
 
 #define RX_CABECA 17

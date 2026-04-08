@@ -1,3 +1,6 @@
+// Teste da placa Olho focado em IR seeker.
+// Funcao: contar pulsos dos 12 sensores TSOP e calcular angulo da bola.
+// Saida: logs de pulsos por sensor e angulo estimado no monitor serial.
 #include <Arduino.h>
 #include <math.h>
 

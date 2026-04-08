@@ -1,3 +1,6 @@
+// Teste dedicado da bussola QMC5883P na placa Cabeca.
+// Funcao: iniciar sensor, calibrar min/max XY e calcular heading 0..360.
+// Saida: leituras RAW/GAUSS e heading em graus no monitor serial.
 #include <Arduino.h>
 #include <Wire.h>
 #include <Adafruit_QMC5883P.h>

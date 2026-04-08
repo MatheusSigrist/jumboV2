@@ -1,3 +1,6 @@
+// Teste simples de LED.
+// Funcao: verificar se a placa inicializa e consegue alternar um pino digital.
+// Resultado esperado: LED acende por 200 ms e apaga por 10 s em loop.
 #include <Arduino.h>
 
 #ifndef LED_BUILTIN

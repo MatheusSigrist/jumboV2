@@ -1,3 +1,8 @@
+# Script de teste da camera (versao de referencia).
+# Funcao: detectar gol por blob de cor, calcular erro angular e enviar
+# pacote para a placa Olho por UART no protocolo definido.
+# Entrada: frames da camera e comando de cor vindo do robo.
+# Saida: pacote com gol_detectado, erro e quantidade de pixels.
 import sensor
 import time
 import math

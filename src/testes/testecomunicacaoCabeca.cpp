@@ -1,3 +1,6 @@
+// Teste de comunicacao da Cabeca com Musculo e leitura de botoes.
+// Funcao: handshake "oi" e envio de eventos BTN:1/2/3 quando ha clique.
+// Saida: mensagens seriais para validar protocolo e debounce.
 #include <Arduino.h>
 
 #define RX_MUSCULO 44

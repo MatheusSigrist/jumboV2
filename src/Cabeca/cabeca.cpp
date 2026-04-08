@@ -1,3 +1,8 @@
+// Arquivo principal da placa Cabeca.
+// Funcao: concentrador de comunicacao entre Musculo, Olho e Pe,
+// leitura de botoes e bussola, e repasse de dados para o Musculo.
+// Entrada: serial das placas, botoes fisicos, chave do kicker, I2C bussola.
+// Saida: mensagens de estado/dados para Musculo e comandos para Olho.
 #include <Arduino.h>
 #include <Wire.h>
 #include <Adafruit_QMC5883P.h>
@@ -111,6 +116,7 @@ const unsigned long INTERVALO_ENVIO_KICKER_MS = 120;
 const unsigned long INTERVALO_ENVIO_ESTADO_OLHO_MS = 700;
 const float ALPHA_FILTRO_XY = 0.18f;
 
+// Normaliza qualquer angulo para a faixa [0, 360).
 float normalizarAngulo360(float anguloGraus) {
   if (isnan(anguloGraus) || isinf(anguloGraus)) {
     return 0.0f;
@@ -126,6 +132,7 @@ float normalizarAngulo360(float anguloGraus) {
   return resultado;
 }
 
+// Inicializa e configura a bussola QMC5883P para leitura continua.
 bool iniciarBussola() {
   if (!compass.begin()) {
     return false;
@@ -144,6 +151,7 @@ bool iniciarBussola() {
   return true;
 }
 
+// Atualiza limites min/max dos eixos para calibracao dinamica.
 void atualizarCalibracaoXY(int16_t rawX, int16_t rawY) {
   if (rawX < minX) minX = rawX;
   if (rawX > maxX) maxX = rawX;
@@ -151,6 +159,7 @@ void atualizarCalibracaoXY(int16_t rawX, int16_t rawY) {
   if (rawY > maxY) maxY = rawY;
 }
 
+// Mapeia um eixo calibrado para escala normalizada de 0 a 360 graus.
 float eixoPara360(int16_t valor, int16_t minValor, int16_t maxValor) {
   int32_t faixa = (int32_t)maxValor - (int32_t)minValor;
   if (faixa < 10) {
@@ -163,6 +172,7 @@ float eixoPara360(int16_t valor, int16_t minValor, int16_t maxValor) {
   return norm01 * 360.0f;
 }
 
+// Le a bussola, aplica filtro, atualiza heading e publica debug no serial.
 void atualizarBussola() {
   if (!bussolaOK) {
     bussolaOK = iniciarBussola();
@@ -215,6 +225,7 @@ void atualizarBussola() {
   ultimoEnvioBussolaMs = millis();
 }
 
+// Processa comandos textuais vindos do Musculo (handshake e configuracoes).
 void processarMensagem(String msg) {
   msg.trim();
   msg.toLowerCase();
@@ -244,6 +255,7 @@ void processarMensagem(String msg) {
   }
 }
 
+// Envia para a placa Olho o estado do jogo e a configuracao atual.
 void enviarEstadoParaOlho(bool forcar = false) {
   if (!forcar && (millis() - ultimoEnvioEstadoOlhoMs) < INTERVALO_ENVIO_ESTADO_OLHO_MS) {
     return;
@@ -261,6 +273,7 @@ void enviarEstadoParaOlho(bool forcar = false) {
   ultimoEnvioEstadoOlhoMs = millis();
 }
 
+// Encaminha evento de botao para o Musculo.
 void enviarEventoBotao(uint8_t botao) {
   SerialMusculo.print("BTN:");
   SerialMusculo.println(botao);
@@ -269,6 +282,7 @@ void enviarEventoBotao(uint8_t botao) {
   Serial.println(botao);
 }
 
+// Envia resultado do autoteste de comunicacao das placas secundarias.
 void enviarStatusPlacasParaMusculo() {
   SerialMusculo.print("STS:");
   SerialMusculo.print(comunicacaoOlhoOK ? 1 : 0);
@@ -276,6 +290,7 @@ void enviarStatusPlacasParaMusculo() {
   SerialMusculo.println(comunicacaoPeOK ? 1 : 0);
 }
 
+// Publica periodicamente o angulo IR recebido da placa Olho.
 void enviarIrParaMusculo() {
   if ((millis() - ultimoEnvioIrMs) < INTERVALO_ENVIO_IR_MS) {
     return;
@@ -287,6 +302,7 @@ void enviarIrParaMusculo() {
   ultimoEnvioIrMs = millis();
 }
 
+// Publica periodicamente o heading da bussola para o Musculo.
 void enviarBussolaParaMusculo() {
   if (!bussolaOK) {
     return;
@@ -301,6 +317,7 @@ void enviarBussolaParaMusculo() {
   ultimoEnvioBussolaMusculoMs = millis();
 }
 
+// Publica erro de gol, deteccao e confianca de camera para o Musculo.
 void enviarGolParaMusculo() {
   if ((millis() - ultimoEnvioGolMusculoMs) < INTERVALO_ENVIO_GOL_MS) {
     return;
@@ -317,6 +334,7 @@ void enviarGolParaMusculo() {
   ultimoEnvioGolMusculoMs = millis();
 }
 
+// Publica angulo de linha calculado pela placa Pe.
 void enviarLinhaParaMusculo() {
   if ((millis() - ultimoEnvioLinhaMusculoMs) < INTERVALO_ENVIO_LINHA_MS) {
     return;
@@ -328,6 +346,7 @@ void enviarLinhaParaMusculo() {
   ultimoEnvioLinhaMusculoMs = millis();
 }
 
+// Publica intensidade IR estimada pela placa Olho.
 void enviarIntensidadeParaMusculo() {
   if ((millis() - ultimoEnvioIntMusculoMs) < INTERVALO_ENVIO_INT_MS) {
     return;
@@ -339,6 +358,7 @@ void enviarIntensidadeParaMusculo() {
   ultimoEnvioIntMusculoMs = millis();
 }
 
+// Le chave do kicker e envia estado periodico/por mudanca ao Musculo.
 void enviarEstadoKickerParaMusculo() {
   if ((millis() - ultimoEnvioKickerMusculoMs) < INTERVALO_ENVIO_KICKER_MS) {
     return;
@@ -359,6 +379,7 @@ void enviarEstadoKickerParaMusculo() {
   ultimoEnvioKickerMusculoMs = millis();
 }
 
+// Valida respostas textuais de vida e marca comunicacao ativa.
 void processarTextoResposta(String &buffer, bool &flagResposta) {
   buffer.trim();
   buffer.toUpperCase();
@@ -368,6 +389,7 @@ void processarTextoResposta(String &buffer, bool &flagResposta) {
   buffer = "";
 }
 
+// Le serial da placa Olho, decodifica pacote binario e fallback textual.
 void lerRespostaOlho() {
   while (SerialOlho.available() > 0) {
     if (SerialOlho.peek() == BYTE_INICIA) {
@@ -410,6 +432,7 @@ void lerRespostaOlho() {
   }
 }
 
+// Le serial da placa Pe, decodifica pacote binario e fallback textual.
 void lerRespostaPe() {
   while (SerialPe.available() > 0) {
     if (SerialPe.peek() == BYTE_INICIA) {
@@ -447,6 +470,7 @@ void lerRespostaPe() {
   }
 }
 
+// Executa teste rapido de handshake com Olho e Pe no startup.
 void testarOlhoPe() {
   comunicacaoOlhoOK = false;
   comunicacaoPeOK = false;
@@ -476,6 +500,7 @@ void testarOlhoPe() {
   enviarStatusPlacasParaMusculo();
 }
 
+// Detecta borda de pressionamento dos botoes com debounce.
 void verificarBotoes() {
   bool botao1Atual = digitalRead(BOTAO_1);
   bool botao2Atual = digitalRead(BOTAO_2);
@@ -500,6 +525,7 @@ void verificarBotoes() {
   botao3Anterior = botao3Atual;
 }
 
+// Le serial do Musculo e processa mensagens por terminador de linha.
 void lerSerialMusculo() {
   while (SerialMusculo.available() > 0) {
     char c = (char)SerialMusculo.read();
@@ -522,6 +548,7 @@ void lerSerialMusculo() {
   }
 }
 
+// Inicializa serials, sensores e handshakes iniciais do sistema.
 void setup() {
   Serial.begin(115200);
   SerialMusculo.begin(9600, SERIAL_8N1, RX_MUSCULO, TX_MUSCULO);
@@ -554,6 +581,7 @@ void setup() {
   enviarEstadoParaOlho(true);
 }
 
+// Laco principal da Cabeca: coleta entradas e redistribui dados para o Musculo.
 void loop() {
   if (millis() - ultimoEnvioOiMs >= INTERVALO_OI_MS) {
     SerialMusculo.println("oi");

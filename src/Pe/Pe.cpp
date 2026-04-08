@@ -1,3 +1,8 @@
+// Arquivo principal da placa Pe.
+// Funcao: ler 32 sensores de linha via dois multiplexadores,
+// calcular o angulo da linha e enviar esse angulo para a Cabeca.
+// Entrada: LDRs da linha e estado atacante/defensor vindo da Cabeca.
+// Saida: pacote serial com angulo da linha (em decimos de grau).
 #include <Arduino.h>
 #include <math.h>
 #include <stdint.h>
@@ -59,6 +64,7 @@ struct PacoteEstado {
   bool corGolAzul;
 };
 
+// Seleciona um canal em um multiplexador 16:1 pelos pinos de endereco.
 void selecionarCanalMUX(int s0, int s1, int s2, int s3, int canal) {
   digitalWrite(s0, bitRead(canal, 0));
   digitalWrite(s1, bitRead(canal, 1));
@@ -66,6 +72,7 @@ void selecionarCanalMUX(int s0, int s1, int s2, int s3, int canal) {
   digitalWrite(s3, bitRead(canal, 3));
 }
 
+// Responde handshake textual da Cabeca sem consumir pacotes binarios.
 void ProcessarPingCabeca() {
   while (Serial1.available() > 0) {
     if (Serial1.peek() == BYTE_INICIA) {
@@ -102,6 +109,7 @@ void ProcessarPingCabeca() {
   }
 }
 
+// Le pacote de estado da Cabeca e atualiza papel atacante/defensor.
 void LeituraSerial() {
   while (Serial1.available() >= 2) {
     if (Serial1.read() == BYTE_INICIA) {
@@ -120,6 +128,7 @@ void LeituraSerial() {
   }
 }
 
+// Calcula o angulo da linha por centroide ponderado dos sensores ativos.
 int16_t calcularAngulo(bool repulsao) {
   float centroX = 0.0;
   float centroY = 0.0;
@@ -154,6 +163,7 @@ int16_t calcularAngulo(bool repulsao) {
   return (int16_t)round(anguloGraus * 10.0);
 }
 
+// Imprime leitura bruta de todos os sensores para depuracao.
 void imprimirLeituraSensores() {
   Serial.print("Sensores: ");
   for (int i = 0; i < NUM_SENSORES; i++) {
@@ -171,6 +181,7 @@ void imprimirLeituraSensores() {
   Serial.println();
 }
 
+// Inicializa serial, MUX e tabela angular dos 32 sensores.
 void setup() {
   Serial.begin(115200);
   Serial1.begin(BAUD_PE_CABECA, SERIAL_8N1, RX_CABECA, TX_CABECA);
@@ -196,6 +207,7 @@ void setup() {
   Serial.println("Placa PE inicializada com leitura de sensores");
 }
 
+// Laco principal: le sensores, calcula angulo e envia pacote para Cabeca.
 void loop() {
   ProcessarPingCabeca();
 

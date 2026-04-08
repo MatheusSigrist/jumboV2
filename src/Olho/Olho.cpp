@@ -1,3 +1,8 @@
+// Arquivo principal da placa Olho.
+// Funcao: ler sensores IR (direcao da bola), ultrassonicos e camera,
+// montar pacote com deteccoes e enviar para a Cabeca.
+// Entrada: TSOPs, ultrassonicos, camera UART e estado recebido da Cabeca.
+// Saida: pacote serial com angulo/intensidade IR, dados do gol e cameraOK.
 #include <Arduino.h>
 #include <math.h>
 #include <EEPROM.h>
@@ -28,6 +33,7 @@ float  ultraF = 0;
 float  ultraE = 0;
 float  ultraD = 0;
 
+// Le os quatro ultrassonicos e atualiza distancias globais em cm.
 void L_Ultra() {     // <-- Função para leitura dos sensores ultrassonicos
   ultraD = hcD.dist();
   ultraE = hcE.dist();
@@ -67,6 +73,7 @@ float intensidade = 0;  // <-- Declarada globalmente para ser usada em enviarDad
 
 
 
+// Conta pulsos IR por sensor em uma janela curta e calcula pesos por deteccao.
 void contarPulsosSensores() {     // <-- Função de contagens de pulsos IR emitidos pela bola (IR SEEKER)
   for (int i = 0; i < NUM_SENSORES; i++) {
     pulsos[i] = 0;
@@ -111,6 +118,7 @@ void contarPulsosSensores() {     // <-- Função de contagens de pulsos IR emit
   }
 }
 
+// Calcula o angulo da bola por media vetorial dos sensores IR ativos.
 float calculaAnguloBola() {     // <-- Função para cálculo do angulo da bola pelos pulsos de IR lidos (IR SEEKER)
   float x = 0, y = 0, soma_pesos = 0;
   for (int i = 0; i < NUM_SENSORES; i++) {
@@ -127,12 +135,14 @@ float calculaAnguloBola() {     // <-- Função para cálculo do angulo da bola 
   return angulo_bola;
 }
 
+// Retorna a menor diferenca angular absoluta entre dois angulos.
 float diferencaAngularAbsoluta(float a, float b) {
   float d = fabs(a - b);
   if (d > 180.0f) d = 360.0f - d;
   return d;
 }
 
+// Filtra o angulo da bola por votacao entre amostras para reduzir ruido.
 float filtrarAnguloBola() {
   // Coleta NUM_AMOSTRAS_VOTO amostras
   float amostras[NUM_AMOSTRAS_VOTO];
@@ -220,6 +230,7 @@ unsigned long ultimoRxCameraMs = 0;  // timestamp do ultimo pacote valido recebi
 String bufferHandshakeCabeca = "";
 unsigned long ultimoByteHandshakeCabeca = 0;
 
+// Responde handshake textual da Cabeca sem atrapalhar o protocolo binario.
 void ProcessarPingCabeca() {
   while (Serial1.available() > 0) {
     if (Serial1.peek() == BYTE_INICIA) {
@@ -256,6 +267,7 @@ void ProcessarPingCabeca() {
   }
 }
 
+// Envia para a camera a cor de gol selecionada atualmente.
 void EnviarCorParaCamera() {
   Serial2.write(BYTE_INICIA);
   Serial2.write(ID_PLACA_OLHO);
@@ -263,16 +275,19 @@ void EnviarCorParaCamera() {
   Serial2.write(BYTE_PARA);
 }
 
+// Salva a cor de gol na EEPROM para manter configuracao apos reboot.
 void SalvarCorGolEEPROM() {
   EEPROM.writeByte(EEPROM_ADDR_COR_GOL, corGolAzul ? 1 : 0);
   EEPROM.commit();
 }
 
+// Carrega da EEPROM a cor de gol usada ao iniciar a placa.
 void CarregarCorGolEEPROM() {
   uint8_t val = EEPROM.readByte(EEPROM_ADDR_COR_GOL);
   corGolAzul = (val == 1);
 }
 
+// Le estado enviado pela Cabeca e aplica mudancas de atacante/cor de gol.
 void LeituraSerial() {
   while (Serial1.available() >= 2) {
     if (Serial1.read() == BYTE_INICIA) {
@@ -297,6 +312,7 @@ void LeituraSerial() {
   }
 }
 
+// Le pacote da camera com deteccao do gol, erro angular e pixels do blob.
 void LeituraCamera() {
   // Protocolo camera: [0xAA][ID=0x03][5 bytes payload][0x55]
   while (Serial2.available() >= 8) {
@@ -325,6 +341,7 @@ void LeituraCamera() {
 }
 
 
+// Monta e envia para a Cabeca um pacote com ultras, IR e dados de gol.
 void enviarDados() { 
   Pacote p;
 
@@ -353,6 +370,7 @@ void enviarDados() {
 
 
 
+// Inicializa pinos/seriais e sincroniza cor inicial com a camera.
 void setup() {
     for (int i = 0; i < NUM_SENSORES; i++)
       pinMode(sensoresTSOP[i], INPUT);
@@ -368,6 +386,7 @@ void setup() {
     EnviarCorParaCamera();
 }
 
+// Laco principal: handshake, leituras de sensores e envio de pacote.
 void loop(){
   ProcessarPingCabeca();
 

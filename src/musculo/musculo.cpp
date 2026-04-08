@@ -1,3 +1,8 @@
+// Arquivo principal da placa Musculo.
+// Funcao: controle de movimento (motores), menu no display OLED,
+// calibracao (gol/bussola), alinhamento com PID e logica do kicker.
+// Entrada: mensagens da Cabeca (serial), IR/linha/gol e botoes.
+// Saida: comandos PWM para motores, pulso do kicker e telas de status.
 #include <Arduino.h>
 #include <Wire.h>
 #include <EEPROM.h>
@@ -117,6 +122,7 @@ float pidBusIntegral = 0.0f;
 float pidBusErroAnterior = 0.0f;
 unsigned long pidBusUltimoMs = 0;
 
+// Controla o pulso do kicker com tempo minimo e intervalo entre disparos.
 void atualizarKicker() {
   unsigned long agora = millis();
 
@@ -143,6 +149,7 @@ void atualizarKicker() {
   }
 }
 
+// Aciona o motor 1 com sentido e PWM conforme a velocidade assinada.
 void Motor_1(int vel1) {
   int pwm1 = constrain(abs(vel1), 0, 255);
   ledcWrite(PWM_CH1, pwm1);
@@ -155,6 +162,7 @@ void Motor_1(int vel1) {
   }
 }
 
+// Aciona o motor 2 com sentido e PWM conforme a velocidade assinada.
 void Motor_2(int vel2) {
   int pwm2 = constrain(abs(vel2), 0, 255);
   ledcWrite(PWM_CH2, pwm2);
@@ -167,6 +175,7 @@ void Motor_2(int vel2) {
   }
 }
 
+// Aciona o motor 4 com sentido e PWM conforme a velocidade assinada.
 void Motor_4(int vel3) {
   int pwm3 = constrain(abs(vel3), 0, 255);
   ledcWrite(PWM_CH3, pwm3);
@@ -179,6 +188,7 @@ void Motor_4(int vel3) {
   }
 }
 
+// Aciona o motor 3 com sentido e PWM conforme a velocidade assinada.
 void Motor_3(int vel4) {
   int pwm4 = constrain(abs(vel4), 0, 255);
   ledcWrite(PWM_CH4, pwm4);
@@ -191,6 +201,7 @@ void Motor_3(int vel4) {
   }
 }
 
+// Converte um angulo de translacao em velocidades individuais de roda.
 void seguirDirecaoPorAngulo(float anguloGraus, int velocidade) {
   int velocidadeAlvo = constrain(velocidade, 0, velocidade_maxima);
   float theta = anguloGraus * PI / 180.0;
@@ -222,6 +233,7 @@ void seguirDirecaoPorAngulo(float anguloGraus, int velocidade) {
   Motor_4((int)v4);
 }
 
+// Move por angulo e soma um termo de giro para alinhar durante o deslocamento.
 void seguirDirecaoComGiro(float anguloGraus, int velocidade, int cmdGiro) {
   int velocidadeAlvo = constrain(velocidade, 0, velocidade_maxima);
   float theta = anguloGraus * PI / 180.0f;
@@ -260,6 +272,7 @@ void seguirDirecaoComGiro(float anguloGraus, int velocidade, int cmdGiro) {
   Motor_4((int)v4);
 }
 
+// Para todos os motores desligando PWM e deixando pontes em estado neutro.
 void pararMotores() {
   ledcWrite(PWM_CH1, 0);
   ledcWrite(PWM_CH2, 0);
@@ -276,6 +289,7 @@ void pararMotores() {
   digitalWrite(IN2_2_B, LOW);
 }
 
+// Gira o robo no proprio eixo usando o mesmo comando de giro para as rodas.
 void girarNoEixo(int velocidade) {
   int vel = constrain(velocidade, -velocidade_maxima, velocidade_maxima);
 
@@ -288,18 +302,21 @@ void girarNoEixo(int velocidade) {
   Motor_4(-vel);
 }
 
+// Normaliza um erro angular para a faixa [-180, 180].
 float normalizarErro180(float erro) {
   while (erro > 180.0f) erro -= 360.0f;
   while (erro < -180.0f) erro += 360.0f;
   return erro;
 }
 
+// Normaliza um angulo absoluto para a faixa [0, 360).
 float normalizarAngulo360(float ang) {
   while (ang >= 360.0f) ang -= 360.0f;
   while (ang < 0.0f) ang += 360.0f;
   return ang;
 }
 
+// Ajusta o angulo da bola para um angulo de comando mais estavel de movimento.
 float mapearAnguloBolaParaMovimento(float anguloBolaGraus) {
   float ang = normalizarAngulo360(anguloBolaGraus);
   if (ang >= 340.0f && ang < 360.0f) return (ang + 5.0f);
@@ -315,12 +332,14 @@ float mapearAnguloBolaParaMovimento(float anguloBolaGraus) {
   return ang;
 }
 
+// Zera os estados internos do PID de alinhamento.
 void resetPidBussola() {
   pidBusIntegral = 0.0f;
   pidBusErroAnterior = 0.0f;
   pidBusUltimoMs = 0;
 }
 
+// Calcula a saida assinada do PID de alinhamento, com limites e anti-windup.
 int calcularSaidaPidBussola(float erroGraus) {
   unsigned long agora = millis();
   float dt = 0.02f;
@@ -359,6 +378,7 @@ const int VELOCIDADE_FUGA_LINHA = 170;
 bool fugindoLinhaAgora = false;
 float anguloFugaLinhaCmd = 0.0f;
 
+// Envia periodicamente para a Cabeca a cor de gol selecionada no menu.
 void enviarCorGolParaCabeca() {
   if (!corGolPendenteEnvio) {
     return;
@@ -373,6 +393,7 @@ void enviarCorGolParaCabeca() {
   ultimoEnvioCorGolMs = millis();
 }
 
+// Desenha a tela principal de menu no display OLED.
 void desenharMenu() {
   display.clearDisplay();
   display.setTextSize(1);
@@ -420,6 +441,7 @@ void desenharMenu() {
   display.display();
 }
 
+// Desenha as telas de calibracao (principal, gol, bussola e teste de camera).
 void desenharSubmenuCalibracao() {
   display.clearDisplay();
   display.setTextSize(1);
@@ -549,6 +571,7 @@ void desenharSubmenuCalibracao() {
   display.display();
 }
 
+// Desenha a tela de operacao com telemetria de jogo e modos ativos.
 void desenharOperacao() {
   display.clearDisplay();
   display.setTextSize(1);
@@ -599,6 +622,7 @@ void desenharOperacao() {
   display.display();
 }
 
+// Mostra uma tela curta com status de comunicacao entre placas.
 void desenharStatusPlacas() {
   display.clearDisplay();
   display.setTextSize(1);
@@ -615,6 +639,7 @@ void desenharStatusPlacas() {
   display.display();
 }
 
+// Mostra tela de falha quando o handshake com a Cabeca cai.
 void mostrarTelaFalhaComunicacao() {
   display.clearDisplay();
   display.setTextSize(1);
@@ -630,6 +655,7 @@ void mostrarTelaFalhaComunicacao() {
   display.display();
 }
 
+// Escolhe qual tela deve ser renderizada conforme estado e comunicacao.
 void desenharTelaAtual() {
   if (millis() < mostrarStatusAte) {
     desenharStatusPlacas();
@@ -650,6 +676,7 @@ void desenharTelaAtual() {
   }
 }
 
+// Trata eventos de botao e navega entre menu, calibracoes e operacao.
 void processarEventoBotao(uint8_t botao) {
   if (estadoAtual == MENU) {
     if (botao == 1) {
@@ -742,6 +769,7 @@ void processarEventoBotao(uint8_t botao) {
   }
 }
 
+// Interpreta mensagens recebidas da Cabeca e atualiza estados locais.
 void processarMensagemCabeca(String msg) {
   msg.trim();
   msg.toUpperCase();
@@ -885,6 +913,7 @@ void processarMensagemCabeca(String msg) {
   }
 }
 
+// Acumula bytes da serial da Cabeca e despacha mensagens completas por linha.
 void lerSerialCabeca() {
   while (Serial1.available() > 0) {
     char c = (char)Serial1.read();
@@ -902,6 +931,7 @@ void lerSerialCabeca() {
   }
 }
 
+// Inicializa perifericos, faz handshake inicial e prepara o estado de operacao.
 void setup() {
   Serial.begin(115200);
   Serial1.begin(9600, SERIAL_8N1, RX_CABECA, TX_CABECA);
@@ -962,6 +992,7 @@ void setup() {
   desenharTelaAtual();
 }
 
+// Laco principal: comunica, atualiza controle de movimento e redesenha interface.
 void loop() {
   if (millis() - ultimoEnvioOi >= INTERVALO_OI_MS) {
     Serial1.println("oi");

@@ -1,3 +1,6 @@
+// Teste da placa Pe focado em sensores de linha.
+// Funcao: ler 32 sensores via MUX, detectar linha e calcular angulo.
+// Saida: resumo serial com linha detectada, angulo e sensores ativos.
 #include <Arduino.h>
 #include <math.h>
 

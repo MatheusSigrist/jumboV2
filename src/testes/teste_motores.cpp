@@ -1,3 +1,7 @@
+// Teste direto da cinematica dos quatro motores.
+// Funcao: validar sentido, PWM e mapeamento vetorial por angulo.
+// Entrada: angulo e velocidade definidos no loop de teste.
+// Saida: comando para cada motor (M1..M4) para conferir movimentacao.
 #include <Arduino.h>
 
 // MOTOR A

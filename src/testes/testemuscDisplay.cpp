@@ -1,3 +1,7 @@
+// Teste do display/menu da placa Musculo sem acionar motores.
+// Funcao: validar navegacao de telas por botoes recebidos da Cabeca
+// e mostrar status de comunicacao no OLED.
+// Saida: interface visual e logs de handshake.
 #include <Arduino.h>
 #include <Wire.h>
 #include <Adafruit_GFX.h>

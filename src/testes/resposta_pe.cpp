@@ -1,3 +1,6 @@
+// Teste minimo de resposta da placa Pe para handshake.
+// Funcao: quando recebe "oi" da Cabeca, responde "OI".
+// Uso: validar serial e protocolo de vida entre placas.
 #include <Arduino.h>
 
 #define RX_CABECA 17

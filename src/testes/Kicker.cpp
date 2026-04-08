@@ -1,3 +1,6 @@
+// Teste da entrada da chave do kicker.
+// Funcao: ler o estado do pino do kicker e imprimir no monitor serial.
+// Resultado esperado: alternancia entre 0/1 conforme a chave fisica.
 #include <arduino.h>
 
 constexpr uint8_t KICKER_PIN = 45;

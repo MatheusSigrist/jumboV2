@@ -1,3 +1,8 @@
+# Script de teste da camera (OpenMV).
+# Funcao: detectar gol por cor (azul/amarelo), calcular erro angular e
+# enviar pacote serial para a placa Olho no protocolo AA/ID/payload/55.
+# Entrada: imagem da camera + selecao de cor recebida via UART.
+# Saida: gol_detectado, erro_gol e pixels enviados para o robo.
 import sensor
 import time
 import math
