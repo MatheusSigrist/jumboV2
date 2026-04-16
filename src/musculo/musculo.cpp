@@ -81,6 +81,9 @@ float ultraFcm = -1.0f;
 float ultraTcm = -1.0f;
 bool ultrasValidos = false;
 unsigned long ultimoRxUltraMs = 0;
+float ultimoAnguloIrRecebido = -999.0f;
+uint16_t repeticoesIr30 = 0;
+unsigned long inicioRepeticaoIr30Ms = 0;
 bool kickerRecebido = false;
 bool kickerAtivado = false;  // true quando chave acionada (valor 0 vindo da cabeca)
 bool pulsoKickerAtivo = false;
@@ -93,7 +96,7 @@ Estado estadoAtual = MENU;
 int itemSelecionado = 0;
 
 // Submenus disponiveis na tela de calibracao.
-enum SubMenuCalibracao { SUBMENU_PRINCIPAL, SUBMENU_GOL, SUBMENU_BUSSOLA, SUBMENU_ULTRA, SUBMENU_CAMERA };
+enum SubMenuCalibracao { SUBMENU_PRINCIPAL, SUBMENU_GOL, SUBMENU_BUSSOLA, SUBMENU_IR, SUBMENU_ULTRA, SUBMENU_CAMERA };
 SubMenuCalibracao subMenuCalibracao = SUBMENU_PRINCIPAL;
 int itemSubMenu = 0;
 
@@ -102,6 +105,10 @@ const unsigned long INTERVALO_OI_MS = 1000;
 const unsigned long TIMEOUT_COM_MS = 3000;
 const unsigned long TIMEOUT_LINHA_MS = 150;
 const unsigned long TIMEOUT_ULTRA_MS = 1000;
+const float ANGULO_IR_SUSPEITO_GRAUS = 30.0f;
+const float TOLERANCIA_ANGULO_IR_GRAUS = 2.0f;
+const unsigned long TIMEOUT_IR_TRAVADO_30_MS = 1200;
+const uint16_t REPETICOES_IR_TRAVADO_30 = 8;
 const int velocidade_maxima = 160;
 
 // Endereco e tamanho usados para persistir a bussola na EEPROM.
@@ -555,32 +562,43 @@ void desenharSubmenuCalibracao() {
       display.fillRect(0, 36, 128, 10, SSD1306_WHITE);
       display.setTextColor(SSD1306_BLACK);
       display.setCursor(4, 38);
-      display.println("ULTRA");
+      display.println("IR");
       display.setTextColor(SSD1306_WHITE);
     } else {
       display.setCursor(4, 38);
-      display.println("ULTRA");
+      display.println("IR");
     }
 
     if (itemSubMenu == 3) {
       display.fillRect(0, 46, 128, 10, SSD1306_WHITE);
       display.setTextColor(SSD1306_BLACK);
       display.setCursor(4, 48);
-      display.println("TESTE CAM");
+      display.println("ULTRA");
       display.setTextColor(SSD1306_WHITE);
     } else {
       display.setCursor(4, 48);
-      display.println("TESTE CAM");
+      display.println("ULTRA");
     }
 
     if (itemSubMenu == 4) {
-      display.fillRect(0, 54, 128, 10, SSD1306_WHITE);
+      display.fillRect(0, 56, 128, 10, SSD1306_WHITE);
       display.setTextColor(SSD1306_BLACK);
-      display.setCursor(4, 56);
+      display.setCursor(4, 58);
+      display.println("TESTE CAM");
+      display.setTextColor(SSD1306_WHITE);
+    } else {
+      display.setCursor(4, 58);
+      display.println("TESTE CAM");
+    }
+
+    if (itemSubMenu == 5) {
+      display.fillRect(96, 0, 32, 10, SSD1306_WHITE);
+      display.setTextColor(SSD1306_BLACK);
+      display.setCursor(98, 2);
       display.println("VOLTAR");
       display.setTextColor(SSD1306_WHITE);
     } else {
-      display.setCursor(4, 56);
+      display.setCursor(98, 2);
       display.println("VOLTAR");
     }
 
@@ -620,6 +638,26 @@ void desenharSubmenuCalibracao() {
       display.setCursor(4, 56);
       display.println("VOLTAR");
     }
+
+  // Tela de diagnostico do IR vindo da Cabeca.
+  } else if (subMenuCalibracao == SUBMENU_IR) {
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+    display.setCursor(0, 0);
+    display.println("=== TESTE IR ===");
+    display.println();
+    display.print("COM CABECA: ");
+    display.println(comunicacaoCabecaOK ? "OK" : "FALHA");
+    display.print("ANGULO IR: ");
+    if (irDetectado) {
+      display.print(anguloIr, 1);
+      display.println(" deg");
+    } else {
+      display.println("SEM BOLA");
+    }
+    display.println();
+    display.println("BTN1/2/3 VOLTAR");
 
   // Tela de diagnostico dos ultrassonicos vindos da Cabeca.
   } else if (subMenuCalibracao == SUBMENU_ULTRA) {
@@ -828,10 +866,10 @@ void processarEventoBotao(uint8_t botao) {
     // Navegacao circular entre as opcoes do submenu principal.
     if (botao == 1) {
       itemSubMenu--;
-      if (itemSubMenu < 0) itemSubMenu = 4;
+      if (itemSubMenu < 0) itemSubMenu = 5;
     } else if (botao == 2) {
       itemSubMenu++;
-      if (itemSubMenu > 4) itemSubMenu = 0;
+      if (itemSubMenu > 5) itemSubMenu = 0;
     } else if (botao == 3) {
       if (itemSubMenu == 0) {
         subMenuCalibracao = SUBMENU_GOL;
@@ -840,9 +878,12 @@ void processarEventoBotao(uint8_t botao) {
         subMenuCalibracao = SUBMENU_BUSSOLA;
         itemSubMenu = 0;
       } else if (itemSubMenu == 2) {
-        subMenuCalibracao = SUBMENU_ULTRA;
+        subMenuCalibracao = SUBMENU_IR;
         itemSubMenu = 0;
       } else if (itemSubMenu == 3) {
+        subMenuCalibracao = SUBMENU_ULTRA;
+        itemSubMenu = 0;
+      } else if (itemSubMenu == 4) {
         subMenuCalibracao = SUBMENU_CAMERA;
         itemSubMenu = 0;
       } else {
@@ -889,7 +930,7 @@ void processarEventoBotao(uint8_t botao) {
     return;
   }
 
-  if (estadoAtual == CALIBRACAO && subMenuCalibracao == SUBMENU_ULTRA) {
+  if (estadoAtual == CALIBRACAO && subMenuCalibracao == SUBMENU_IR) {
     if (botao == 1 || botao == 2 || botao == 3) {
       subMenuCalibracao = SUBMENU_PRINCIPAL;
       itemSubMenu = 2;
@@ -897,10 +938,18 @@ void processarEventoBotao(uint8_t botao) {
     return;
   }
 
-  if (estadoAtual == CALIBRACAO && subMenuCalibracao == SUBMENU_CAMERA) {
+  if (estadoAtual == CALIBRACAO && subMenuCalibracao == SUBMENU_ULTRA) {
     if (botao == 1 || botao == 2 || botao == 3) {
       subMenuCalibracao = SUBMENU_PRINCIPAL;
       itemSubMenu = 3;
+    }
+    return;
+  }
+
+  if (estadoAtual == CALIBRACAO && subMenuCalibracao == SUBMENU_CAMERA) {
+    if (botao == 1 || botao == 2 || botao == 3) {
+      subMenuCalibracao = SUBMENU_PRINCIPAL;
+      itemSubMenu = 4;
     }
     return;
   }
@@ -958,8 +1007,44 @@ void processarMensagemCabeca(String msg) {
     String valorIr = msg.substring(3);
     valorIr.trim();
     float novoAngulo = valorIr.toFloat();
-    irDetectado = (novoAngulo >= 0.0);
-    anguloIr = novoAngulo;
+
+    if (novoAngulo < 0.0f) {
+      irDetectado = false;
+      anguloIr = -1.0f;
+      repeticoesIr30 = 0;
+      inicioRepeticaoIr30Ms = 0;
+      ultimoAnguloIrRecebido = -999.0f;
+    } else {
+      bool perto30 = fabsf(novoAngulo - ANGULO_IR_SUSPEITO_GRAUS) <= TOLERANCIA_ANGULO_IR_GRAUS;
+      bool repetidoSemVariar = (ultimoAnguloIrRecebido >= 0.0f)
+                               && (fabsf(novoAngulo - ultimoAnguloIrRecebido) <= 1.0f);
+
+      if (perto30 && repetidoSemVariar) {
+        if (repeticoesIr30 == 0) {
+          inicioRepeticaoIr30Ms = millis();
+        }
+        repeticoesIr30++;
+      } else {
+        repeticoesIr30 = 0;
+        inicioRepeticaoIr30Ms = 0;
+      }
+
+      bool travadoEm30 = perto30
+                         && ((repeticoesIr30 >= REPETICOES_IR_TRAVADO_30)
+                             || (inicioRepeticaoIr30Ms > 0
+                                 && (millis() - inicioRepeticaoIr30Ms) >= TIMEOUT_IR_TRAVADO_30_MS));
+
+      if (travadoEm30) {
+        irDetectado = false;
+        anguloIr = -1.0f;
+      } else {
+        irDetectado = true;
+        anguloIr = novoAngulo;
+      }
+
+      ultimoAnguloIrRecebido = novoAngulo;
+    }
+
     comunicacaoCabecaOK = true;
     ultimoRxCabeca = millis();
     return;
