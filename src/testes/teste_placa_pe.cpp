@@ -116,7 +116,6 @@ void imprimirSensoresAtivos() {
   if (!encontrou) {
     Serial.print("nenhum");
   }
-
   Serial.println();
 }
 

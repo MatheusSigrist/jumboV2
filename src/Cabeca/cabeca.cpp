@@ -70,6 +70,7 @@ unsigned long ultimoEnvioBussolaMusculoMs = 0;
 unsigned long ultimoEnvioGolMusculoMs = 0;
 unsigned long ultimoEnvioLinhaMusculoMs = 0;
 unsigned long ultimoEnvioIntMusculoMs = 0;
+unsigned long ultimoEnvioUltraMusculoMs = 0;
 unsigned long ultimoEnvioEstadoOlhoMs = 0;
 unsigned long ultimoEnvioKickerMusculoMs = 0;
 
@@ -85,8 +86,13 @@ String bufferOlho = "";
 String bufferPe = "";
 unsigned long ultimoPingOlhoMs = 0;
 unsigned long ultimoPingPeMs = 0;
+unsigned long ultimoRxOlhoMs = 0;
 int16_t ultimoAnguloIrX10 = -10;
 int16_t ultimaIntensidadeIrX10 = 0;
+int16_t ultimoUltraDX10 = -10;
+int16_t ultimoUltraEX10 = -10;
+int16_t ultimoUltraFX10 = -10;
+int16_t ultimoUltraTX10 = -10;
 int16_t ultimoAnguloLinhaX10 = -10;
 float ultimoErroGolGraus = 0.0f;
 uint16_t ultimoPixelsGol = 0;
@@ -112,9 +118,17 @@ const unsigned long INTERVALO_ENVIO_BUSSOLA_MS = 120;
 const unsigned long INTERVALO_ENVIO_GOL_MS = 120;
 const unsigned long INTERVALO_ENVIO_LINHA_MS = 20;
 const unsigned long INTERVALO_ENVIO_INT_MS = 120;
+const unsigned long INTERVALO_ENVIO_ULTRA_MS = 120;
 const unsigned long INTERVALO_ENVIO_KICKER_MS = 120;
 const unsigned long INTERVALO_ENVIO_ESTADO_OLHO_MS = 700;
 const float ALPHA_FILTRO_XY = 0.18f;
+const int16_t INTENSIDADE_MINIMA_IR_X10 = 80;  // 8.0
+const unsigned long TIMEOUT_DADO_OLHO_MS = 500;
+
+void resetLeituraIrOlho() {
+  ultimoAnguloIrX10 = -10;
+  ultimaIntensidadeIrX10 = 0;
+}
 
 // Normaliza qualquer angulo para a faixa [0, 360).
 float normalizarAngulo360(float anguloGraus) {
@@ -296,7 +310,16 @@ void enviarIrParaMusculo() {
     return;
   }
 
-  float anguloIr = ultimoAnguloIrX10 / 10.0;
+  bool pacoteRecente = (ultimoRxOlhoMs > 0) && ((millis() - ultimoRxOlhoMs) < TIMEOUT_DADO_OLHO_MS);
+  bool anguloValido = (ultimoAnguloIrX10 >= 0);
+  bool intensidadeValida = (ultimaIntensidadeIrX10 >= INTENSIDADE_MINIMA_IR_X10);
+  bool leituraValida = pacoteRecente && anguloValido && intensidadeValida;
+
+  if (!leituraValida) {
+    resetLeituraIrOlho();
+  }
+
+  float anguloIr = leituraValida ? (ultimoAnguloIrX10 / 10.0f) : -1.0f;
   SerialMusculo.print("IR:");
   SerialMusculo.println(anguloIr, 1);
   ultimoEnvioIrMs = millis();
@@ -358,6 +381,29 @@ void enviarIntensidadeParaMusculo() {
   ultimoEnvioIntMusculoMs = millis();
 }
 
+// Publica distancias dos 4 ultrassonicos da placa Olho para o Musculo.
+void enviarUltrasParaMusculo() {
+  if ((millis() - ultimoEnvioUltraMusculoMs) < INTERVALO_ENVIO_ULTRA_MS) {
+    return;
+  }
+
+  bool pacoteRecente = (ultimoRxOlhoMs > 0) && ((millis() - ultimoRxOlhoMs) < TIMEOUT_DADO_OLHO_MS);
+  float uD = pacoteRecente ? (ultimoUltraDX10 / 10.0f) : -1.0f;
+  float uE = pacoteRecente ? (ultimoUltraEX10 / 10.0f) : -1.0f;
+  float uF = pacoteRecente ? (ultimoUltraFX10 / 10.0f) : -1.0f;
+  float uT = pacoteRecente ? (ultimoUltraTX10 / 10.0f) : -1.0f;
+
+  SerialMusculo.print("ULT:");
+  SerialMusculo.print(uD, 1);
+  SerialMusculo.print(",");
+  SerialMusculo.print(uE, 1);
+  SerialMusculo.print(",");
+  SerialMusculo.print(uF, 1);
+  SerialMusculo.print(",");
+  SerialMusculo.println(uT, 1);
+  ultimoEnvioUltraMusculoMs = millis();
+}
+
 // Le chave do kicker e envia estado periodico/por mudanca ao Musculo.
 void enviarEstadoKickerParaMusculo() {
   if ((millis() - ultimoEnvioKickerMusculoMs) < INTERVALO_ENVIO_KICKER_MS) {
@@ -405,6 +451,11 @@ void lerRespostaOlho() {
         byte stop = SerialOlho.read();
         if (stop == BYTE_PARA) {
           comunicacaoOlhoOK = true;
+          ultimoRxOlhoMs = millis();
+          ultimoUltraDX10 = pacote.uD;
+          ultimoUltraEX10 = pacote.uE;
+          ultimoUltraFX10 = pacote.uF;
+          ultimoUltraTX10 = pacote.uT;
           ultimoAnguloIrX10 = pacote.angulo;
           ultimaIntensidadeIrX10 = pacote.intensidade;
           ultimoErroGolGraus = pacote.erroGol / 10.0f;
@@ -598,6 +649,7 @@ void loop() {
   enviarGolParaMusculo();
   enviarLinhaParaMusculo();
   enviarIntensidadeParaMusculo();
+  enviarUltrasParaMusculo();
   enviarEstadoKickerParaMusculo();
   enviarEstadoParaOlho();
 
