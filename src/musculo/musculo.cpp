@@ -81,9 +81,6 @@ float ultraFcm = -1.0f;
 float ultraTcm = -1.0f;
 bool ultrasValidos = false;
 unsigned long ultimoRxUltraMs = 0;
-float ultimoAnguloIrRecebido = -999.0f;
-uint16_t repeticoesIr30 = 0;
-unsigned long inicioRepeticaoIr30Ms = 0;
 bool kickerRecebido = false;
 bool kickerAtivado = false;  // true quando chave acionada (valor 0 vindo da cabeca)
 bool pulsoKickerAtivo = false;
@@ -105,10 +102,6 @@ const unsigned long INTERVALO_OI_MS = 1000;
 const unsigned long TIMEOUT_COM_MS = 3000;
 const unsigned long TIMEOUT_LINHA_MS = 150;
 const unsigned long TIMEOUT_ULTRA_MS = 1000;
-const float ANGULO_IR_SUSPEITO_GRAUS = 30.0f;
-const float TOLERANCIA_ANGULO_IR_GRAUS = 2.0f;
-const unsigned long TIMEOUT_IR_TRAVADO_30_MS = 1200;
-const uint16_t REPETICOES_IR_TRAVADO_30 = 8;
 const int velocidade_maxima = 160;
 
 // Endereco e tamanho usados para persistir a bussola na EEPROM.
@@ -1011,38 +1004,18 @@ void processarMensagemCabeca(String msg) {
     if (novoAngulo < 0.0f) {
       irDetectado = false;
       anguloIr = -1.0f;
-      repeticoesIr30 = 0;
-      inicioRepeticaoIr30Ms = 0;
-      ultimoAnguloIrRecebido = -999.0f;
     } else {
-      bool perto30 = fabsf(novoAngulo - ANGULO_IR_SUSPEITO_GRAUS) <= TOLERANCIA_ANGULO_IR_GRAUS;
-      bool repetidoSemVariar = (ultimoAnguloIrRecebido >= 0.0f)
-                               && (fabsf(novoAngulo - ultimoAnguloIrRecebido) <= 1.0f);
-
-      if (perto30 && repetidoSemVariar) {
-        if (repeticoesIr30 == 0) {
-          inicioRepeticaoIr30Ms = millis();
-        }
-        repeticoesIr30++;
-      } else {
-        repeticoesIr30 = 0;
-        inicioRepeticaoIr30Ms = 0;
-      }
-
-      bool travadoEm30 = perto30
-                         && ((repeticoesIr30 >= REPETICOES_IR_TRAVADO_30)
-                             || (inicioRepeticaoIr30Ms > 0
-                                 && (millis() - inicioRepeticaoIr30Ms) >= TIMEOUT_IR_TRAVADO_30_MS));
-
-      if (travadoEm30) {
+      // Teste agressivo: rejeitar qualquer 30 exato ou muito proximo
+      bool eh30Graus = fabsf(novoAngulo - 30.0f) <= 1.0f;
+      
+      if (eh30Graus) {
+        // Descartar imediatamente como sem sinal de bola
         irDetectado = false;
         anguloIr = -1.0f;
       } else {
         irDetectado = true;
         anguloIr = novoAngulo;
       }
-
-      ultimoAnguloIrRecebido = novoAngulo;
     }
 
     comunicacaoCabecaOK = true;
