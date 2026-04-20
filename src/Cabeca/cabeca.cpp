@@ -5,7 +5,7 @@
 // Saida: mensagens de estado/dados para Musculo e comandos para Olho.
 #include <Arduino.h>
 #include <Wire.h>
-#include <Adafruit_QMC5883P.h>
+#include <math.h>
 
 #define RX_MUSCULO 44
 #define TX_MUSCULO 43
@@ -28,14 +28,93 @@
 #define I2C_SDA 8
 #define I2C_SCL 9
 
+// Inicializacao e configuracao da bussola.
+const uint8_t QMC5883P_ADDR = 0x2C;
+
+// Valores de calibração
+const float xOffset = 1547.0;
+const float yOffset = -1629.0;
+const float xScale  = 1.0465;
+const float yScale  = 0.9574;
+
+int head = 0;
+
+void writeReg(uint8_t reg, uint8_t value) {
+  Wire.beginTransmission(QMC5883P_ADDR);
+  Wire.write(reg);
+  Wire.write(value);
+  Wire.endTransmission();
+}
+
+uint8_t readReg(uint8_t reg) {
+  Wire.beginTransmission(QMC5883P_ADDR);
+  Wire.write(reg);
+  Wire.endTransmission(false);
+  Wire.requestFrom(QMC5883P_ADDR, (uint8_t)1);
+
+  if (Wire.available()) return Wire.read();
+  return 0;
+}
+
+void initQMC5883P() {
+  delay(20);
+
+  writeReg(0x29, 0x06);
+  writeReg(0x0B, 0x08);
+  writeReg(0x0A, 0xC3);
+
+  delay(20);
+}
+
+bool readQMC5883PData(int16_t &x, int16_t &y, int16_t &z) {
+  uint8_t status = readReg(0x09);
+
+  if ((status & 0x01) == 0) {
+    return false;
+  }
+
+  Wire.beginTransmission(QMC5883P_ADDR);
+  Wire.write(0x01);
+  Wire.endTransmission(false);
+  Wire.requestFrom(QMC5883P_ADDR, (uint8_t)6);
+
+  if (Wire.available() == 6) {
+    uint8_t x_lsb = Wire.read();
+    uint8_t x_msb = Wire.read();
+    uint8_t y_lsb = Wire.read();
+    uint8_t y_msb = Wire.read();
+    uint8_t z_lsb = Wire.read();
+    uint8_t z_msb = Wire.read();
+
+    x = (int16_t)((x_msb << 8) | x_lsb);
+    y = (int16_t)((y_msb << 8) | y_lsb);
+    z = (int16_t)((z_msb << 8) | z_lsb);
+    return true;
+  }
+
+  return false;
+}
+
+int calcularHead(int16_t xRaw, int16_t yRaw) {
+  float xCorr = (xRaw - xOffset) * xScale;
+  float yCorr = (yRaw - yOffset) * yScale;
+
+  float ang = atan2(-yCorr, xCorr) * 180.0 / PI;
+
+  if (ang < 0) ang += 360.0;
+
+  return (int)ang;
+}
+
+// Fim das configuracoes da bussola.
+
 const unsigned long DEBOUNCE_BOTAO_MS = 180;
 const unsigned long INTERVALO_OI_MS = 1000;
-const unsigned long INTERVALO_BUSSOLA_MS = 300;
+const unsigned long INTERVALO_BUSSOLA_MS = 50;
 
 HardwareSerial SerialMusculo(0);
 HardwareSerial SerialOlho(1);
 HardwareSerial SerialPe(2);
-Adafruit_QMC5883P compass;
 
 struct PacoteOlho {
   int16_t uD;
@@ -101,17 +180,7 @@ bool cameraOlhoOK = false;  // camera esta se comunicando com o olho
 bool kickerAtivado = false;
 int ultimoKickerEnviado = -1;
 float ultimoHeadingBussola = 0.0f;
-float ultimoX360 = 0.0f;
-float ultimoY360 = 0.0f;
 bool bussolaOK = false;
-float rawXFiltrado = 0.0f;
-float rawYFiltrado = 0.0f;
-bool filtroXYInicializado = false;
-
-int16_t minX = 32767;
-int16_t maxX = -32768;
-int16_t minY = 32767;
-int16_t maxY = -32768;
 
 const unsigned long INTERVALO_ENVIO_IR_MS = 120;
 const unsigned long INTERVALO_ENVIO_BUSSOLA_MS = 120;
@@ -121,7 +190,6 @@ const unsigned long INTERVALO_ENVIO_INT_MS = 120;
 const unsigned long INTERVALO_ENVIO_ULTRA_MS = 120;
 const unsigned long INTERVALO_ENVIO_KICKER_MS = 120;
 const unsigned long INTERVALO_ENVIO_ESTADO_OLHO_MS = 700;
-const float ALPHA_FILTRO_XY = 0.18f;
 const int16_t INTENSIDADE_MINIMA_IR_X10 = 80;  // 8.0
 const unsigned long TIMEOUT_DADO_OLHO_MS = 500;
 
@@ -130,63 +198,26 @@ void resetLeituraIrOlho() {
   ultimaIntensidadeIrX10 = 0;
 }
 
-// Normaliza qualquer angulo para a faixa [0, 360).
-float normalizarAngulo360(float anguloGraus) {
-  if (isnan(anguloGraus) || isinf(anguloGraus)) {
-    return 0.0f;
-  }
-
-  float resultado = fmod(anguloGraus, 360.0f);
-  if (resultado < 0.0f) {
-    resultado += 360.0f;
-  }
-  if (resultado >= 360.0f) {
-    resultado -= 360.0f;
-  }
-  return resultado;
-}
-
-// Inicializa e configura a bussola QMC5883P para leitura continua.
+// Inicializa e valida a bussola QMC5883P usando o mesmo fluxo do teste.
 bool iniciarBussola() {
-  if (!compass.begin()) {
-    return false;
+  initQMC5883P();
+
+  Serial.print("CHIP ID QMC5883P: 0x");
+  Serial.println(readReg(0x00), HEX);
+
+  int16_t x = 0;
+  int16_t y = 0;
+  int16_t z = 0;
+  for (uint8_t i = 0; i < 10; i++) {
+    if (readQMC5883PData(x, y, z)) {
+      return true;
+    }
+    delay(5);
   }
-
-  compass.setRange(QMC5883P_RANGE_8G);
-  compass.setMode(QMC5883P_MODE_CONTINUOUS);
-  compass.setODR(QMC5883P_ODR_50HZ);
-  compass.setOSR(QMC5883P_OSR_8);
-  compass.setDSR(QMC5883P_DSR_1);
-  minX = 32767;
-  maxX = -32768;
-  minY = 32767;
-  maxY = -32768;
-  filtroXYInicializado = false;
-  return true;
+  return false;
 }
 
-// Atualiza limites min/max dos eixos para calibracao dinamica.
-void atualizarCalibracaoXY(int16_t rawX, int16_t rawY) {
-  if (rawX < minX) minX = rawX;
-  if (rawX > maxX) maxX = rawX;
-  if (rawY < minY) minY = rawY;
-  if (rawY > maxY) maxY = rawY;
-}
-
-// Mapeia um eixo calibrado para escala normalizada de 0 a 360 graus.
-float eixoPara360(int16_t valor, int16_t minValor, int16_t maxValor) {
-  int32_t faixa = (int32_t)maxValor - (int32_t)minValor;
-  if (faixa < 10) {
-    return 0.0f;
-  }
-
-  float norm01 = ((float)valor - (float)minValor) / (float)faixa;
-  if (norm01 < 0.0f) norm01 = 0.0f;
-  if (norm01 > 1.0f) norm01 = 1.0f;
-  return norm01 * 360.0f;
-}
-
-// Le a bussola, aplica filtro, atualiza heading e publica debug no serial.
+// Le a bussola no formato do teste e atualiza o heading.
 void atualizarBussola() {
   if (!bussolaOK) {
     bussolaOK = iniciarBussola();
@@ -203,38 +234,21 @@ void atualizarBussola() {
   int16_t rawX = 0;
   int16_t rawY = 0;
   int16_t rawZ = 0;
-  if (!compass.getRawMagnetic(&rawX, &rawY, &rawZ)) {
-    bussolaOK = false;
+  if (!readQMC5883PData(rawX, rawY, rawZ)) {
     return;
   }
 
-  if (!filtroXYInicializado) {
-    rawXFiltrado = (float)rawX;
-    rawYFiltrado = (float)rawY;
-    filtroXYInicializado = true;
-  } else {
-    rawXFiltrado = (1.0f - ALPHA_FILTRO_XY) * rawXFiltrado + ALPHA_FILTRO_XY * (float)rawX;
-    rawYFiltrado = (1.0f - ALPHA_FILTRO_XY) * rawYFiltrado + ALPHA_FILTRO_XY * (float)rawY;
-  }
+  head = calcularHead(rawX, rawY);
+  ultimoHeadingBussola = (float)head;
 
-  int16_t rawXSuave = (int16_t)lroundf(rawXFiltrado);
-  int16_t rawYSuave = (int16_t)lroundf(rawYFiltrado);
-
-  atualizarCalibracaoXY(rawXSuave, rawYSuave);
-
-  ultimoX360 = eixoPara360(rawXSuave, minX, maxX);
-  ultimoY360 = eixoPara360(rawYSuave, minY, maxY);
-
-  float xCentro = ultimoX360 - 180.0f;
-  float yCentro = ultimoY360 - 180.0f;
-  ultimoHeadingBussola = normalizarAngulo360(atan2(yCentro, xCentro) * 180.0f / PI);
-
-  Serial.print("BUS X360:");
-  Serial.print(ultimoX360, 1);
-  Serial.print(" Y360:");
-  Serial.print(ultimoY360, 1);
-  Serial.print(" HDG:");
-  Serial.println(ultimoHeadingBussola, 1);
+  Serial.print("BUS X:");
+  Serial.print(rawX);
+  Serial.print(" Y:");
+  Serial.print(rawY);
+  Serial.print(" Z:");
+  Serial.print(rawZ);
+  Serial.print(" H:");
+  Serial.println(head);
 
   ultimoEnvioBussolaMs = millis();
 }

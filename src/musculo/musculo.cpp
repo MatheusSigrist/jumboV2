@@ -112,7 +112,6 @@ const int EEPROM_ADDR_BUSSOLA = 0;
 const float TOLERANCIA_ALINHAMENTO_GRAUS = 20.0f;
 const int VELOCIDADE_GIRO_ALINHAMENTO = VELOCIDADE_GIRO;
 const int SINAL_GIRO_PID = SINAL_GIRO;
-const float ALPHA_FILTRO_BUSSOLA = 0.12f;
 
 // Ganhos e saturacoes do PID usado para girar rumo ao gol.
 const float PID_BUS_KP = 1.0f;
@@ -431,10 +430,7 @@ int calcularSaidaPidBussola(float erroGraus) {
   return (u >= 0.0f) ? saida : -saida;
 }
 
-// Estado do filtro vetorial da bussola e telemetria de gol/linha.
-bool filtroBussolaInicializado = false;
-float bussolaFiltroX = 1.0f;
-float bussolaFiltroY = 0.0f;
+// Telemetria de gol/linha.
 float erroGolGraus = 0.0f;
 bool golDetectado = false;
 uint16_t golPixels = 0;
@@ -524,7 +520,7 @@ void desenharSubmenuCalibracao() {
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
   display.setCursor(0, 0);
-  display.println("=== CALIBRACAO ===");
+  display.println("== CALIBRACAO ==");
   display.println();
 
   // Primeiro nivel: escolhe entre gol, bussola, teste da camera ou voltar.
@@ -588,11 +584,11 @@ void desenharSubmenuCalibracao() {
       display.fillRect(96, 0, 32, 10, SSD1306_WHITE);
       display.setTextColor(SSD1306_BLACK);
       display.setCursor(98, 2);
-      display.println("VOLTAR");
+      display.println("VOLTA");
       display.setTextColor(SSD1306_WHITE);
     } else {
       display.setCursor(98, 2);
-      display.println("VOLTAR");
+      display.println("VOLTA");
     }
 
   // Segundo nivel: define se o gol de referencia sera amarelo ou azul.
@@ -625,11 +621,11 @@ void desenharSubmenuCalibracao() {
       display.fillRect(0, 54, 128, 10, SSD1306_WHITE);
       display.setTextColor(SSD1306_BLACK);
       display.setCursor(4, 56);
-      display.println("VOLTAR");
+      display.println("VOLTA");
       display.setTextColor(SSD1306_WHITE);
     } else {
       display.setCursor(4, 56);
-      display.println("VOLTAR");
+      display.println("VOLTA");
     }
 
   // Tela de diagnostico do IR vindo da Cabeca.
@@ -1032,34 +1028,19 @@ void processarMensagemCabeca(String msg) {
     return;
   }
 
-  // Leitura de bussola filtrada em coordenadas cartesianas para evitar saltos em 0/360.
+  // Leitura de bussola direta da cabeca (sem filtro, mesmo valor que a cabeca le).
   if (msg.startsWith("BUS:")) {
     String valorBus = msg.substring(4);
     valorBus.trim();
-    float angBus = normalizarAngulo360(valorBus.toFloat());
-
-    // Converte heading em vetor unitario.
-    float rad = angBus * PI / 180.0f;
-    float xNovo = cosf(rad);
-    float yNovo = sinf(rad);
-
-    // Aplica filtro exponencial no vetor e depois reconverte para angulo.
-    if (!filtroBussolaInicializado) {
-      bussolaFiltroX = xNovo;
-      bussolaFiltroY = yNovo;
-      filtroBussolaInicializado = true;
-    } else {
-      bussolaFiltroX = (1.0f - ALPHA_FILTRO_BUSSOLA) * bussolaFiltroX + ALPHA_FILTRO_BUSSOLA * xNovo;
-      bussolaFiltroY = (1.0f - ALPHA_FILTRO_BUSSOLA) * bussolaFiltroY + ALPHA_FILTRO_BUSSOLA * yNovo;
-    }
-
-    float angFiltrado = atan2f(bussolaFiltroY, bussolaFiltroX) * 180.0f / PI;
-    angFiltrado = normalizarAngulo360(angFiltrado);
-
-    headingBussolaTeste = (int)(angFiltrado + 0.5f);
+    float angBus = valorBus.toFloat();
+    
+    // Normaliza para faixa 0-360 e converte para inteiro.
+    angBus = normalizarAngulo360(angBus);
+    headingBussolaTeste = (int)(angBus + 0.5f);
     if (headingBussolaTeste >= 360) {
       headingBussolaTeste = 0;
     }
+    
     comunicacaoCabecaOK = true;
     ultimoRxCabeca = millis();
     return;
