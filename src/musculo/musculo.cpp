@@ -100,6 +100,7 @@ int itemSubMenu = 0;
 // Temporizacao da comunicacao e limites gerais de velocidade.
 const unsigned long INTERVALO_OI_MS = 1000;
 const unsigned long TIMEOUT_COM_MS = 3000;
+const unsigned long TIMEOUT_BUSSOLA_MS = 800;
 const unsigned long TIMEOUT_LINHA_MS = 150;
 const unsigned long TIMEOUT_ULTRA_MS = 1000;
 const int velocidade_maxima = 160;
@@ -129,6 +130,8 @@ const int VELOCIDADE_IR_FRONTAL_PWM = 180;
 
 // Referencia salva da bussola e estados auxiliares do controle.
 int headingBussolaSalvo = 0;
+bool bussolaValida = false;
+unsigned long ultimoRxBussolaMs = 0;
 float erroAlinhamentoGraus = 0.0f;
 bool alinhandoAgora = false;
 bool corGolPendenteEnvio = true;
@@ -345,6 +348,39 @@ float normalizarAngulo360(float ang) {
   while (ang >= 360.0f) ang -= 360.0f;
   while (ang < 0.0f) ang += 360.0f;
   return ang;
+}
+
+// Aceita apenas payload numerico simples para evitar toFloat() cair silenciosamente em 0.
+bool payloadNumericoValido(const String &texto) {
+  if (texto.length() == 0) {
+    return false;
+  }
+
+  bool encontrouDigito = false;
+  bool encontrouPonto = false;
+  for (size_t i = 0; i < texto.length(); i++) {
+    char c = texto.charAt(i);
+    if (c >= '0' && c <= '9') {
+      encontrouDigito = true;
+      continue;
+    }
+    if (c == '.' && !encontrouPonto) {
+      encontrouPonto = true;
+      continue;
+    }
+    if ((c == '+' || c == '-') && i == 0) {
+      continue;
+    }
+    return false;
+  }
+
+  return encontrouDigito;
+}
+
+void atualizarValidadeBussola() {
+  if (bussolaValida && (millis() - ultimoRxBussolaMs) > TIMEOUT_BUSSOLA_MS) {
+    bussolaValida = false;
+  }
 }
 
 // Ajusta o angulo da bola para um angulo de comando mais estavel de movimento.
@@ -706,10 +742,18 @@ void desenharSubmenuCalibracao() {
     display.setCursor(0, 0);
     display.println("BUSSOLA AGORA");
     display.println();
+    display.print("COM: ");
+    display.println((comunicacaoCabecaOK && bussolaValida) ? "OK" : "SEM DADO");
     display.setTextSize(3);
     display.setCursor(8, 20);
-    display.print(headingBussolaTeste);
-    display.print((char)247);
+    if (bussolaValida) {
+      display.print(headingBussolaTeste);
+      display.print((char)247);
+    } else {
+      display.setTextSize(2);
+      display.setCursor(8, 24);
+      display.print("---");
+    }
     display.setTextSize(1);
     display.setCursor(0, 54);
     display.print("SALVO:");
@@ -1032,6 +1076,12 @@ void processarMensagemCabeca(String msg) {
   if (msg.startsWith("BUS:")) {
     String valorBus = msg.substring(4);
     valorBus.trim();
+
+    if (!payloadNumericoValido(valorBus)) {
+      bussolaValida = false;
+      return;
+    }
+
     float angBus = valorBus.toFloat();
     
     // Normaliza para faixa 0-360 e converte para inteiro.
@@ -1040,6 +1090,9 @@ void processarMensagemCabeca(String msg) {
     if (headingBussolaTeste >= 360) {
       headingBussolaTeste = 0;
     }
+
+    bussolaValida = true;
+    ultimoRxBussolaMs = millis();
     
     comunicacaoCabecaOK = true;
     ultimoRxCabeca = millis();
@@ -1233,6 +1286,7 @@ void loop() {
 
   // Atualiza entradas vindas da Cabeca e envia configuracoes pendentes.
   lerSerialCabeca();
+  atualizarValidadeBussola();
   atualizarValidadeLinha();
   enviarCorGolParaCabeca();
   atualizarKicker();
@@ -1240,6 +1294,7 @@ void loop() {
   // Se a Cabeca ficar silenciosa alem do timeout, derruba o estado de comunicacao.
   if ((millis() - ultimoRxCabeca) > TIMEOUT_COM_MS) {
     comunicacaoCabecaOK = false;
+    bussolaValida = false;
   }
 
   if (estadoAtual == INICIAR && comunicacaoCabecaOK) {

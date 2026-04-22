@@ -27,47 +27,100 @@
 #define KICKER_PIN 45
 #define I2C_SDA 8
 #define I2C_SCL 9
+#define I2C_FREQ 100000
 
 // Inicializacao e configuracao da bussola.
 const uint8_t QMC5883P_ADDR = 0x2C;
 
-// Valores de calibração
-const float xOffset = 1547.0;
-const float yOffset = -1629.0;
-const float xScale  = 1.0465;
-const float yScale  = 0.9574;
+// Valores de calibracao validados no teste dedicado.
+const float xOffset = 682.5000;
+const float yOffset = 143.5000;
+const float xScale  = 1.005451;
+const float yScale  = 0.994608;
 
 int head = 0;
 
-void writeReg(uint8_t reg, uint8_t value) {
+bool writeReg(uint8_t reg, uint8_t value) {
   Wire.beginTransmission(QMC5883P_ADDR);
   Wire.write(reg);
   Wire.write(value);
-  Wire.endTransmission();
+  uint8_t err = Wire.endTransmission(true);
+
+  if (err != 0) {
+    Serial.print("Erro I2C writeReg reg 0x");
+    Serial.print(reg, HEX);
+    Serial.print(" -> codigo ");
+    Serial.println(err);
+    return false;
+  }
+  return true;
 }
 
-uint8_t readReg(uint8_t reg) {
+bool readReg(uint8_t reg, uint8_t &value) {
   Wire.beginTransmission(QMC5883P_ADDR);
   Wire.write(reg);
-  Wire.endTransmission(false);
-  Wire.requestFrom(QMC5883P_ADDR, (uint8_t)1);
 
-  if (Wire.available()) return Wire.read();
-  return 0;
+  uint8_t err = Wire.endTransmission(false);
+  if (err != 0) {
+    Serial.print("Erro I2C readReg(endTransmission) reg 0x");
+    Serial.print(reg, HEX);
+    Serial.print(" -> codigo ");
+    Serial.println(err);
+    return false;
+  }
+
+  size_t n = Wire.requestFrom((int)QMC5883P_ADDR, 1, true);
+  if (n != 1) {
+    Serial.print("Erro I2C readReg(requestFrom) reg 0x");
+    Serial.print(reg, HEX);
+    Serial.print(" -> recebidos ");
+    Serial.println((int)n);
+    return false;
+  }
+
+  value = Wire.read();
+  return true;
 }
 
-void initQMC5883P() {
+void scanI2C() {
+  Serial.println("Escaneando barramento I2C...");
+  uint8_t found = 0;
+
+  for (uint8_t addr = 1; addr < 127; addr++) {
+    Wire.beginTransmission(addr);
+    uint8_t err = Wire.endTransmission();
+
+    if (err == 0) {
+      Serial.print("Dispositivo encontrado em 0x");
+      if (addr < 16) Serial.print("0");
+      Serial.println(addr, HEX);
+      found++;
+    }
+  }
+
+  if (found == 0) {
+    Serial.println("Nenhum dispositivo I2C encontrado.");
+  }
+}
+
+bool initQMC5883P() {
   delay(20);
 
-  writeReg(0x29, 0x06);
-  writeReg(0x0B, 0x08);
-  writeReg(0x0A, 0xC3);
+  bool ok = true;
+  ok &= writeReg(0x29, 0x06);
+  ok &= writeReg(0x0B, 0x08);
+  ok &= writeReg(0x0A, 0xC3);
 
   delay(20);
+  return ok;
 }
 
 bool readQMC5883PData(int16_t &x, int16_t &y, int16_t &z) {
-  uint8_t status = readReg(0x09);
+  uint8_t status = 0;
+
+  if (!readReg(0x09, status)) {
+    return false;
+  }
 
   if ((status & 0x01) == 0) {
     return false;
@@ -75,24 +128,32 @@ bool readQMC5883PData(int16_t &x, int16_t &y, int16_t &z) {
 
   Wire.beginTransmission(QMC5883P_ADDR);
   Wire.write(0x01);
-  Wire.endTransmission(false);
-  Wire.requestFrom(QMC5883P_ADDR, (uint8_t)6);
-
-  if (Wire.available() == 6) {
-    uint8_t x_lsb = Wire.read();
-    uint8_t x_msb = Wire.read();
-    uint8_t y_lsb = Wire.read();
-    uint8_t y_msb = Wire.read();
-    uint8_t z_lsb = Wire.read();
-    uint8_t z_msb = Wire.read();
-
-    x = (int16_t)((x_msb << 8) | x_lsb);
-    y = (int16_t)((y_msb << 8) | y_lsb);
-    z = (int16_t)((z_msb << 8) | z_lsb);
-    return true;
+  uint8_t err = Wire.endTransmission(false);
+  if (err != 0) {
+    Serial.print("Erro I2C leitura bloco -> codigo ");
+    Serial.println(err);
+    return false;
   }
 
-  return false;
+  size_t n = Wire.requestFrom((int)QMC5883P_ADDR, 6, true);
+  if (n != 6) {
+    Serial.print("Leitura incompleta: ");
+    Serial.println((int)n);
+    return false;
+  }
+
+  uint8_t x_lsb = Wire.read();
+  uint8_t x_msb = Wire.read();
+  uint8_t y_lsb = Wire.read();
+  uint8_t y_msb = Wire.read();
+  uint8_t z_lsb = Wire.read();
+  uint8_t z_msb = Wire.read();
+
+  x = (int16_t)((x_msb << 8) | x_lsb);
+  y = (int16_t)((y_msb << 8) | y_lsb);
+  z = (int16_t)((z_msb << 8) | z_lsb);
+
+  return true;
 }
 
 int calcularHead(int16_t xRaw, int16_t yRaw) {
@@ -200,10 +261,18 @@ void resetLeituraIrOlho() {
 
 // Inicializa e valida a bussola QMC5883P usando o mesmo fluxo do teste.
 bool iniciarBussola() {
-  initQMC5883P();
+  if (!initQMC5883P()) {
+    Serial.println("Falha ao inicializar QMC5883P.");
+    return false;
+  }
 
-  Serial.print("CHIP ID QMC5883P: 0x");
-  Serial.println(readReg(0x00), HEX);
+  uint8_t chipID = 0;
+  if (readReg(0x00, chipID)) {
+    Serial.print("CHIP ID QMC5883P: 0x");
+    Serial.println(chipID, HEX);
+  } else {
+    Serial.println("Falha ao ler CHIP ID da QMC5883P.");
+  }
 
   int16_t x = 0;
   int16_t y = 0;
@@ -620,6 +689,8 @@ void setup() {
   SerialOlho.begin(9600, SERIAL_8N1, RX_OLHO, TX_OLHO);
   SerialPe.begin(BAUD_PE_CABECA, SERIAL_8N1, RX_PE, TX_PE);
   Wire.begin(I2C_SDA, I2C_SCL);
+  Wire.setClock(I2C_FREQ);
+  Wire.setTimeOut(20);
 
   pinMode(BOTAO_1, INPUT_PULLUP);
   pinMode(BOTAO_2, INPUT_PULLUP);
@@ -627,6 +698,7 @@ void setup() {
   pinMode(KICKER_PIN, INPUT_PULLUP);
 
   Serial.println("Cabeca principal em modo minimo de comunicacao");
+  scanI2C();
   bussolaOK = iniciarBussola();
   if (!bussolaOK) {
     Serial.println("Aviso: QMC5883P nao detectada na inicializacao.");
