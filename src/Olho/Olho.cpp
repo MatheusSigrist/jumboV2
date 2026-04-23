@@ -209,9 +209,14 @@ struct Pacote {
   int16_t uT;
   int16_t angulo;
   int16_t intensidade;
-  int16_t erroGol;
-  uint16_t pixelsGol;
-  uint8_t golDetectado;
+  // ===== NOVOS: dados de camera (bola + 2 gols) =====
+  int16_t ballAngle;
+  uint16_t ballDist;
+  int16_t blueAngle;
+  uint16_t blueDist;
+  int16_t yellowAngle;
+  uint16_t yellowDist;
+  // ===== FIM novos dados camera =====
   uint8_t cameraOK;  // 1 = camera enviando dados, 0 = sem sinal
 };
 
@@ -222,10 +227,13 @@ struct PacoteEstado {
 };
 
 // Dados recebidos da camera:
-// [gol_detectado (1B)] [erro_gol_x10 (int16, big-endian)] [pixels (uint16, big-endian)]
-bool golDetectadoCamera = false;
-float erroGolCamera = 0.0;
-uint16_t pixelsGolCamera = 0;
+// [BALL_A(int16)][BALL_D(uint16)][BLUE_A(int16)][BLUE_D(uint16)][YELLOW_A(int16)][YELLOW_D(uint16)]
+int16_t ballCameraAngle = 0;
+uint16_t ballCameraDist = 0;
+int16_t blueCameraAngle = -999;
+uint16_t blueCameraDist = 0;
+int16_t yellowCameraAngle = -999;
+uint16_t yellowCameraDist = 0;
 unsigned long ultimoRxCameraMs = 0;  // timestamp do ultimo pacote valido recebido da camera
 String bufferHandshakeCabeca = "";
 unsigned long ultimoByteHandshakeCabeca = 0;
@@ -267,13 +275,7 @@ void ProcessarPingCabeca() {
   }
 }
 
-// Envia para a camera a cor de gol selecionada atualmente.
-void EnviarCorParaCamera() {
-  Serial2.write(BYTE_INICIA);
-  Serial2.write(ID_PLACA_OLHO);
-  Serial2.write(corGolAzul ? 1 : 0);
-  Serial2.write(BYTE_PARA);
-}
+// [Removido] Envia para a camera - agora camera envia 6 valores diretos para olho
 
 // Salva a cor de gol na EEPROM para manter configuracao apos reboot.
 void SalvarCorGolEEPROM() {
@@ -303,7 +305,6 @@ void LeituraSerial() {
             if (novaCorGol != corGolAzul) {
               corGolAzul = novaCorGol;
               SalvarCorGolEEPROM();
-              EnviarCorParaCamera();
             }
           }
         }
@@ -312,10 +313,11 @@ void LeituraSerial() {
   }
 }
 
-// Le pacote da camera com deteccao do gol, erro angular e pixels do blob.
+// Le pacote da camera com dados de BOLA + 2 GOLS (ângulo e distância cada)
 void LeituraCamera() {
-  // Protocolo camera: [0xAA][ID=0x03][5 bytes payload][0x55]
-  while (Serial2.available() >= 8) {
+  // Protocolo camera: [0xAA][ID=0x03][12 bytes payload][0x55]
+  // Payload: [BALL_A(2B)][BALL_D(2B)][BLUE_A(2B)][BLUE_D(2B)][YELLOW_A(2B)][YELLOW_D(2B)]
+  while (Serial2.available() >= 15) {  // 1 + 1 + 12 + 1 = 15 bytes totais
     if (Serial2.read() != BYTE_INICIA) continue;
 
     byte id = Serial2.read();
@@ -323,25 +325,29 @@ void LeituraCamera() {
       continue;
     }
 
-    byte payload[5];
-    Serial2.readBytes(payload, 5);
+    byte payload[12];
+    Serial2.readBytes(payload, 12);
     byte stop = Serial2.read();
     if (stop != BYTE_PARA) {
       continue;
     }
 
-    golDetectadoCamera = (payload[0] != 0);
-
-    int16_t erroRaw = (int16_t)((payload[1] << 8) | payload[2]);
-    erroGolCamera = erroRaw / 10.0;
-
-    pixelsGolCamera = (uint16_t)((payload[3] << 8) | payload[4]);
-    ultimoRxCameraMs = millis();  // marca que camea esta viva
+    // Desempacota dados em big-endian (como enviado pela camera)
+    ballCameraAngle = (int16_t)((payload[0] << 8) | payload[1]);
+    ballCameraDist = (uint16_t)((payload[2] << 8) | payload[3]);
+    
+    blueCameraAngle = (int16_t)((payload[4] << 8) | payload[5]);
+    blueCameraDist = (uint16_t)((payload[6] << 8) | payload[7]);
+    
+    yellowCameraAngle = (int16_t)((payload[8] << 8) | payload[9]);
+    yellowCameraDist = (uint16_t)((payload[10] << 8) | payload[11]);
+    
+    ultimoRxCameraMs = millis();  // marca que camera esta viva
   }
 }
 
 
-// Monta e envia para a Cabeca um pacote com ultras, IR e dados de gol.
+// Monta e envia para a Cabeca um pacote com ultras, IR e dados de camera (bola + 2 gols).
 void enviarDados() { 
   Pacote p;
 
@@ -351,11 +357,16 @@ void enviarDados() {
   p.uT = (int16_t)round(ultraT * 10.0);
   p.angulo = (int16_t)round(filtrarAnguloBola() * 10.0);
   p.intensidade = (int16_t)round(intensidade * 10.0);
-
-  int16_t erroGolRaw = (int16_t)round(erroGolCamera * 10.0);
-  p.erroGol = erroGolRaw;
-  p.pixelsGol = pixelsGolCamera;
-  p.golDetectado = golDetectadoCamera ? 1 : 0;
+  
+  // ===== Dados de camera =====
+  p.ballAngle = ballCameraAngle;
+  p.ballDist = ballCameraDist;
+  p.blueAngle = blueCameraAngle;
+  p.blueDist = blueCameraDist;
+  p.yellowAngle = yellowCameraAngle;
+  p.yellowDist = yellowCameraDist;
+  // ===== FIM dados camera =====
+  
   p.cameraOK = ((ultimoRxCameraMs > 0) && ((millis() - ultimoRxCameraMs) < 3000)) ? 1 : 0;
 
   Serial1.write(BYTE_INICIA);
@@ -370,7 +381,7 @@ void enviarDados() {
 
 
 
-// Inicializa pinos/seriais e sincroniza cor inicial com a camera.
+// Inicializa pinos/seriais (sem sincronizar cor com camera)
 void setup() {
     for (int i = 0; i < NUM_SENSORES; i++)
       pinMode(sensoresTSOP[i], INPUT);
@@ -380,10 +391,6 @@ void setup() {
 
     Serial1.begin(9600, SERIAL_8N1, RX_CABECA, TX_CABECA);
     Serial2.begin(19200, SERIAL_8N1, RX_CAMERA, TX_CAMERA);
-
-    // Ao ligar, envia uma vez a cor salva para camera
-    delay(50);
-    EnviarCorParaCamera();
 }
 
 // Laco principal: handshake, leituras de sensores e envio de pacote.

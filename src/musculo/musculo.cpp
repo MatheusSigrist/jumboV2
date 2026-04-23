@@ -87,6 +87,17 @@ bool pulsoKickerAtivo = false;
 unsigned long inicioPulsoKickerMs = 0;
 unsigned long ultimoDisparoKickerMs = 0;
 
+// ===== NOVOS: dados de camera (bola + 2 gols) =====
+int16_t cameraBallAngle = -999;
+uint16_t cameraBallDist = 0;
+int16_t cameraBlueAngle = -999;
+uint16_t cameraBlueDist = 0;
+int16_t cameraYellowAngle = -999;
+uint16_t cameraYellowDist = 0;
+bool cameraDadosValidos = false;
+unsigned long ultimoRxCameraMs = 0;
+// ===== FIM novos dados camera =====
+
 // Estados principais da interface/operacao.
 enum Estado { MENU, CALIBRACAO, INICIAR };
 Estado estadoAtual = MENU;
@@ -712,30 +723,40 @@ void desenharSubmenuCalibracao() {
     }
     display.println("BTN1/2/3 VOLTAR");
 
-  // Tela de diagnostico da camera, sem alteracao de parametros.
+  // Tela de diagnostico da camera, mostrando os 6 dados (bola + 2 gols: angulo e distancia).
   } else if (subMenuCalibracao == SUBMENU_CAMERA) {
     display.clearDisplay();
     display.setTextSize(1);
     display.setTextColor(SSD1306_WHITE);
     display.setCursor(0, 0);
-    display.println("=== TESTE CAMERA ===");
-    display.println();
-    display.print("MUSC<->CAB: ");
-    display.println(comunicacaoCabecaOK ? "OK" : "FALHA");
-    display.print("CAM->OLHO:  ");
-    display.println(cameraOK ? "OK" : "SEM SINAL");
-    display.print("GOL: ");
-    display.println(golDetectado ? "DETECTADO" : "NAO VE");
-    display.print("ERRO: ");
-    if (golDetectado) {
-      display.print(erroGolGraus, 1);
-      display.println(" deg");
+    display.println("TESTE CAM");
+    
+    // Verifica timeout dos dados
+    bool dataTimeout = (ultimoRxCameraMs == 0) || ((millis() - ultimoRxCameraMs) > 1000);
+
+    display.setTextSize(2);
+    display.setCursor(0, 16);
+    
+    if (!dataTimeout) {
+      // Mostra os 6 dados em formato compacto para caber com fonte maior.
+      display.print("B");
+      display.print(cameraBallAngle);
+      display.print("/");
+      display.println(cameraBallDist);
+      
+      display.print("A");
+      display.print(cameraBlueAngle);
+      display.print("/");
+      display.println(cameraBlueDist);
+      
+      display.print("M");
+      display.print(cameraYellowAngle);
+      display.print("/");
+      display.println(cameraYellowDist);
     } else {
-      display.println("---");
+      display.println("SEM");
+      display.println("SINAL");
     }
-    display.print("PIXELS: ");
-    display.println(golPixels);
-    display.println("BTN1/2 VOLTAR");
 
   // Tela de calibracao da bussola: mostra leitura atual e valor salvo.
   } else {
@@ -1185,7 +1206,52 @@ void processarMensagemCabeca(String msg) {
       comunicacaoCabecaOK = true;
       ultimoRxCabeca = millis();
     }
+    return;
   }
+
+  // ===== NOVO: dados de camera (bola + 2 gols) =====
+  // CAM:ballAngle,ballDist,blueAngle,blueDist,yellowAngle,yellowDist,cameraOK
+  if (msg.startsWith("CAM:")) {
+    String payload = msg.substring(4);
+    int p1 = payload.indexOf(',');
+    int p2 = payload.indexOf(',', p1 + 1);
+    int p3 = payload.indexOf(',', p2 + 1);
+    int p4 = payload.indexOf(',', p3 + 1);
+    int p5 = payload.indexOf(',', p4 + 1);
+    int p6 = payload.indexOf(',', p5 + 1);
+    
+    if (p1 > 0 && p2 > p1 && p3 > p2 && p4 > p3 && p5 > p4 && p6 > p5) {
+      String sBallA = payload.substring(0, p1);
+      String sBallD = payload.substring(p1 + 1, p2);
+      String sBlueA = payload.substring(p2 + 1, p3);
+      String sBlueD = payload.substring(p3 + 1, p4);
+      String sYellA = payload.substring(p4 + 1, p5);
+      String sYellD = payload.substring(p5 + 1, p6);
+      String sCamOK = payload.substring(p6 + 1);
+      
+      sBallA.trim();
+      sBallD.trim();
+      sBlueA.trim();
+      sBlueD.trim();
+      sYellA.trim();
+      sYellD.trim();
+      sCamOK.trim();
+
+      cameraBallAngle = (int16_t)sBallA.toInt();
+      cameraBallDist = (uint16_t)sBallD.toInt();
+      cameraBlueAngle = (int16_t)sBlueA.toInt();
+      cameraBlueDist = (uint16_t)sBlueD.toInt();
+      cameraYellowAngle = (int16_t)sYellA.toInt();
+      cameraYellowDist = (uint16_t)sYellD.toInt();
+      cameraDadosValidos = (sCamOK == "1");
+      ultimoRxCameraMs = millis();
+
+      comunicacaoCabecaOK = true;
+      ultimoRxCabeca = millis();
+    }
+    return;
+  }
+  // ===== FIM dados camera =====
 }
 
 // Acumula bytes da serial da Cabeca e despacha mensagens completas por linha.

@@ -1,8 +1,3 @@
-# Script de teste da camera (OpenMV).
-# Funcao: detectar gol por cor (azul/amarelo), calcular erro angular e
-# enviar pacote serial para a placa Olho no protocolo AA/ID/payload/55.
-# Entrada: imagem da camera + selecao de cor recebida via UART.
-# Saida: gol_detectado, erro_gol e pixels enviados para o robo.
 import sensor
 import time
 import math
@@ -10,112 +5,229 @@ import struct
 from machine import UART
 
 # ===== COMUNICAÇÃO SERIAL COM OLHO =====
-# UART1: TX=P3, RX=P4 (pinos padrão RT1062)
 uart_olho = UART(1, 19200, timeout_char=200)
 
-# ===== PROTOCOLO =====
+# ===== PROTOCOLO SERIAL =====
 BYTE_INICIA = 0xAA
 BYTE_PARA = 0x55
-ID_PLACA_CAMERA = 0x03  # Identificador único da câmera
+ID_PLACA_CAMERA = 0x03
 
-# ===== CONFIGURAÇÃO =====
+# =========================================================
+# CONFIGURAÇÕES GERAIS
+# =========================================================
+
 R = 105
-cx = 155
-cy = 133
+cx = 172
+cy = 110
 R2 = R * R
-# ========================
 
-# ===== SELETOR DE COR (será recebido da OLHO) =====
-AZUL = False  # Padrão: amarelo. Será atualizado via serial
+DEBUG = True
+center = [172, 110]
+
+# =========================================================
+# ZONA DA BOLA
+# =========================================================
+BALL_ZONE_INNER = 25
+BALL_ZONE_OUTER = 90
+
+BALL_ZONE_INNER2 = BALL_ZONE_INNER * BALL_ZONE_INNER
+BALL_ZONE_OUTER2 = BALL_ZONE_OUTER * BALL_ZONE_OUTER
+
+# =========================================================
+# ZONA DOS GOLS
+# =========================================================
+GOAL_ZONE_OUTER = 120
+GOAL_ZONE_OUTER2 = GOAL_ZONE_OUTER * GOAL_ZONE_OUTER
+
+# =========================================================
+# FUNÇÕES AUXILIARES
+# =========================================================
+
+def calc_goal_angle_and_distance(x, y, center_x, center_y):
+    """
+    GOLS:
+    Mantém a lógica antiga:
+    - ângulo em faixa negativa/positiva
+    """
+    dx = x - center_x
+    dy = y - center_y
+
+    angle = -((((math.atan2(dx, dy) * 180) / math.pi) + 360) % 360 - 180)
+    distance = math.sqrt(dx**2 + dy**2)
+
+    return int(angle), int(distance)
+
+
+def calc_ball_angle_and_distance(x, y, center_x, center_y):
+    """
+    BOLA:
+    - 0 a 359 graus
+    - corrigida para compensar a imagem espelhada
+    """
+    dx = x - center_x
+    dy = y - center_y
+
+    angle = (360 - ((math.degrees(math.atan2(dx, dy)) + 360) % 360) + 180) % 360
+
+    # corrige o espelhamento lateral da imagem
+    angle = (360 - angle) % 360
+
+    distance = math.sqrt(dx**2 + dy**2)
+
+    return int(angle), int(distance)
+
+
+def is_in_ball_zone(x, y):
+    dx = x - center[0]
+    dy = y - center[1]
+    d2 = dx * dx + dy * dy
+    return (d2 >= BALL_ZONE_INNER2) and (d2 <= BALL_ZONE_OUTER2)
+
+
+def is_in_goal_zone(x, y):
+    dx = x - center[0]
+    dy = y - center[1]
+    d2 = dx * dx + dy * dy
+    return (d2 <= GOAL_ZONE_OUTER2)
+
+
+def find_best_ball_blob_in_zone(img, threshold, pixels_threshold, area_threshold,
+                                merge, margin, min_pixels=None, max_pixels=None):
+    best_blob = None
+    best_perimeter = 0
+
+    for blob in img.find_blobs([threshold],
+                               pixels_threshold=pixels_threshold,
+                               area_threshold=area_threshold,
+                               merge=merge,
+                               margin=margin):
+
+        px = blob.pixels()
+
+        if min_pixels is not None and px < min_pixels:
+            continue
+        if max_pixels is not None and px > max_pixels:
+            continue
+
+        if not is_in_ball_zone(blob.cx(), blob.cy()):
+            continue
+
+        if blob.perimeter() > best_perimeter:
+            best_perimeter = blob.perimeter()
+            best_blob = blob
+
+    return best_blob
+
+
+def find_best_goal_blob_in_zone(img, threshold, pixels_threshold, area_threshold,
+                                merge, margin):
+    best_blob = None
+    best_pixels = 0
+
+    for blob in img.find_blobs([threshold],
+                               pixels_threshold=pixels_threshold,
+                               area_threshold=area_threshold,
+                               merge=merge,
+                               margin=margin):
+
+        px = blob.pixels()
+
+        if not is_in_goal_zone(blob.cx(), blob.cy()):
+            continue
+
+        if px > best_pixels:
+            best_pixels = px
+            best_blob = blob
+
+    return best_blob
+
+
+def draw_blob_info(img, blob, color_rgb, label, angle, distance, extra_text=""):
+    img.draw_rectangle(blob.rect(), color=color_rgb, thickness=2)
+    img.draw_cross(blob.cx(), blob.cy(), color=color_rgb, size=10, thickness=2)
+
+    text1 = "{} A:{} D:{}".format(label, angle, distance)
+    img.draw_string(blob.x(), max(blob.y() - 20, 0), text1, color=color_rgb, scale=1)
+
+    if extra_text:
+        img.draw_string(blob.x(), max(blob.y() - 8, 0), extra_text, color=color_rgb, scale=1)
+
+
+def enviar_dados_visao(ball_angle, ball_dist, blue_angle, blue_dist, yellow_angle, yellow_dist):
+    """
+    Envia dados de BOLA + 2 GOLS via serial para placa OLHO
+    Estrutura: [BALL_A(h)][BALL_D(H)][BLUE_A(h)][BLUE_D(H)][YELLOW_A(h)][YELLOW_D(H)]
+    h = int16 (ângulo), H = uint16 (distância)
+    Total: 2+2+2+2+2+2 = 12 bytes de dados
+    """
+    # Normaliza ângulos para range -180 a 180 (compatível com int16)
+    ball_a_raw = int(ball_angle) if ball_angle is not None else -999
+    ball_d_raw = int(ball_dist) if ball_dist is not None else 0
+    blue_a_raw = int(blue_angle) if blue_angle is not None else -999
+    blue_d_raw = int(blue_dist) if blue_dist is not None else 0
+    yellow_a_raw = int(yellow_angle) if yellow_angle is not None else -999
+    yellow_d_raw = int(yellow_dist) if yellow_dist is not None else 0
+
+    # Limita valores para range válido de int16/uint16
+    ball_a_raw = max(-32768, min(32767, ball_a_raw))
+    ball_d_raw = max(0, min(65535, ball_d_raw))
+    blue_a_raw = max(-32768, min(32767, blue_a_raw))
+    blue_d_raw = max(0, min(65535, blue_d_raw))
+    yellow_a_raw = max(-32768, min(32767, yellow_a_raw))
+    yellow_d_raw = max(0, min(65535, yellow_d_raw))
+
+    # Empacota dados: > = big-endian, h = int16, H = uint16
+    msg = struct.pack(">hHhHhH", 
+                      ball_a_raw, ball_d_raw,
+                      blue_a_raw, blue_d_raw,
+                      yellow_a_raw, yellow_d_raw)
+
+    # Framing: BYTE_INICIA + ID + dados(12) + BYTE_PARA
+    buffer = bytearray(1 + 1 + 12 + 1)
+    buffer[0] = BYTE_INICIA
+    buffer[1] = ID_PLACA_CAMERA
+    buffer[2:14] = msg
+    buffer[14] = BYTE_PARA
+
+    uart_olho.write(buffer)
+
+
+# =========================================================
+# THRESHOLDS
+# =========================================================
+
+thresholdb = [15, 20, -11, 15, -20, 0]   # azul
+thresholdy = [47, 50, 8, 20, 45, 5]      # amarelo
+thresholdo = [31, 48, -9, 27, 17, 35]    # laranja
+
+# =========================================================
+# CÂMERA
+# =========================================================
 
 sensor.reset()
 sensor.set_pixformat(sensor.RGB565)
 sensor.set_framesize(sensor.QVGA)
-sensor.skip_frames(time=2000)
+sensor.skip_frames(time=1000)
+
+sensor.set_auto_whitebal(False, rgb_gain_db=(62, 60, 64))
+sensor.set_auto_exposure(False, exposure_us=25000)
+sensor.set_auto_gain(False, gain_db=10)
+
+print("RGB gain:", sensor.get_rgb_gain_db())
+print("Exposure:", sensor.get_exposure_us())
+print("Gain:", sensor.get_gain_db())
+
+sensor.skip_frames(time=1000)
 
 clock = time.clock()
+print("Iniciando detecção...")
 
-# Ponto fixo
-goal_x = 155
-goal_y = 115
-
-# Thresholds (LAB)
-blue_threshold   = (40, 70, -15, 15, -40, -5)
-yellow_threshold = (70, 100, -10, 30, 20, 50)
-
-# ===== FILTRO DE "GOL" =====
-MIN_GOAL_PIXELS = 400
-MIN_GOAL_AREA   = 100
-
-# ===== LIMITADOR DE FPS =====
-TARGET_FPS = 20
-FRAME_MS = int(1000 / TARGET_FPS)
-
-# ===== VARIÁVEIS DE RESULTADO =====
-gol_detectado = False
-erro_gol = 0
-pixels_detectados = 0
-
-
-def enviar_dados_gol():
-    """Envia dados do gol detectado para a placa Olho"""
-    # Estrutura: [gol_detectado (bool=1B)] [erro_gol (int16=2B)] [pixels (uint16=2B)]
-    # > = big-endian, b = int8, h = int16, H = uint16
-    erro_raw = int(erro_gol * 10)
-    if erro_raw > 32767:
-        erro_raw = 32767
-    elif erro_raw < -32768:
-        erro_raw = -32768
-
-    if pixels_detectados > 65535:
-        pixels_raw = 65535
-    elif pixels_detectados < 0:
-        pixels_raw = 0
-    else:
-        pixels_raw = pixels_detectados
-
-    msg = struct.pack(">bhH", 1 if gol_detectado else 0, erro_raw, pixels_raw)
-    
-    # Framing: BYTE_INICIA + ID + dados + BYTE_PARA
-    buffer = bytearray(1 + 1 + 5 + 1)
-    buffer[0] = BYTE_INICIA
-    buffer[1] = ID_PLACA_CAMERA
-    buffer[2:7] = msg
-    buffer[7] = BYTE_PARA
-    
-    uart_olho.write(buffer)
-
-
-def receber_selecao_cor():
-    """Recebe bool AZUL da placa Olho"""
-    global AZUL
-
-    # Descarta bytes ate encontrar BYTE_INICIA
-    while uart_olho.any():
-        b = uart_olho.read(1)
-        if b is None:
-            break
-        if b[0] == BYTE_INICIA:
-            # Pacote: [ID(1)] [bool_azul(1)] [BYTE_PARA(1)] = 3 bytes restantes
-            pacote = uart_olho.read(3)
-            if pacote is None or len(pacote) < 3:
-                break
-            id_placa = pacote[0]
-            bool_azul = pacote[1]
-            byte_para = pacote[2]
-            if id_placa == 0x01 and byte_para == BYTE_PARA:
-                AZUL = bool(bool_azul)
-                print("COR ATUALIZADA: %s" % ("AZUL" if AZUL else "AMARELO"))
-            break
-
+# =========================================================
+# LOOP PRINCIPAL
+# =========================================================
 
 while True:
     clock.tick()
-    t0 = time.ticks_ms()
-
-    # Verifica se recebeu nova seleção de cor
-    receber_selecao_cor()
-
     img = sensor.snapshot()
 
     # Máscara quadrada externa
@@ -129,80 +241,93 @@ while True:
     img.draw_rectangle(0, top, left, bottom - top, color=(0, 0, 0), fill=True)
     img.draw_rectangle(right, top, img.width() - right, bottom - top, color=(0, 0, 0), fill=True)
 
-    # Seleciona threshold ativo baseado na cor
-    active_threshold = blue_threshold if AZUL else yellow_threshold
+    # DEBUG DAS ZONAS
+    if DEBUG:
+        img.draw_cross(center[0], center[1], color=(255, 255, 255), size=12)
+        img.draw_circle(center[0], center[1], BALL_ZONE_INNER, color=(80, 80, 80))
+        img.draw_circle(center[0], center[1], BALL_ZONE_OUTER, color=(255, 140, 0))
+        img.draw_circle(center[0], center[1], GOAL_ZONE_OUTER, color=(0, 255, 0))
 
-    # Detecta blobs da cor ativa
-    blobs = img.find_blobs([active_threshold], pixels_threshold=50, area_threshold=50)
+    # BOLA
+    orange_blob = find_best_ball_blob_in_zone(
+        img,
+        threshold=thresholdo,
+        pixels_threshold=10,
+        area_threshold=10,
+        merge=True,
+        margin=3,
+        min_pixels=5,
+        max_pixels=100
+    )
 
-    # Escolhe maior blob dentro do círculo
-    best_blob = None
-    best_pixels = 0
+    orange_found = 0
+    orange_angle = 0
+    orange_dist = 0
 
-    for blob in blobs:
-        dx = blob.cx() - cx
-        dy = blob.cy() - cy
+    if orange_blob is not None:
+        orange_found = 1
+        orange_angle, orange_dist = calc_ball_angle_and_distance(
+            orange_blob.cx(), orange_blob.cy(), center[0], center[1]
+        )
 
-        if (dx * dx + dy * dy) <= R2:
-            p = blob.pixels()
-            if p > best_pixels:
-                best_pixels = p
-                best_blob = blob
+        if DEBUG:
+            draw_blob_info(img, orange_blob, (255, 140, 0), "BALL", orange_angle, orange_dist, "ZB:1")
 
-    # Processa detecção
-    if (best_blob is not None) and (best_pixels >= MIN_GOAL_PIXELS) and (best_blob.area() >= MIN_GOAL_AREA):
-        gol_detectado = True
-        pixels_detectados = best_pixels
+    # GOL AZUL
+    blue_blob = find_best_goal_blob_in_zone(
+        img,
+        threshold=thresholdb,
+        pixels_threshold=150,
+        area_threshold=150,
+        merge=True,
+        margin=10
+    )
 
-        img.draw_rectangle(best_blob.rect(), color=(0, 255, 0), thickness=2)
-        img.draw_cross(best_blob.cx(), best_blob.cy(), color=(255, 0, 0))
-        img.draw_line(cx, cy, best_blob.cx(), best_blob.cy(), color=(255, 255, 0), thickness=2)
+    blue_found = 0
+    blue_angle = 0
+    blue_dist = 0
 
-        # Ângulo do ponto fixo em relação ao centro
-        dx_ref = goal_x - cx
-        dy_ref = goal_y - cy
-        ang_ref = math.degrees(math.atan2(dy_ref, dx_ref))
+    if blue_blob is not None:
+        blue_found = 1
+        blue_angle, blue_dist = calc_goal_angle_and_distance(
+            blue_blob.cx(), blue_blob.cy(), center[0], center[1]
+        )
 
-        # Ângulo do blob em relação ao centro
-        dx_blob = best_blob.cx() - cx
-        dy_blob = best_blob.cy() - cy
-        ang_blob = math.degrees(math.atan2(dy_blob, dx_blob))
+        if DEBUG:
+            extra = "ZG:1 PX:{} AR:{}".format(blue_blob.pixels(), blue_blob.area())
+            draw_blob_info(img, blue_blob, (0, 0, 255), "BLUE", blue_angle, blue_dist, extra)
 
-        erro_gol = ang_blob - ang_ref
+    # GOL AMARELO
+    yellow_blob = find_best_goal_blob_in_zone(
+        img,
+        threshold=thresholdy,
+        pixels_threshold=50,
+        area_threshold=1,
+        merge=True,
+        margin=10
+    )
 
-        # Normaliza para -180 a 180
-        if erro_gol > 180:
-            erro_gol -= 360
-        elif erro_gol < -180:
-            erro_gol += 360
+    yellow_found = 0
+    yellow_angle = 0
+    yellow_dist = 0
 
-        cor_txt = "AZUL" if AZUL else "AMARELO"
-        img.draw_string(5, 5, "COR: %s" % cor_txt, color=(255, 255, 255))
-        img.draw_string(5, 20, "Erro: %.1f" % erro_gol, color=(255, 255, 0))
-        img.draw_string(5, 35, "Pixels: %d" % best_pixels, color=(255, 255, 0))
+    if yellow_blob is not None:
+        yellow_found = 1
+        yellow_angle, yellow_dist = calc_goal_angle_and_distance(
+            yellow_blob.cx(), yellow_blob.cy(), center[0], center[1]
+        )
 
-    else:
-        gol_detectado = False
-        pixels_detectados = 0
-        erro_gol = 0
+        if DEBUG:
+            extra = "ZG:1 PX:{} AR:{}".format(yellow_blob.pixels(), yellow_blob.area())
+            draw_blob_info(img, yellow_blob, (255, 255, 0), "YELL", yellow_angle, yellow_dist, extra)
 
-        cor_txt = "AZUL" if AZUL else "AMARELO"
-        img.draw_string(5, 5, "COR: %s" % cor_txt, color=(255, 255, 255))
-        img.draw_string(5, 20, "SEM GOL", color=(255, 0, 0))
-        img.draw_string(5, 35, "MaxPix: %d" % best_pixels, color=(255, 0, 0))
+    # ===== ENVIA DADOS VIA SERIAL =====
+    enviar_dados_visao(orange_angle, orange_dist, blue_angle, blue_dist, yellow_angle, yellow_dist)
 
-    # Desenha referências
-    img.draw_circle(cx, cy, R, color=(0, 255, 0), thickness=2)
-    img.draw_circle(cx, cy, 5, color=(0, 255, 0), thickness=2)
-    img.draw_circle(goal_x, goal_y, 3, color=(0, 255, 0), thickness=2)
-
-    # ===== ENVIA DADOS PARA OLHO =====
-    enviar_dados_gol()
-
-    print("FPS: %d | GOL: %s | ERRO: %.1f | PIXELS: %d" %
-          (clock.fps(), ("SIM" if gol_detectado else "NÃO"), erro_gol, pixels_detectados))
-
-    # ===== Limita FPS =====
-    dt = time.ticks_diff(time.ticks_ms(), t0)
-    if dt < FRAME_MS:
-        time.sleep_ms(FRAME_MS - dt)
+    # DEBUG NO TERMINAL
+    print("FPS: {:.2f} | BALL:{} A:{} D:{} | BLUE:{} A:{} D:{} | YELL:{} A:{} D:{}".format(
+        clock.fps(),
+        orange_found, orange_angle, orange_dist,
+        blue_found, blue_angle, blue_dist,
+        yellow_found, yellow_angle, yellow_dist
+    ))

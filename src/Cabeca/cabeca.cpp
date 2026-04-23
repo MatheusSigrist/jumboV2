@@ -184,9 +184,14 @@ struct PacoteOlho {
   int16_t uT;
   int16_t angulo;
   int16_t intensidade;
-  int16_t erroGol;
-  uint16_t pixelsGol;
-  uint8_t golDetectado;
+  // ===== NOVOS: dados de camera (bola + 2 gols) =====
+  int16_t ballAngle;
+  uint16_t ballDist;
+  int16_t blueAngle;
+  uint16_t blueDist;
+  int16_t yellowAngle;
+  uint16_t yellowDist;
+  // ===== FIM novos dados camera =====
   uint8_t cameraOK;  // 1 = camera enviando dados, 0 = sem sinal
 };
 
@@ -234,8 +239,16 @@ int16_t ultimoUltraEX10 = -10;
 int16_t ultimoUltraFX10 = -10;
 int16_t ultimoUltraTX10 = -10;
 int16_t ultimoAnguloLinhaX10 = -10;
-float ultimoErroGolGraus = 0.0f;
-uint16_t ultimoPixelsGol = 0;
+
+// ===== NOVOS: dados de camera (bola + 2 gols) =====
+int16_t ultimoBallAngle = -999;
+uint16_t ultimoBallDist = 0;
+int16_t ultimoBlueAngle = -999;
+uint16_t ultimoBlueDist = 0;
+int16_t ultimoYellowAngle = -999;
+uint16_t ultimoYellowDist = 0;
+// ===== FIM novos dados camera =====
+
 bool golDetectadoOlho = false;
 bool cameraOlhoOK = false;  // camera esta se comunicando com o olho
 bool kickerAtivado = false;
@@ -352,23 +365,8 @@ void processarMensagem(String msg) {
   }
 }
 
-// Envia para a placa Olho o estado do jogo e a configuracao atual.
-void enviarEstadoParaOlho(bool forcar = false) {
-  if (!forcar && (millis() - ultimoEnvioEstadoOlhoMs) < INTERVALO_ENVIO_ESTADO_OLHO_MS) {
-    return;
-  }
-
-  PacoteEstado estado;
-  estado.sozinho = false;
-  estado.atacante = false;
-  estado.corGolAzul = corGolAzulCfg;
-
-  SerialOlho.write(BYTE_INICIA);
-  SerialOlho.write(ID_PLACA_OLHO);
-  SerialOlho.write((uint8_t*)&estado, sizeof(PacoteEstado));
-  SerialOlho.write(BYTE_PARA);
-  ultimoEnvioEstadoOlhoMs = millis();
-}
+// [REMOVIDO] Envia para a placa Olho - comunicação now é unidirecional (Olho->Cabeca)
+// Camera envia seus dados direto para Olho, sem necessidade de feedback
 
 // Encaminha evento de botao para o Musculo.
 void enviarEventoBotao(uint8_t botao) {
@@ -423,18 +421,24 @@ void enviarBussolaParaMusculo() {
   ultimoEnvioBussolaMusculoMs = millis();
 }
 
-// Publica erro de gol, deteccao e confianca de camera para o Musculo.
-void enviarGolParaMusculo() {
+// Publica bola e gols (ângulo e distância) detectados pela camera para o Musculo.
+void enviarCameraParaMusculo() {
   if ((millis() - ultimoEnvioGolMusculoMs) < INTERVALO_ENVIO_GOL_MS) {
     return;
   }
 
-  SerialMusculo.print("GOL:");
-  SerialMusculo.print(ultimoErroGolGraus, 1);
+  SerialMusculo.print("CAM:");
+  SerialMusculo.print(ultimoBallAngle);
   SerialMusculo.print(",");
-  SerialMusculo.print(golDetectadoOlho ? 1 : 0);
+  SerialMusculo.print(ultimoBallDist);
   SerialMusculo.print(",");
-  SerialMusculo.print(ultimoPixelsGol);
+  SerialMusculo.print(ultimoBlueAngle);
+  SerialMusculo.print(",");
+  SerialMusculo.print(ultimoBlueDist);
+  SerialMusculo.print(",");
+  SerialMusculo.print(ultimoYellowAngle);
+  SerialMusculo.print(",");
+  SerialMusculo.print(ultimoYellowDist);
   SerialMusculo.print(",");
   SerialMusculo.println(cameraOlhoOK ? 1 : 0);
   ultimoEnvioGolMusculoMs = millis();
@@ -541,9 +545,16 @@ void lerRespostaOlho() {
           ultimoUltraTX10 = pacote.uT;
           ultimoAnguloIrX10 = pacote.angulo;
           ultimaIntensidadeIrX10 = pacote.intensidade;
-          ultimoErroGolGraus = pacote.erroGol / 10.0f;
-          ultimoPixelsGol = pacote.pixelsGol;
-          golDetectadoOlho = (pacote.golDetectado != 0);
+          
+          // ===== NOVOS: dados de camera =====
+          ultimoBallAngle = pacote.ballAngle;
+          ultimoBallDist = pacote.ballDist;
+          ultimoBlueAngle = pacote.blueAngle;
+          ultimoBlueDist = pacote.blueDist;
+          ultimoYellowAngle = pacote.yellowAngle;
+          ultimoYellowDist = pacote.yellowDist;
+          // ===== FIM novos dados camera =====
+          
           cameraOlhoOK = (pacote.cameraOK != 0);
         }
       }
@@ -715,7 +726,7 @@ void setup() {
   }
 
   testarOlhoPe();
-  enviarEstadoParaOlho(true);
+  // [REMOVIDO] enviarEstadoParaOlho(true) - Olho não recebe mais config de cor
 }
 
 // Laco principal da Cabeca: coleta entradas e redistribui dados para o Musculo.
@@ -732,12 +743,11 @@ void loop() {
   enviarIrParaMusculo();
   atualizarBussola();
   enviarBussolaParaMusculo();
-  enviarGolParaMusculo();
+  enviarCameraParaMusculo();  // Envia dados de camera (bola + 2 gols)
   enviarLinhaParaMusculo();
   enviarIntensidadeParaMusculo();
   enviarUltrasParaMusculo();
   enviarEstadoKickerParaMusculo();
-  enviarEstadoParaOlho();
 
   delay(5);
 }
