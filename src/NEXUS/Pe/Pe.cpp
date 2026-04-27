@@ -1,0 +1,246 @@
+// Arquivo principal da placa Pe.
+// Funcao: ler 32 sensores de linha via dois multiplexadores,
+// calcular o angulo da linha e enviar esse angulo para a Cabeca.
+// Entrada: LDRs da linha e estado atacante/defensor vindo da Cabeca.
+// Saida: pacote serial com angulo da linha (em decimos de grau).
+#include <Arduino.h>
+#include <math.h>
+#include <stdint.h>
+
+#define BYTE_INICIA 0xAA
+#define BYTE_PARA 0x55
+
+#define ID_PLACA_OLHO 0x01
+#define ID_PLACA_PE 0x02
+
+#define RX_CABECA 17
+#define TX_CABECA 18
+
+#define NUM_SENSORES 32
+#define LIMIAR_LINHA 4000
+#define INTERVALO_DEBUG_MS 250
+#define BAUD_PE_CABECA 19200
+#define DEBUG_LINHA 0
+#define DELAY_LOOP_MS 2
+
+uint8_t mapaSensores[NUM_SENSORES] = {
+  0,  1,  2,  3,
+  4,  5,  6,  7,
+  8,  9, 10, 11,
+  12, 13, 14, 15,
+  16, 17, 18, 19,
+  20, 21, 22, 23,
+  24, 25, 26, 27,
+  28, 29, 30, 31
+};
+
+const int MUX1_SIG = 3;
+const int MUX1_S0 = 21;
+const int MUX1_S1 = 47;
+const int MUX1_S2 = 48;
+const int MUX1_S3 = 45;
+
+const int MUX2_SIG = 12;
+const int MUX2_S0 = 4;
+const int MUX2_S1 = 5;
+const int MUX2_S2 = 6;
+const int MUX2_S3 = 7;
+
+int ldr[NUM_SENSORES];
+float sensorX[NUM_SENSORES];
+float sensorY[NUM_SENSORES];
+bool atacante = false;
+unsigned long ultimoDebugMs = 0;
+String bufferHandshakeCabeca = "";
+unsigned long ultimoByteHandshakeCabeca = 0;
+
+struct Pacote {
+  int16_t angulo;
+};
+
+struct PacoteEstado {
+  bool sozinho;
+  bool atacante;
+  bool corGolAzul;
+};
+
+// Seleciona um canal em um multiplexador 16:1 pelos pinos de endereco.
+void selecionarCanalMUX(int s0, int s1, int s2, int s3, int canal) {
+  digitalWrite(s0, bitRead(canal, 0));
+  digitalWrite(s1, bitRead(canal, 1));
+  digitalWrite(s2, bitRead(canal, 2));
+  digitalWrite(s3, bitRead(canal, 3));
+}
+
+// Responde handshake textual da Cabeca sem consumir pacotes binarios.
+void ProcessarPingCabeca() {
+  while (Serial1.available() > 0) {
+    if (Serial1.peek() == BYTE_INICIA) {
+      return;
+    }
+
+    char c = (char)Serial1.read();
+    ultimoByteHandshakeCabeca = millis();
+
+    if (c == '\n' || c == '\r') {
+      bufferHandshakeCabeca.trim();
+      bufferHandshakeCabeca.toLowerCase();
+      if (bufferHandshakeCabeca == "oi") {
+        Serial1.println("OI");
+      }
+      bufferHandshakeCabeca = "";
+      continue;
+    }
+
+    if (isPrintable(c) && bufferHandshakeCabeca.length() < 16) {
+      bufferHandshakeCabeca += c;
+    } else {
+      bufferHandshakeCabeca = "";
+    }
+  }
+
+  if (bufferHandshakeCabeca.length() > 0 && (millis() - ultimoByteHandshakeCabeca) > 80) {
+    bufferHandshakeCabeca.trim();
+    bufferHandshakeCabeca.toLowerCase();
+    if (bufferHandshakeCabeca == "oi") {
+      Serial1.println("OI");
+    }
+    bufferHandshakeCabeca = "";
+  }
+}
+
+// Le pacote de estado da Cabeca e atualiza papel atacante/defensor.
+void LeituraSerial() {
+  while (Serial1.available() >= 2) {
+    if (Serial1.read() == BYTE_INICIA) {
+      byte id = Serial1.read();
+      if (id == ID_PLACA_OLHO || id == ID_PLACA_PE) {
+        if (Serial1.available() >= sizeof(PacoteEstado) + 1) {
+          PacoteEstado temp;
+          Serial1.readBytes((uint8_t*)&temp, sizeof(PacoteEstado));
+          byte stop = Serial1.read();
+          if (stop == BYTE_PARA) {
+            atacante = temp.atacante;
+          }
+        }
+      }
+    }
+  }
+}
+
+// Calcula o angulo da linha por centroide ponderado dos sensores ativos.
+int16_t calcularAngulo(bool repulsao) {
+  float centroX = 0.0;
+  float centroY = 0.0;
+  float soma = 0.0;
+
+  for (int i = 0; i < NUM_SENSORES; i++) {
+    int idxFisico = mapaSensores[i];
+    float peso = ldr[idxFisico];
+    if (peso >= LIMIAR_LINHA) {
+      centroX += peso * sensorX[i];
+      centroY += peso * sensorY[i];
+      soma += peso;
+    }
+  }
+
+  if (soma == 0) {
+    return -1;
+  }
+
+  centroX /= soma;
+  centroY /= soma;
+
+  float vetorX = repulsao ? -centroX : centroX;
+  float vetorY = repulsao ? -centroY : centroY;
+
+  float anguloRad = atan2(vetorY, vetorX);
+  float anguloGraus = anguloRad * 180.0 / PI;
+  if (anguloGraus < 0) {
+    anguloGraus += 360.0;
+  }
+
+  return (int16_t)round(anguloGraus * 10.0);
+}
+
+// Imprime leitura bruta de todos os sensores para depuracao.
+void imprimirLeituraSensores() {
+  Serial.print("Sensores: ");
+  for (int i = 0; i < NUM_SENSORES; i++) {
+    Serial.print("S");
+    Serial.print(i);
+    Serial.print("=");
+    Serial.print(ldr[i]);
+    if (ldr[i] >= LIMIAR_LINHA) {
+      Serial.print("*");
+    }
+    if (i < NUM_SENSORES - 1) {
+      Serial.print(" | ");
+    }
+  }
+  Serial.println();
+}
+
+// Inicializa serial, MUX e tabela angular dos 32 sensores.
+void setup() {
+  Serial.begin(115200);
+  Serial1.begin(BAUD_PE_CABECA, SERIAL_8N1, RX_CABECA, TX_CABECA);
+
+  pinMode(MUX1_S0, OUTPUT);
+  pinMode(MUX1_S1, OUTPUT);
+  pinMode(MUX1_S2, OUTPUT);
+  pinMode(MUX1_S3, OUTPUT);
+  pinMode(MUX2_S0, OUTPUT);
+  pinMode(MUX2_S1, OUTPUT);
+  pinMode(MUX2_S2, OUTPUT);
+  pinMode(MUX2_S3, OUTPUT);
+
+  pinMode(MUX1_SIG, INPUT);
+  pinMode(MUX2_SIG, INPUT);
+
+  for (int i = 0; i < NUM_SENSORES; i++) {
+    float angulo = (2.0 * PI / NUM_SENSORES) * i;
+    sensorX[i] = cos(angulo);
+    sensorY[i] = sin(angulo);
+  }
+
+  Serial.println("Placa PE inicializada com leitura de sensores");
+}
+
+// Laco principal: le sensores, calcula angulo e envia pacote para Cabeca.
+void loop() {
+  ProcessarPingCabeca();
+
+  for (int canal = 0; canal < 16; canal++) {
+    selecionarCanalMUX(MUX1_S0, MUX1_S1, MUX1_S2, MUX1_S3, canal);
+    selecionarCanalMUX(MUX2_S0, MUX2_S1, MUX2_S2, MUX2_S3, canal);
+    delayMicroseconds(10);
+    ldr[canal] = analogRead(MUX1_SIG);
+    ldr[canal + 16] = analogRead(MUX2_SIG);
+  }
+
+  LeituraSerial();
+
+  Pacote pacote;
+  pacote.angulo = calcularAngulo(atacante);
+
+  Serial1.write(BYTE_INICIA);
+  Serial1.write(ID_PLACA_PE);
+  Serial1.write((uint8_t*)&pacote, sizeof(Pacote));
+  Serial1.write(BYTE_PARA);
+
+  unsigned long agora = millis();
+  if (DEBUG_LINHA && (agora - ultimoDebugMs >= INTERVALO_DEBUG_MS)) {
+    ultimoDebugMs = agora;
+    imprimirLeituraSensores();
+    if (pacote.angulo == -1) {
+      Serial.println("Linha: NAO detectada");
+    } else {
+      Serial.print("Linha angulo (deg): ");
+      Serial.println(pacote.angulo / 10.0, 1);
+    }
+  }
+
+  delay(DELAY_LOOP_MS);
+}
+

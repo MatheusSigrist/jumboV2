@@ -25,6 +25,20 @@ DEBUG = True
 center = [172, 110]
 
 # =========================================================
+# FILTRO ANTI-RUIDO DA BOLA
+# =========================================================
+BALL_FILTER_WINDOW = 5
+BALL_FILTER_OUTLIER_DEG = 70
+BALL_FILTER_HOLD_FRAMES = 3
+
+ball_angle_hist = []
+ball_dist_hist = []
+ball_filtered_valid = False
+ball_filtered_angle = 0
+ball_filtered_dist = 0
+ball_lost_frames = 0
+
+# =========================================================
 # ZONA DA BOLA
 # =========================================================
 BALL_ZONE_INNER = 25
@@ -153,6 +167,76 @@ def draw_blob_info(img, blob, color_rgb, label, angle, distance, extra_text=""):
         img.draw_string(blob.x(), max(blob.y() - 8, 0), extra_text, color=color_rgb, scale=1)
 
 
+def angle_diff_deg(a, b):
+    """Menor diferenca angular assinada entre dois angulos (graus)."""
+    return ((a - b + 540) % 360) - 180
+
+
+def circular_mean_deg(values):
+    """Media circular para angulos em graus (0..359)."""
+    sx = 0.0
+    sy = 0.0
+    for v in values:
+        r = math.radians(v)
+        sx += math.cos(r)
+        sy += math.sin(r)
+    if sx == 0 and sy == 0:
+        return 0
+    return int((math.degrees(math.atan2(sy, sx)) + 360) % 360)
+
+
+def median_int(values):
+    if not values:
+        return 0
+    s = sorted(values)
+    n = len(s)
+    m = n // 2
+    if n % 2 == 1:
+        return int(s[m])
+    return int((s[m - 1] + s[m]) / 2)
+
+
+def update_ball_filter(found, raw_angle, raw_dist):
+    """Filtra ruido da bola com janela temporal + rejeicao de outlier + hold curto."""
+    global ball_angle_hist, ball_dist_hist
+    global ball_filtered_valid, ball_filtered_angle, ball_filtered_dist, ball_lost_frames
+
+    if found:
+        ball_lost_frames = 0
+
+        accept_sample = True
+        if ball_filtered_valid and len(ball_angle_hist) >= 3:
+            if abs(angle_diff_deg(raw_angle, ball_filtered_angle)) > BALL_FILTER_OUTLIER_DEG:
+                # Salto brusco isolado e tratado como ruido.
+                accept_sample = False
+
+        if accept_sample:
+            ball_angle_hist.append(raw_angle)
+            ball_dist_hist.append(raw_dist)
+
+            if len(ball_angle_hist) > BALL_FILTER_WINDOW:
+                ball_angle_hist.pop(0)
+            if len(ball_dist_hist) > BALL_FILTER_WINDOW:
+                ball_dist_hist.pop(0)
+
+            ball_filtered_angle = circular_mean_deg(ball_angle_hist)
+            ball_filtered_dist = median_int(ball_dist_hist)
+            ball_filtered_valid = True
+
+    else:
+        ball_lost_frames += 1
+        if ball_lost_frames > BALL_FILTER_HOLD_FRAMES:
+            ball_angle_hist = []
+            ball_dist_hist = []
+            ball_filtered_valid = False
+            ball_filtered_angle = 0
+            ball_filtered_dist = 0
+
+    if ball_filtered_valid:
+        return 1, ball_filtered_angle, ball_filtered_dist
+    return 0, 0, 0
+
+
 def enviar_dados_visao(ball_angle, ball_dist, blue_angle, blue_dist, yellow_angle, yellow_dist):
     """
     Envia dados de BOLA + 2 GOLS via serial para placa OLHO
@@ -260,18 +344,24 @@ while True:
         max_pixels=100
     )
 
-    orange_found = 0
-    orange_angle = 0
-    orange_dist = 0
+    raw_orange_found = 0
+    raw_orange_angle = 0
+    raw_orange_dist = 0
 
     if orange_blob is not None:
-        orange_found = 1
-        orange_angle, orange_dist = calc_ball_angle_and_distance(
+        raw_orange_found = 1
+        raw_orange_angle, raw_orange_dist = calc_ball_angle_and_distance(
             orange_blob.cx(), orange_blob.cy(), center[0], center[1]
         )
 
-        if DEBUG:
-            draw_blob_info(img, orange_blob, (255, 140, 0), "BALL", orange_angle, orange_dist, "ZB:1")
+    orange_found, orange_angle, orange_dist = update_ball_filter(
+        raw_orange_found,
+        raw_orange_angle,
+        raw_orange_dist
+    )
+
+    if DEBUG and orange_blob is not None:
+        draw_blob_info(img, orange_blob, (255, 140, 0), "BALL", orange_angle, orange_dist, "FLT")
 
     # GOL AZUL
     blue_blob = find_best_goal_blob_in_zone(
