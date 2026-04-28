@@ -79,8 +79,14 @@ float ultraDcm = -1.0f;
 float ultraEcm = -1.0f;
 float ultraFcm = -1.0f;
 float ultraTcm = -1.0f;
+float ultraRemotoDcm = -1.0f;
+float ultraRemotoEcm = -1.0f;
+float ultraRemotoFcm = -1.0f;
+float ultraRemotoTcm = -1.0f;
 bool ultrasValidos = false;
+bool ultrasRemotosValidos = false;
 unsigned long ultimoRxUltraMs = 0;
+unsigned long ultimoRxUltraRemotoMs = 0;
 bool kickerRecebido = false;
 bool kickerAtivado = false;  // true quando chave acionada (valor 0 vindo da cabeca)
 bool pulsoKickerAtivo = false;
@@ -98,13 +104,18 @@ bool cameraDadosValidos = false;
 unsigned long ultimoRxCameraMs = 0;
 // ===== FIM novos dados camera =====
 
+// Status da comunicacao ESP-NOW entre as Cabecas.
+bool espnowOK = false;
+bool sozinho = true;
+unsigned long ultimoRxEspnowMs = 0;
+
 // Estados principais da interface/operacao.
 enum Estado { MENU, CALIBRACAO, INICIAR };
 Estado estadoAtual = MENU;
 int itemSelecionado = 0;
 
 // Submenus disponiveis na tela de calibracao.
-enum SubMenuCalibracao { SUBMENU_PRINCIPAL, SUBMENU_GOL, SUBMENU_BUSSOLA, SUBMENU_IR, SUBMENU_ULTRA, SUBMENU_CAMERA };
+enum SubMenuCalibracao { SUBMENU_PRINCIPAL, SUBMENU_GOL, SUBMENU_BUSSOLA, SUBMENU_IR, SUBMENU_ULTRA, SUBMENU_CAMERA, SUBMENU_ESPNOW };
 SubMenuCalibracao subMenuCalibracao = SUBMENU_PRINCIPAL;
 int itemSubMenu = 0;
 
@@ -114,25 +125,28 @@ const unsigned long TIMEOUT_COM_MS = 3000;
 const unsigned long TIMEOUT_BUSSOLA_MS = 800;
 const unsigned long TIMEOUT_LINHA_MS = 150;
 const unsigned long TIMEOUT_ULTRA_MS = 1000;
+const unsigned long TIMEOUT_CAMERA_MS = 1000;
 const int velocidade_maxima = 160;
+const bool MOVIMENTO_BOLA_HABILITADO = false;
 
 // Endereco e tamanho usados para persistir a bussola na EEPROM.
 const int EEPROM_SIZE = 64;
 const int EEPROM_ADDR_BUSSOLA = 0;
 
 // Parametros do alinhamento por camera + bussola.
-const float TOLERANCIA_ALINHAMENTO_GRAUS = 20.0f;
+const float TOLERANCIA_ALINHAMENTO_GRAUS = 10.0f;
+const float JANELA_FUZZY_ALINHAMENTO_GRAUS = 30.0f;
 const int VELOCIDADE_GIRO_ALINHAMENTO = VELOCIDADE_GIRO;
 const int SINAL_GIRO_PID = SINAL_GIRO;
 
 // Ganhos e saturacoes do PID usado para girar rumo ao gol.
-const float PID_BUS_KP = 1.0f;
+const float PID_BUS_KP = 0.8f;
 const float PID_BUS_KI = 0.00f;
-const float PID_BUS_KD = 0.8;
+const float PID_BUS_KD = 0.5f;
 const float PID_BUS_INTEGRAL_MAX = 120.0f;
 const int PID_BUS_SAIDA_MIN = 25;
 const int PID_BUS_SAIDA_MAX = 180;
-const float GANHO_GIRO_MISTO = 1.0f;
+const float GANHO_GIRO_MISTO = 0.9f;
 
 
 
@@ -394,6 +408,25 @@ void atualizarValidadeBussola() {
   }
 }
 
+// Mantem um snapshot universal da camera: a serial atualiza os campos e este helper
+// decide apenas se o pacote ainda esta recente para qualquer tela ou logica.
+bool cameraPacoteRecente() {
+  return (ultimoRxCameraMs > 0) && ((millis() - ultimoRxCameraMs) <= TIMEOUT_CAMERA_MS);
+}
+
+void atualizarValidadeCamera() {
+  cameraDadosValidos = cameraPacoteRecente();
+}
+
+bool cameraTemBolaValida() {
+  return cameraPacoteRecente() && (cameraBallAngle != -999);
+}
+
+bool cameraTemGolSelecionadoValido(int16_t &anguloGol) {
+  anguloGol = corGolAzul ? cameraBlueAngle : cameraYellowAngle;
+  return cameraPacoteRecente() && (anguloGol != -999);
+}
+
 // Ajusta o angulo da bola para um angulo de comando mais estavel de movimento.
 float mapearAnguloBolaParaMovimento(float anguloBolaGraus) {
   float ang = normalizarAngulo360(anguloBolaGraus);
@@ -477,6 +510,7 @@ int calcularSaidaPidBussola(float erroGraus) {
   return (u >= 0.0f) ? saida : -saida;
 }
 
+
 // Telemetria de gol/linha.
 float erroGolGraus = 0.0f;
 bool golDetectado = false;
@@ -521,6 +555,8 @@ void desenharMenu() {
   display.setCursor(0, 0);
   display.println("==== MENU ====");
   display.println();
+  int16_t anguloGolMenu = -999;
+  bool golVisivelMenu = cameraTemGolSelecionadoValido(anguloGolMenu);
 
   if (itemSelecionado == 0) {
     display.fillRect(0, 16, 128, 10, SSD1306_WHITE);
@@ -546,8 +582,8 @@ void desenharMenu() {
 
   display.setCursor(0, 44);
   display.print("GOL ERR:");
-  if (golDetectado) {
-    display.print(erroGolGraus, 1);
+  if (golVisivelMenu) {
+    display.print((float)anguloGolMenu, 1);
     display.print("deg");
   } else {
     display.print("SEM GOL");
@@ -570,65 +606,76 @@ void desenharSubmenuCalibracao() {
   display.println("== CALIBRACAO ==");
   display.println();
 
-  // Primeiro nivel: escolhe entre gol, bussola, teste da camera ou voltar.
+  // Primeiro nivel: escolhe entre gol, bussola, camera, espnow ou voltar.
   if (subMenuCalibracao == SUBMENU_PRINCIPAL) {
     if (itemSubMenu == 0) {
-      display.fillRect(0, 16, 128, 10, SSD1306_WHITE);
+      display.fillRect(0, 16, 128, 8, SSD1306_WHITE);
       display.setTextColor(SSD1306_BLACK);
-      display.setCursor(4, 18);
+      display.setCursor(4, 16);
       display.println("GOL");
       display.setTextColor(SSD1306_WHITE);
     } else {
-      display.setCursor(4, 18);
+      display.setCursor(4, 16);
       display.println("GOL");
     }
 
     if (itemSubMenu == 1) {
-      display.fillRect(0, 26, 128, 10, SSD1306_WHITE);
+      display.fillRect(0, 24, 128, 8, SSD1306_WHITE);
       display.setTextColor(SSD1306_BLACK);
-      display.setCursor(4, 28);
+      display.setCursor(4, 24);
       display.println("BUSSOLA");
       display.setTextColor(SSD1306_WHITE);
     } else {
-      display.setCursor(4, 28);
+      display.setCursor(4, 24);
       display.println("BUSSOLA");
     }
 
     if (itemSubMenu == 2) {
-      display.fillRect(0, 36, 128, 10, SSD1306_WHITE);
+      display.fillRect(0, 32, 128, 8, SSD1306_WHITE);
       display.setTextColor(SSD1306_BLACK);
-      display.setCursor(4, 38);
+      display.setCursor(4, 32);
       display.println("IR");
       display.setTextColor(SSD1306_WHITE);
     } else {
-      display.setCursor(4, 38);
+      display.setCursor(4, 32);
       display.println("IR");
     }
 
     if (itemSubMenu == 3) {
-      display.fillRect(0, 46, 128, 10, SSD1306_WHITE);
+      display.fillRect(0, 40, 128, 8, SSD1306_WHITE);
       display.setTextColor(SSD1306_BLACK);
-      display.setCursor(4, 48);
+      display.setCursor(4, 40);
       display.println("ULTRA");
       display.setTextColor(SSD1306_WHITE);
     } else {
-      display.setCursor(4, 48);
+      display.setCursor(4, 40);
       display.println("ULTRA");
     }
 
     if (itemSubMenu == 4) {
-      display.fillRect(0, 56, 128, 10, SSD1306_WHITE);
+      display.fillRect(0, 48, 128, 8, SSD1306_WHITE);
       display.setTextColor(SSD1306_BLACK);
-      display.setCursor(4, 58);
-      display.println("TESTE CAM");
+      display.setCursor(4, 48);
+      display.println("CAM");
       display.setTextColor(SSD1306_WHITE);
     } else {
-      display.setCursor(4, 58);
-      display.println("TESTE CAM");
+      display.setCursor(4, 48);
+      display.println("CAM");
     }
 
     if (itemSubMenu == 5) {
-      display.fillRect(96, 0, 32, 10, SSD1306_WHITE);
+      display.fillRect(0, 56, 128, 8, SSD1306_WHITE);
+      display.setTextColor(SSD1306_BLACK);
+      display.setCursor(4, 56);
+      display.println("ESPNOW");
+      display.setTextColor(SSD1306_WHITE);
+    } else {
+      display.setCursor(4, 56);
+      display.println("ESPNOW");
+    }
+
+    if (itemSubMenu == 6) {
+      display.fillRect(96, 0, 32, 8, SSD1306_WHITE);
       display.setTextColor(SSD1306_BLACK);
       display.setCursor(98, 2);
       display.println("VOLTA");
@@ -723,6 +770,41 @@ void desenharSubmenuCalibracao() {
     }
     display.println("BTN1/2/3 VOLTAR");
 
+  // Tela de diagnostico ESP-NOW entre as Cabecas.
+  } else if (subMenuCalibracao == SUBMENU_ESPNOW) {
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+    display.setCursor(0, 0);
+    display.println("=== ESPNOW CAB ===");
+    bool espnowRecente = (ultimoRxEspnowMs > 0) && ((millis() - ultimoRxEspnowMs) < 5000);
+    bool falhaEspnow = (!espnowRecente) || (!espnowOK);
+    bool estadoSozinho = falhaEspnow || sozinho;
+    bool ultraRemotoRecente = ultrasRemotosValidos && (ultimoRxUltraRemotoMs > 0) && ((millis() - ultimoRxUltraRemotoMs) < 6000);
+    display.setCursor(0, 10);
+    display.print("SOZ:");
+    display.print(estadoSozinho ? "S" : "N");
+    display.print(" FAL:");
+    display.println(falhaEspnow ? "S" : "N");
+    display.setCursor(0, 22);
+    if (ultraRemotoRecente) {
+      display.print("D:");
+      display.print(ultraRemotoDcm, 1);
+      display.print(" E:");
+      display.println(ultraRemotoEcm, 1);
+      display.setCursor(0, 34);
+      display.print("F:");
+      display.print(ultraRemotoFcm, 1);
+      display.print(" T:");
+      display.println(ultraRemotoTcm, 1);
+    } else {
+      display.println("ULTRA REMOTO");
+      display.setCursor(0, 34);
+      display.println("SEM DADOS");
+    }
+    display.setCursor(0, 56);
+    display.println("BTN1/2/3 VOLTAR");
+
   // Tela de diagnostico da camera, mostrando os 6 dados (bola + 2 gols: angulo e distancia).
   } else if (subMenuCalibracao == SUBMENU_CAMERA) {
     display.clearDisplay();
@@ -732,7 +814,7 @@ void desenharSubmenuCalibracao() {
     display.println("TESTE CAM");
     
     // Verifica timeout dos dados
-    bool dataTimeout = (ultimoRxCameraMs == 0) || ((millis() - ultimoRxCameraMs) > 1000);
+    bool dataTimeout = !cameraPacoteRecente();
 
     display.setTextSize(2);
     display.setCursor(0, 16);
@@ -794,6 +876,8 @@ void desenharOperacao() {
   display.setCursor(0, 0);
   display.println("=== OPERACAO TESTE ===");
   display.println();
+  int16_t anguloGolOperacao = -999;
+  bool golVisivelOperacao = cameraTemGolSelecionadoValido(anguloGolOperacao);
   display.print("COM CABECA: ");
   display.println(comunicacaoCabecaOK ? "OK" : "FALHA");
   display.print("IR ANG: ");
@@ -804,8 +888,8 @@ void desenharOperacao() {
     display.println("NAO DETECTADO");
   }
   display.print("ERRO GOL: ");
-  if (golDetectado) {
-    display.print(erroGolGraus, 1);
+  if (golVisivelOperacao) {
+    display.print((float)anguloGolOperacao, 1);
     display.println(" deg");
   } else {
     display.println("SEM GOL");
@@ -822,7 +906,7 @@ void desenharOperacao() {
   } else {
     display.println("SEM LINHA");
   }
-  if (golDetectado) {
+  if (golVisivelOperacao) {
     display.print("ERRO: ");
     display.print(erroAlinhamentoGraus, 1);
     display.println(" deg");
@@ -832,7 +916,7 @@ void desenharOperacao() {
       display.println(alinhandoAgora ? "MODO: ALINHANDO GOL" : "MODO: SEGUINDO BOLA");
     }
     display.print("PIX: ");
-    display.println(golPixels);
+    display.println(corGolAzul ? cameraBlueDist : cameraYellowDist);
   } else if (fugindoLinhaAgora) {
     display.println("MODO: FUGINDO LINHA");
   }
@@ -920,10 +1004,10 @@ void processarEventoBotao(uint8_t botao) {
     // Navegacao circular entre as opcoes do submenu principal.
     if (botao == 1) {
       itemSubMenu--;
-      if (itemSubMenu < 0) itemSubMenu = 5;
+      if (itemSubMenu < 0) itemSubMenu = 6;
     } else if (botao == 2) {
       itemSubMenu++;
-      if (itemSubMenu > 5) itemSubMenu = 0;
+      if (itemSubMenu > 6) itemSubMenu = 0;
     } else if (botao == 3) {
       if (itemSubMenu == 0) {
         subMenuCalibracao = SUBMENU_GOL;
@@ -939,6 +1023,9 @@ void processarEventoBotao(uint8_t botao) {
         itemSubMenu = 0;
       } else if (itemSubMenu == 4) {
         subMenuCalibracao = SUBMENU_CAMERA;
+        itemSubMenu = 0;
+      } else if (itemSubMenu == 5) {
+        subMenuCalibracao = SUBMENU_ESPNOW;
         itemSubMenu = 0;
       } else {
         estadoAtual = MENU;
@@ -1004,6 +1091,14 @@ void processarEventoBotao(uint8_t botao) {
     if (botao == 1 || botao == 2 || botao == 3) {
       subMenuCalibracao = SUBMENU_PRINCIPAL;
       itemSubMenu = 4;
+    }
+    return;
+  }
+
+  if (estadoAtual == CALIBRACAO && subMenuCalibracao == SUBMENU_ESPNOW) {
+    if (botao == 1 || botao == 2 || botao == 3) {
+      subMenuCalibracao = SUBMENU_PRINCIPAL;
+      itemSubMenu = 5;
     }
     return;
   }
@@ -1195,6 +1290,34 @@ void processarMensagemCabeca(String msg) {
     return;
   }
 
+  // Distancias dos ultrassonicos recebidas do outro robo via Cabeca no formato ULR:D,E,F,T.
+  if (msg.startsWith("ULR:")) {
+    String payload = msg.substring(4);
+    int p1 = payload.indexOf(',');
+    int p2 = payload.indexOf(',', p1 + 1);
+    int p3 = payload.indexOf(',', p2 + 1);
+    if (p1 > 0 && p2 > p1 && p3 > p2) {
+      String sD = payload.substring(0, p1);
+      String sE = payload.substring(p1 + 1, p2);
+      String sF = payload.substring(p2 + 1, p3);
+      String sT = payload.substring(p3 + 1);
+      sD.trim();
+      sE.trim();
+      sF.trim();
+      sT.trim();
+
+      ultraRemotoDcm = sD.toFloat();
+      ultraRemotoEcm = sE.toFloat();
+      ultraRemotoFcm = sF.toFloat();
+      ultraRemotoTcm = sT.toFloat();
+      ultrasRemotosValidos = (ultraRemotoDcm >= 0.0f && ultraRemotoEcm >= 0.0f && ultraRemotoFcm >= 0.0f && ultraRemotoTcm >= 0.0f);
+      ultimoRxUltraRemotoMs = millis();
+      comunicacaoCabecaOK = true;
+      ultimoRxCabeca = millis();
+    }
+    return;
+  }
+
   // Estado da chave do kicker reportado pela Cabeca.
   if (msg.startsWith("KIK:")) {
     String sKik = msg.substring(4);
@@ -1252,6 +1375,18 @@ void processarMensagemCabeca(String msg) {
     return;
   }
   // ===== FIM dados camera =====
+
+  // Status da comunicacao ESP-NOW entre as Cabecas reportado pela Cabeca local.
+  if (msg.startsWith("ESN:")) {
+    String sEsn = msg.substring(4);
+    sEsn.trim();
+    espnowOK = (sEsn == "1");
+    sozinho = !espnowOK;
+    ultimoRxEspnowMs = millis();
+    comunicacaoCabecaOK = true;
+    ultimoRxCabeca = millis();
+    return;
+  }
 }
 
 // Acumula bytes da serial da Cabeca e despacha mensagens completas por linha.
@@ -1354,6 +1489,7 @@ void loop() {
   lerSerialCabeca();
   atualizarValidadeBussola();
   atualizarValidadeLinha();
+  atualizarValidadeCamera();
   enviarCorGolParaCabeca();
   atualizarKicker();
 
@@ -1364,48 +1500,40 @@ void loop() {
   }
 
   if (estadoAtual == INICIAR && comunicacaoCabecaOK) {
-    // Alinhamento usa erro do gol (camera), igual ao teste PIDBussola.
-    erroAlinhamentoGraus = erroGolGraus;
+    // O pacote da camera e mantido universalmente; no INICIAR apenas consumimos o ultimo snapshot.
+    int16_t anguloGolCamera = -999;
+    bool golVisivelCamera = cameraTemGolSelecionadoValido(anguloGolCamera);
+    erroAlinhamentoGraus = golVisivelCamera ? (float)anguloGolCamera : 0.0f;
     fugindoLinhaAgora = false;
 
-    // Prioridade de movimento: LINHA > BOLA > ALINHAR NO EIXO
-    if (linhaDetectada) {
-      // Ao ver a linha, a resposta imediata e fugir na direcao oposta.
-      fugindoLinhaAgora = true;
+    int cmdPidAssinado = 0;
+    bool cameraBolaVisivel = cameraTemBolaValida();
+
+    // So gira para alinhar quando o gol estiver visivel na camera e fora da tolerancia.
+    bool precisaAlinhar = golVisivelCamera && (fabsf(erroAlinhamentoGraus) > TOLERANCIA_ALINHAMENTO_GRAUS);
+    bool erroGrande = golVisivelCamera && (fabsf(erroAlinhamentoGraus) > 60.0f);
+    if (precisaAlinhar) {
+      alinhandoAgora = true;
+      int cmdPid = calcularSaidaPidBussola(erroAlinhamentoGraus);
+      cmdPidAssinado = -SINAL_GIRO_PID * cmdPid;
+    } else {
       alinhandoAgora = false;
       resetPidBussola();
-      anguloFugaLinhaCmd = normalizarErro180(anguloLinhaPe - 180.0f);
-      seguirDirecaoPorAngulo(anguloFugaLinhaCmd, VELOCIDADE_FUGA_LINHA);
+    }
+
+    // Erro > 60 graus: para tudo e alinha de vez.
+    // Erro <= 60 graus: segue bola com giro de correcao simultane (IR tem prioridade sobre camera).
+    // Se a bola IR estiver na faixa frontal (335-360 ou 0-25), move no angulo 0 (frente pura).
+    if (erroGrande) {
+      girarNoEixo(cmdPidAssinado);
+    } else if (irDetectado) {
+      seguirDirecaoComGiro(anguloIr, velocidade_maxima, cmdPidAssinado);
+    } else if (cameraBolaVisivel) {
+      seguirDirecaoComGiro((float)cameraBallAngle, velocidade_maxima, cmdPidAssinado);
+    } else if (precisaAlinhar) {
+      girarNoEixo(cmdPidAssinado);
     } else {
-      int cmdPidAssinado = 0;
-
-      // So gira para alinhar quando o gol estiver visivel e fora da tolerancia.
-      bool precisaAlinhar = golDetectado && (fabsf(erroAlinhamentoGraus) > TOLERANCIA_ALINHAMENTO_GRAUS);
-      if (precisaAlinhar) {
-        alinhandoAgora = true;
-        int cmdPid = calcularSaidaPidBussola(erroAlinhamentoGraus);
-        cmdPidAssinado = -SINAL_GIRO_PID * cmdPid;
-      } else {
-        alinhandoAgora = false;
-        resetPidBussola();
-      }
-
-      if (irDetectado) {
-        // Na faixa frontal do IR, avanca diretamente com 200 PWM mantendo a compensacao de giro.
-        if (irNaFaixaFrontal(anguloIr)) {
-          moverFrenteComGiro(VELOCIDADE_IR_FRONTAL_PWM, cmdPidAssinado);
-        } else {
-          // Fora da faixa frontal, segue usando o mapeamento angular ja existente.
-          float anguloMovimento = mapearAnguloBolaParaMovimento(anguloIr);
-          seguirDirecaoComGiro(anguloMovimento, velocidade_maxima, cmdPidAssinado);
-        }
-      } else if (precisaAlinhar) {
-        // Sem bola, mas com gol fora do centro, faz alinhamento puro no eixo.
-        girarNoEixo(cmdPidAssinado);
-      } else {
-        // Sem linha, sem bola e sem necessidade de alinhar: permanece parado.
-        pararMotores();
-      }
+      pararMotores();
     }
   } else {
     // Fora do modo de jogo, zera controle e mantem a base parada.

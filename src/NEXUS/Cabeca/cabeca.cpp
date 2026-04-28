@@ -6,6 +6,13 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <math.h>
+#include <WiFi.h>
+#include <esp_now.h>
+
+// ===================== ESP-NOW - ALTERE O MAC AQUI =====================
+// MAC da Cabeca do outro robo (CRONOS). Use o ambiente descobridor_mac para encontrar.
+#define ESPNOW_TARGET_MAC_STR "AC:A7:04:2B:9B:60"
+// =======================================================================
 
 #define RX_MUSCULO 44
 #define TX_MUSCULO 43
@@ -238,7 +245,12 @@ int16_t ultimoUltraDX10 = -10;
 int16_t ultimoUltraEX10 = -10;
 int16_t ultimoUltraFX10 = -10;
 int16_t ultimoUltraTX10 = -10;
+int16_t ultimoUltraRemotoDX10 = -10;
+int16_t ultimoUltraRemotoEX10 = -10;
+int16_t ultimoUltraRemotoFX10 = -10;
+int16_t ultimoUltraRemotoTX10 = -10;
 int16_t ultimoAnguloLinhaX10 = -10;
+unsigned long ultimoRxUltraRemotoMs = 0;
 
 // ===== NOVOS: dados de camera (bola + 2 gols) =====
 int16_t ultimoBallAngle = -999;
@@ -266,6 +278,178 @@ const unsigned long INTERVALO_ENVIO_KICKER_MS = 120;
 const unsigned long INTERVALO_ENVIO_ESTADO_OLHO_MS = 700;
 const int16_t INTENSIDADE_MINIMA_IR_X10 = 80;  // 8.0
 const unsigned long TIMEOUT_DADO_OLHO_MS = 500;
+unsigned long ultimoEnvioUltraRemotoMusculoMs = 0;
+
+// --- ESP-NOW ---
+enum EspNowMsgTipo : uint8_t { ESPNOW_MSG_ULTRA_REQ = 1, ESPNOW_MSG_ULTRA_RESP = 2 };
+
+struct EspNowMsg {
+  uint32_t seq;
+  uint8_t tipo;
+  int16_t uD;
+  int16_t uE;
+  int16_t uF;
+  int16_t uT;
+  char text[12];
+};
+
+static uint8_t espnowTargetMac[6] = {0};
+static bool espnowInicializado = false;
+static bool espnowComOK = false;
+static unsigned long espnowUltimoRxMs = 0;
+static unsigned long espnowUltimoAckMs = 0;
+static unsigned long espnowUltimoEnvioMs = 0;
+static unsigned long espnowUltimoStatusMusculoMs = 0;
+static unsigned long espnowUltimaTentativaInitMs = 0;
+static uint32_t espnowSeqTx = 0;
+static const unsigned long ESPNOW_SEND_INTERVAL_MS = 2000;
+static const unsigned long ESPNOW_TIMEOUT_MS = 6000;
+static const unsigned long ESPNOW_STATUS_INTERVAL_MS = 500;
+static const unsigned long ESPNOW_RETRY_INIT_MS = 2000;
+
+static bool parseMacStr(const char* s, uint8_t* out) {
+  unsigned int b[6];
+  if (sscanf(s, "%2x:%2x:%2x:%2x:%2x:%2x", &b[0],&b[1],&b[2],&b[3],&b[4],&b[5]) != 6) return false;
+  for (int i = 0; i < 6; i++) out[i] = (uint8_t)b[i];
+  return true;
+}
+
+static bool macEq(const uint8_t* a, const uint8_t* b) {
+  for (int i = 0; i < 6; i++) if (a[i] != b[i]) return false;
+  return true;
+}
+
+static bool ultrasLocaisRecentes() {
+  return (ultimoRxOlhoMs > 0) && ((millis() - ultimoRxOlhoMs) < TIMEOUT_DADO_OLHO_MS);
+}
+
+void enviarPacoteUltraEspNow(bool resposta) {
+  if (!espnowInicializado) {
+    return;
+  }
+
+  EspNowMsg msg;
+  memset(&msg, 0, sizeof(msg));
+  msg.seq = ++espnowSeqTx;
+  msg.tipo = resposta ? ESPNOW_MSG_ULTRA_RESP : ESPNOW_MSG_ULTRA_REQ;
+
+  bool pacoteRecente = ultrasLocaisRecentes();
+  msg.uD = pacoteRecente ? ultimoUltraDX10 : -10;
+  msg.uE = pacoteRecente ? ultimoUltraEX10 : -10;
+  msg.uF = pacoteRecente ? ultimoUltraFX10 : -10;
+  msg.uT = pacoteRecente ? ultimoUltraTX10 : -10;
+  strncpy(msg.text, resposta ? "ULTRA_RESP" : "ULTRA_REQ", sizeof(msg.text) - 1);
+
+  esp_err_t sendRes = esp_now_send(espnowTargetMac, (uint8_t*)&msg, sizeof(msg));
+  if (sendRes != ESP_OK) {
+    espnowComOK = false;
+    return;
+  }
+
+  espnowUltimoEnvioMs = millis();
+}
+
+void onEspNowSent(const uint8_t* mac, esp_now_send_status_t st) {
+  if (!macEq(mac, espnowTargetMac)) return;
+  if (st == ESP_NOW_SEND_SUCCESS) {
+    espnowUltimoAckMs = millis();
+    espnowComOK = true;
+  }
+}
+
+void onEspNowRecv(const uint8_t* mac, const uint8_t* data, int len) {
+  if (!macEq(mac, espnowTargetMac)) return;
+  espnowUltimoRxMs = millis();
+  espnowComOK = true;
+
+  EspNowMsg rx;
+  memset(&rx, 0, sizeof(rx));
+  int clen = len < (int)sizeof(rx) ? len : (int)sizeof(rx);
+  memcpy(&rx, data, clen);
+
+  bool ehReq = (rx.tipo == ESPNOW_MSG_ULTRA_REQ) || (strncmp(rx.text, "ULTRA_REQ", 9) == 0);
+  bool ehResp = (rx.tipo == ESPNOW_MSG_ULTRA_RESP) || (strncmp(rx.text, "ULTRA_RESP", 10) == 0);
+
+  if (ehReq || ehResp) {
+    ultimoUltraRemotoDX10 = rx.uD;
+    ultimoUltraRemotoEX10 = rx.uE;
+    ultimoUltraRemotoFX10 = rx.uF;
+    ultimoUltraRemotoTX10 = rx.uT;
+    ultimoRxUltraRemotoMs = millis();
+
+    if (ehReq) {
+      enviarPacoteUltraEspNow(true);
+    }
+  }
+}
+
+void iniciarEspNow() {
+  espnowUltimaTentativaInitMs = millis();
+
+  if (!parseMacStr(ESPNOW_TARGET_MAC_STR, espnowTargetMac)) {
+    Serial.println("[ESPNOW] MAC invalido - corrija ESPNOW_TARGET_MAC_STR");
+    return;
+  }
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect();
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("[ESPNOW] Falha ao inicializar");
+    return;
+  }
+  esp_now_register_send_cb(onEspNowSent);
+  esp_now_register_recv_cb(onEspNowRecv);
+  esp_now_peer_info_t peer;
+  memset(&peer, 0, sizeof(peer));
+  memcpy(peer.peer_addr, espnowTargetMac, 6);
+  peer.channel = 0;
+  peer.encrypt = false;
+  if (!esp_now_is_peer_exist(espnowTargetMac)) {
+    if (esp_now_add_peer(&peer) != ESP_OK) {
+      Serial.println("[ESPNOW] Falha ao adicionar peer");
+      return;
+    }
+  }
+  espnowInicializado = true;
+  espnowUltimoRxMs = millis();
+  espnowUltimoAckMs = millis();
+  Serial.print("[ESPNOW] Iniciado. MAC local: ");
+  Serial.println(WiFi.macAddress());
+}
+
+void atualizarEspNow() {
+  unsigned long agora = millis();
+
+  // Se a init falhar no boot (timing/radio), tenta novamente sem travar o resto da Cabeca.
+  if (!espnowInicializado) {
+    if ((agora - espnowUltimaTentativaInitMs) >= ESPNOW_RETRY_INIT_MS) {
+      iniciarEspNow();
+    }
+
+    // Mesmo sem ESP-NOW inicializado, reporta falha para o Musculo.
+    if (agora - espnowUltimoStatusMusculoMs >= ESPNOW_STATUS_INTERVAL_MS) {
+      espnowUltimoStatusMusculoMs = agora;
+      SerialMusculo.println("ESN:0");
+    }
+    return;
+  }
+
+  // Envia periodicamente o pacote local de ultrassonicos para o outro robo.
+  if (agora - espnowUltimoEnvioMs >= ESPNOW_SEND_INTERVAL_MS) {
+    enviarPacoteUltraEspNow(false);
+  }
+
+  // Verifica timeout de comunicacao.
+  bool semRx  = (agora - espnowUltimoRxMs)  > ESPNOW_TIMEOUT_MS;
+  bool semAck = (agora - espnowUltimoAckMs) > ESPNOW_TIMEOUT_MS;
+  if (semRx && semAck) espnowComOK = false;
+
+  // Envia status para o Musculo periodicamente.
+  if (agora - espnowUltimoStatusMusculoMs >= ESPNOW_STATUS_INTERVAL_MS) {
+    espnowUltimoStatusMusculoMs = agora;
+    SerialMusculo.print("ESN:");
+    SerialMusculo.println(espnowComOK ? "1" : "0");
+  }
+}
 
 void resetLeituraIrOlho() {
   ultimoAnguloIrX10 = -10;
@@ -489,6 +673,29 @@ void enviarUltrasParaMusculo() {
   SerialMusculo.print(",");
   SerialMusculo.println(uT, 1);
   ultimoEnvioUltraMusculoMs = millis();
+}
+
+// Publica os ultrassonicos recebidos do outro robo via ESP-NOW para o Musculo.
+void enviarUltrasRemotosParaMusculo() {
+  if ((millis() - ultimoEnvioUltraRemotoMusculoMs) < INTERVALO_ENVIO_ULTRA_MS) {
+    return;
+  }
+
+  bool pacoteRecente = (ultimoRxUltraRemotoMs > 0) && ((millis() - ultimoRxUltraRemotoMs) < ESPNOW_TIMEOUT_MS);
+  float uD = pacoteRecente ? (ultimoUltraRemotoDX10 / 10.0f) : -1.0f;
+  float uE = pacoteRecente ? (ultimoUltraRemotoEX10 / 10.0f) : -1.0f;
+  float uF = pacoteRecente ? (ultimoUltraRemotoFX10 / 10.0f) : -1.0f;
+  float uT = pacoteRecente ? (ultimoUltraRemotoTX10 / 10.0f) : -1.0f;
+
+  SerialMusculo.print("ULR:");
+  SerialMusculo.print(uD, 1);
+  SerialMusculo.print(",");
+  SerialMusculo.print(uE, 1);
+  SerialMusculo.print(",");
+  SerialMusculo.print(uF, 1);
+  SerialMusculo.print(",");
+  SerialMusculo.println(uT, 1);
+  ultimoEnvioUltraRemotoMusculoMs = millis();
 }
 
 // Le chave do kicker e envia estado periodico/por mudanca ao Musculo.
@@ -715,6 +922,8 @@ void setup() {
     Serial.println("Aviso: QMC5883P nao detectada na inicializacao.");
   }
 
+  iniciarEspNow();
+
   unsigned long inicioHandshake = millis();
   while ((millis() - inicioHandshake) < 3000 && !comunicacaoMusculoOK) {
     if (millis() - ultimoEnvioOiMs >= 300) {
@@ -747,7 +956,9 @@ void loop() {
   enviarLinhaParaMusculo();
   enviarIntensidadeParaMusculo();
   enviarUltrasParaMusculo();
+  enviarUltrasRemotosParaMusculo();
   enviarEstadoKickerParaMusculo();
+  atualizarEspNow();
 
   delay(5);
 }

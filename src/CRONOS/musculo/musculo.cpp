@@ -79,8 +79,14 @@ float ultraDcm = -1.0f;
 float ultraEcm = -1.0f;
 float ultraFcm = -1.0f;
 float ultraTcm = -1.0f;
+float ultraRemotoDcm = -1.0f;
+float ultraRemotoEcm = -1.0f;
+float ultraRemotoFcm = -1.0f;
+float ultraRemotoTcm = -1.0f;
 bool ultrasValidos = false;
+bool ultrasRemotosValidos = false;
 unsigned long ultimoRxUltraMs = 0;
+unsigned long ultimoRxUltraRemotoMs = 0;
 bool kickerRecebido = false;
 bool kickerAtivado = false;  // true quando chave acionada (valor 0 vindo da cabeca)
 bool pulsoKickerAtivo = false;
@@ -98,13 +104,18 @@ bool cameraDadosValidos = false;
 unsigned long ultimoRxCameraMs = 0;
 // ===== FIM novos dados camera =====
 
+// Status da comunicacao ESP-NOW entre as Cabecas.
+bool espnowOK = false;
+bool sozinho = true;
+unsigned long ultimoRxEspnowMs = 0;
+
 // Estados principais da interface/operacao.
 enum Estado { MENU, CALIBRACAO, INICIAR };
 Estado estadoAtual = MENU;
 int itemSelecionado = 0;
 
 // Submenus disponiveis na tela de calibracao.
-enum SubMenuCalibracao { SUBMENU_PRINCIPAL, SUBMENU_GOL, SUBMENU_BUSSOLA, SUBMENU_IR, SUBMENU_ULTRA, SUBMENU_CAMERA };
+enum SubMenuCalibracao { SUBMENU_PRINCIPAL, SUBMENU_GOL, SUBMENU_BUSSOLA, SUBMENU_IR, SUBMENU_ULTRA, SUBMENU_CAMERA, SUBMENU_ESPNOW };
 SubMenuCalibracao subMenuCalibracao = SUBMENU_PRINCIPAL;
 int itemSubMenu = 0;
 
@@ -570,65 +581,76 @@ void desenharSubmenuCalibracao() {
   display.println("== CALIBRACAO ==");
   display.println();
 
-  // Primeiro nivel: escolhe entre gol, bussola, teste da camera ou voltar.
+  // Primeiro nivel: escolhe entre gol, bussola, camera, espnow ou voltar.
   if (subMenuCalibracao == SUBMENU_PRINCIPAL) {
     if (itemSubMenu == 0) {
-      display.fillRect(0, 16, 128, 10, SSD1306_WHITE);
+      display.fillRect(0, 16, 128, 8, SSD1306_WHITE);
       display.setTextColor(SSD1306_BLACK);
-      display.setCursor(4, 18);
+      display.setCursor(4, 16);
       display.println("GOL");
       display.setTextColor(SSD1306_WHITE);
     } else {
-      display.setCursor(4, 18);
+      display.setCursor(4, 16);
       display.println("GOL");
     }
 
     if (itemSubMenu == 1) {
-      display.fillRect(0, 26, 128, 10, SSD1306_WHITE);
+      display.fillRect(0, 24, 128, 8, SSD1306_WHITE);
       display.setTextColor(SSD1306_BLACK);
-      display.setCursor(4, 28);
+      display.setCursor(4, 24);
       display.println("BUSSOLA");
       display.setTextColor(SSD1306_WHITE);
     } else {
-      display.setCursor(4, 28);
+      display.setCursor(4, 24);
       display.println("BUSSOLA");
     }
 
     if (itemSubMenu == 2) {
-      display.fillRect(0, 36, 128, 10, SSD1306_WHITE);
+      display.fillRect(0, 32, 128, 8, SSD1306_WHITE);
       display.setTextColor(SSD1306_BLACK);
-      display.setCursor(4, 38);
+      display.setCursor(4, 32);
       display.println("IR");
       display.setTextColor(SSD1306_WHITE);
     } else {
-      display.setCursor(4, 38);
+      display.setCursor(4, 32);
       display.println("IR");
     }
 
     if (itemSubMenu == 3) {
-      display.fillRect(0, 46, 128, 10, SSD1306_WHITE);
+      display.fillRect(0, 40, 128, 8, SSD1306_WHITE);
       display.setTextColor(SSD1306_BLACK);
-      display.setCursor(4, 48);
+      display.setCursor(4, 40);
       display.println("ULTRA");
       display.setTextColor(SSD1306_WHITE);
     } else {
-      display.setCursor(4, 48);
+      display.setCursor(4, 40);
       display.println("ULTRA");
     }
 
     if (itemSubMenu == 4) {
-      display.fillRect(0, 56, 128, 10, SSD1306_WHITE);
+      display.fillRect(0, 48, 128, 8, SSD1306_WHITE);
       display.setTextColor(SSD1306_BLACK);
-      display.setCursor(4, 58);
-      display.println("TESTE CAM");
+      display.setCursor(4, 48);
+      display.println("CAM");
       display.setTextColor(SSD1306_WHITE);
     } else {
-      display.setCursor(4, 58);
-      display.println("TESTE CAM");
+      display.setCursor(4, 48);
+      display.println("CAM");
     }
 
     if (itemSubMenu == 5) {
-      display.fillRect(96, 0, 32, 10, SSD1306_WHITE);
+      display.fillRect(0, 56, 128, 8, SSD1306_WHITE);
+      display.setTextColor(SSD1306_BLACK);
+      display.setCursor(4, 56);
+      display.println("ESPNOW");
+      display.setTextColor(SSD1306_WHITE);
+    } else {
+      display.setCursor(4, 56);
+      display.println("ESPNOW");
+    }
+
+    if (itemSubMenu == 6) {
+      display.fillRect(96, 0, 32, 8, SSD1306_WHITE);
       display.setTextColor(SSD1306_BLACK);
       display.setCursor(98, 2);
       display.println("VOLTA");
@@ -721,6 +743,41 @@ void desenharSubmenuCalibracao() {
       display.println("ULTRA DA CABECA");
       display.println("AGUARDANDO...");
     }
+    display.println("BTN1/2/3 VOLTAR");
+
+  // Tela de diagnostico ESP-NOW entre as Cabecas.
+  } else if (subMenuCalibracao == SUBMENU_ESPNOW) {
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+    display.setCursor(0, 0);
+    display.println("=== ESPNOW CAB ===");
+    bool espnowRecente = (ultimoRxEspnowMs > 0) && ((millis() - ultimoRxEspnowMs) < 5000);
+    bool falhaEspnow = (!espnowRecente) || (!espnowOK);
+    bool estadoSozinho = falhaEspnow || sozinho;
+    bool ultraRemotoRecente = ultrasRemotosValidos && (ultimoRxUltraRemotoMs > 0) && ((millis() - ultimoRxUltraRemotoMs) < 6000);
+    display.setCursor(0, 10);
+    display.print("SOZ:");
+    display.print(estadoSozinho ? "S" : "N");
+    display.print(" FAL:");
+    display.println(falhaEspnow ? "S" : "N");
+    display.setCursor(0, 22);
+    if (ultraRemotoRecente) {
+      display.print("D:");
+      display.print(ultraRemotoDcm, 1);
+      display.print(" E:");
+      display.println(ultraRemotoEcm, 1);
+      display.setCursor(0, 34);
+      display.print("F:");
+      display.print(ultraRemotoFcm, 1);
+      display.print(" T:");
+      display.println(ultraRemotoTcm, 1);
+    } else {
+      display.println("ULTRA REMOTO");
+      display.setCursor(0, 34);
+      display.println("SEM DADOS");
+    }
+    display.setCursor(0, 56);
     display.println("BTN1/2/3 VOLTAR");
 
   // Tela de diagnostico da camera, mostrando os 6 dados (bola + 2 gols: angulo e distancia).
@@ -920,10 +977,10 @@ void processarEventoBotao(uint8_t botao) {
     // Navegacao circular entre as opcoes do submenu principal.
     if (botao == 1) {
       itemSubMenu--;
-      if (itemSubMenu < 0) itemSubMenu = 5;
+      if (itemSubMenu < 0) itemSubMenu = 6;
     } else if (botao == 2) {
       itemSubMenu++;
-      if (itemSubMenu > 5) itemSubMenu = 0;
+      if (itemSubMenu > 6) itemSubMenu = 0;
     } else if (botao == 3) {
       if (itemSubMenu == 0) {
         subMenuCalibracao = SUBMENU_GOL;
@@ -939,6 +996,9 @@ void processarEventoBotao(uint8_t botao) {
         itemSubMenu = 0;
       } else if (itemSubMenu == 4) {
         subMenuCalibracao = SUBMENU_CAMERA;
+        itemSubMenu = 0;
+      } else if (itemSubMenu == 5) {
+        subMenuCalibracao = SUBMENU_ESPNOW;
         itemSubMenu = 0;
       } else {
         estadoAtual = MENU;
@@ -1004,6 +1064,14 @@ void processarEventoBotao(uint8_t botao) {
     if (botao == 1 || botao == 2 || botao == 3) {
       subMenuCalibracao = SUBMENU_PRINCIPAL;
       itemSubMenu = 4;
+    }
+    return;
+  }
+
+  if (estadoAtual == CALIBRACAO && subMenuCalibracao == SUBMENU_ESPNOW) {
+    if (botao == 1 || botao == 2 || botao == 3) {
+      subMenuCalibracao = SUBMENU_PRINCIPAL;
+      itemSubMenu = 5;
     }
     return;
   }
@@ -1195,6 +1263,34 @@ void processarMensagemCabeca(String msg) {
     return;
   }
 
+  // Distancias dos ultrassonicos recebidas do outro robo via Cabeca no formato ULR:D,E,F,T.
+  if (msg.startsWith("ULR:")) {
+    String payload = msg.substring(4);
+    int p1 = payload.indexOf(',');
+    int p2 = payload.indexOf(',', p1 + 1);
+    int p3 = payload.indexOf(',', p2 + 1);
+    if (p1 > 0 && p2 > p1 && p3 > p2) {
+      String sD = payload.substring(0, p1);
+      String sE = payload.substring(p1 + 1, p2);
+      String sF = payload.substring(p2 + 1, p3);
+      String sT = payload.substring(p3 + 1);
+      sD.trim();
+      sE.trim();
+      sF.trim();
+      sT.trim();
+
+      ultraRemotoDcm = sD.toFloat();
+      ultraRemotoEcm = sE.toFloat();
+      ultraRemotoFcm = sF.toFloat();
+      ultraRemotoTcm = sT.toFloat();
+      ultrasRemotosValidos = (ultraRemotoDcm >= 0.0f && ultraRemotoEcm >= 0.0f && ultraRemotoFcm >= 0.0f && ultraRemotoTcm >= 0.0f);
+      ultimoRxUltraRemotoMs = millis();
+      comunicacaoCabecaOK = true;
+      ultimoRxCabeca = millis();
+    }
+    return;
+  }
+
   // Estado da chave do kicker reportado pela Cabeca.
   if (msg.startsWith("KIK:")) {
     String sKik = msg.substring(4);
@@ -1252,6 +1348,18 @@ void processarMensagemCabeca(String msg) {
     return;
   }
   // ===== FIM dados camera =====
+
+  // Status da comunicacao ESP-NOW entre as Cabecas reportado pela Cabeca local.
+  if (msg.startsWith("ESN:")) {
+    String sEsn = msg.substring(4);
+    sEsn.trim();
+    espnowOK = (sEsn == "1");
+    sozinho = !espnowOK;
+    ultimoRxEspnowMs = millis();
+    comunicacaoCabecaOK = true;
+    ultimoRxCabeca = millis();
+    return;
+  }
 }
 
 // Acumula bytes da serial da Cabeca e despacha mensagens completas por linha.
@@ -1364,8 +1472,11 @@ void loop() {
   }
 
   if (estadoAtual == INICIAR && comunicacaoCabecaOK) {
-    // Alinhamento usa erro do gol (camera), igual ao teste PIDBussola.
-    erroAlinhamentoGraus = erroGolGraus;
+    // Seleciona o angulo do gol na camera conforme a cor configurada no menu.
+    bool cameraDataOk = cameraDadosValidos && (ultimoRxCameraMs > 0) && ((millis() - ultimoRxCameraMs) <= 1000);
+    int16_t anguloGolCamera = corGolAzul ? cameraBlueAngle : cameraYellowAngle;
+    bool golVisivelCamera = cameraDataOk && (anguloGolCamera != -999);
+    erroAlinhamentoGraus = golVisivelCamera ? (float)anguloGolCamera : 0.0f;
     fugindoLinhaAgora = false;
 
     // Prioridade de movimento: LINHA > BOLA > ALINHAR NO EIXO
@@ -1379,8 +1490,8 @@ void loop() {
     } else {
       int cmdPidAssinado = 0;
 
-      // So gira para alinhar quando o gol estiver visivel e fora da tolerancia.
-      bool precisaAlinhar = golDetectado && (fabsf(erroAlinhamentoGraus) > TOLERANCIA_ALINHAMENTO_GRAUS);
+      // So gira para alinhar quando o gol estiver visivel na camera e fora da tolerancia.
+      bool precisaAlinhar = golVisivelCamera && (fabsf(erroAlinhamentoGraus) > TOLERANCIA_ALINHAMENTO_GRAUS);
       if (precisaAlinhar) {
         alinhandoAgora = true;
         int cmdPid = calcularSaidaPidBussola(erroAlinhamentoGraus);

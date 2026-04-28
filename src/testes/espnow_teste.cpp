@@ -6,7 +6,10 @@
 
 // Troque este MAC pelo endereco do outro ESP.
 // Exemplo: "24:6F:28:AA:BB:CC"
-const char* TARGET_MAC_STR = "1C:DB:D4:46:CB:FC";
+
+// mac cronos AC:A7:04:2B:9B:60
+//mac nexus 1C:DB:D4:46:CB:FC
+const char* TARGET_MAC_STR = "AC:A7:04:2B:9B:60";
 uint8_t TARGET_MAC[6] = {0};
 
 static const unsigned long SEND_INTERVAL_MS = 2000;

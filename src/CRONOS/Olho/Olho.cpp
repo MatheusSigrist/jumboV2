@@ -52,14 +52,14 @@ void L_Ultra() {     // <-- Função para leitura dos sensores ultrassonicos
 
 
 //------------------------------------ IR SEEKER -----------------------------//
-const int NUM_SENSORES = 12;
+const int NUM_SENSORES = 11;
 const int sensoresTSOP[NUM_SENSORES] = {
-  6, 7, 46, 11, 12, 13, 14, 48,
-  45, 35, 38, 39  
+   6, 7, 46, 11, 12, 13, 14, 48,
+  45, 38, 39
 };
 float angulos[NUM_SENSORES] = {
   0, 30, 60, 90, 120, 150, 180, 210,
-  240, 270, 300, 330 
+  240, 270, 330 
 };
 const unsigned long JANELA_TEMPO = 15;    // <-- Janela de tempo para contagens de pulso de IR (10ms)
 const int LIMIAR_PULSOS = 8;    // <-- Limiar de pulsos para identificar que é a bola
@@ -405,7 +405,7 @@ void loop(){
 
   // ler dados recebidos da camera (gol detectado/erro/pixels)
   LeituraCamera();
-
+   Serial.println(p.angulo);
   enviarDados(); 
   delay(50);
 }
