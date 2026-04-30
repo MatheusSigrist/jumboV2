@@ -126,7 +126,8 @@ const unsigned long TIMEOUT_BUSSOLA_MS = 800;
 const unsigned long TIMEOUT_LINHA_MS = 150;
 const unsigned long TIMEOUT_ULTRA_MS = 1000;
 const unsigned long TIMEOUT_CAMERA_MS = 1000;
-const int velocidade_maxima = 160;
+// Velocidade Maxima do robô - Vamos alterar aqui!
+const int velocidade_maxima = 220;
 const bool MOVIMENTO_BOLA_HABILITADO = false;
 
 // Endereco e tamanho usados para persistir a bussola na EEPROM.
@@ -146,12 +147,13 @@ const float PID_BUS_KD = 0.5f;
 const float PID_BUS_INTEGRAL_MAX = 120.0f;
 const int PID_BUS_SAIDA_MIN = 25;
 const int PID_BUS_SAIDA_MAX = 180;
-const float GANHO_GIRO_MISTO = 0.9f;
+const float GANHO_GIRO_MISTO = 0.7f;
 
 
 
 // Velocidade dedicada para ataque frontal quando a bola estiver entre 330° e 30°.
-const int VELOCIDADE_IR_FRONTAL_PWM = 180;
+const int VELOCIDADE_IR_FRONTAL_PWM = 200;
+const int VELOCIDADE_IR_FAIXA_REDUZIDA_PWM = 150;
 const unsigned long TRANSICAO_ANGULO_IR_MIN_MS = 75;
 const unsigned long TRANSICAO_ANGULO_IR_MAX_MS = 200;
 const float TRANSICAO_ANGULO_IR_MS_POR_GRAU = 4.0f;
@@ -166,11 +168,13 @@ bool alinhandoAgora = false;
 bool corGolPendenteEnvio = true;
 unsigned long ultimoEnvioCorGolMs = 0;
 const unsigned long INTERVALO_ENVIO_COR_GOL_MS = 500;
+const unsigned long TEMPO_CAMERA_SEM_IR_PARA_IGNORAR_LINHA_MS = 1000;
 
 // Estado interno do PID entre iteracoes do loop.
 float pidBusIntegral = 0.0f;
 float pidBusErroAnterior = 0.0f;
 unsigned long pidBusUltimoMs = 0;
+unsigned long inicioCameraSemIrMs = 0;
 
 // Estado da rampa angular para evitar saltos bruscos entre faixas do IR.
 float anguloIrSuaveAtual = 0.0f;
@@ -442,21 +446,41 @@ bool cameraTemGolSelecionadoValido(int16_t &anguloGol) {
 // Ajusta o angulo da bola para um angulo de comando mais estavel de movimento.
 float mapearAnguloBolaParaMovimento(float anguloBolaGraus) {
   float ang = normalizarAngulo360(anguloBolaGraus);
-  if (ang >= 20.0f && ang < 45.0f) return 90.0f;
-  if (ang >= 45.0f && ang < 90.0f) return 135.0f;
-  if (ang >= 90.0f && ang < 135.0f) return 180.0f;
-  if (ang >= 315.0f && ang < 340.0f) return 270.0f;
-  if (ang >= 270.0f && ang < 315.0f) return 180.0f;
-  if (ang >= 135.0f && ang < 180.0f) return 220.0f;
-  if (ang >= 180.0f && ang < 270.0f) return 140.0f;
-  
+
+  if(ang >= 15.0f && ang < 45.0f) return 100.0f; 
+  if(ang >= 315.0f && ang < 345.0f) return 260.0f; 
+
+
+
+
+  if(ang >= 45.0f && ang < 90.0f) return 135.0f;//ok
+  if(ang >= 90.0f && ang < 135.0f) return 180.0f;
+  if(ang >= 270.0f && ang < 315.0f) return 225.0f;
+  if(ang >= 225.0f && ang < 270.0f) return 180.0f;
+  if(ang >= 180.0f && ang < 225.0f) return 135.0f;
+  if(ang >= 135.0f && ang < 180.0f) return 225.0f;
+
+
+
   return ang;
+}
+
+// Reduz a velocidade em faixas proximas do frontal para melhorar controle lateral.
+int calcularVelocidadeIrPorAngulo(float anguloBolaGraus) {
+  float ang = normalizarAngulo360(anguloBolaGraus);
+
+  if ((ang >= 15.0f && ang < 45.0f) ||
+      (ang >= 315.0f && ang < 345.0f)) {
+    return VELOCIDADE_IR_FAIXA_REDUZIDA_PWM;
+  }
+
+  return velocidade_maxima;
 }
 
 // Detecta a faixa frontal do IR em torno de 0°, tratando a transicao 360° -> 0°.
 bool irNaFaixaFrontal(float anguloBolaGraus) {
   float ang = normalizarAngulo360(anguloBolaGraus);
-  return (ang >= 332.0f || ang <= 27.0f);
+  return (ang >= 335.0f || ang <= 25.0f);
 }
 
 // Quantiza o comando em passos fixos para transicoes curtas e previsiveis.
@@ -1571,6 +1595,7 @@ void loop() {
     bool golVisivelCamera = cameraTemGolSelecionadoValido(anguloGolCamera);
     erroAlinhamentoGraus = golVisivelCamera ? (float)anguloGolCamera : 0.0f;
     fugindoLinhaAgora = false;
+    anguloFugaLinhaCmd = 0.0f;
 
     int cmdPidAssinado = 0;
     bool cameraBolaVisivel = cameraTemBolaValida();
@@ -1587,19 +1612,39 @@ void loop() {
       resetPidBussola();
     }
 
+    // Se ficar sem IR e com bola na camera por tempo suficiente,
+    // a camera assume e a linha e ignorada temporariamente.
+    if (!irDetectado && cameraBolaVisivel) {
+      if (inicioCameraSemIrMs == 0) {
+        inicioCameraSemIrMs = millis();
+      }
+    } else {
+      inicioCameraSemIrMs = 0;
+    }
+
+    bool ignorarLinhaPorCamera = (inicioCameraSemIrMs != 0) &&
+                                 ((millis() - inicioCameraSemIrMs) >= TEMPO_CAMERA_SEM_IR_PARA_IGNORAR_LINHA_MS);
+
     // Erro grande: para tudo e alinha de vez.
     // Fora disso, segue bola com transicao angular curta em passos de 5 graus
     // (100-300 ms) para evitar salto seco entre direcoes.
-    if (erroGrande) {
+    bool linhaValida = linhaDetectada && (anguloLinhaPe >= 0.0f) && !ignorarLinhaPorCamera;
+    if (linhaValida) {
+      // Prioridade maxima: ao detectar linha, foge no sentido oposto.
+      fugindoLinhaAgora = true;
+      anguloFugaLinhaCmd = normalizarAngulo360(anguloLinhaPe + 180.0f);
+      seguirDirecaoPorAngulo(anguloFugaLinhaCmd, VELOCIDADE_FUGA_LINHA);
+    } else if (erroGrande) {
       girarNoEixo(cmdPidAssinado);
     } else if (irDetectado) {
       if (irNaFaixaFrontal(anguloIr)) {
-        // Na faixa frontal o comando troca seco para 0 graus.
-        seguirDirecaoPorAngulo(0.0f, velocidade_maxima);
+        // Na faixa frontal aplica PWM direto e mantem correcao de alinhamento do gol.
+        moverFrenteComGiro(VELOCIDADE_IR_FRONTAL_PWM, cmdPidAssinado);
       } else {
         float anguloIrAlvo = mapearAnguloBolaParaMovimento(anguloIr);
         float anguloIrComRampa = obterAnguloIrSuavizado(anguloIrAlvo);
-        seguirDirecaoPorAngulo(anguloIrComRampa, velocidade_maxima);
+        int velocidadeIr = calcularVelocidadeIrPorAngulo(anguloIr);
+        seguirDirecaoPorAngulo(anguloIrComRampa, velocidadeIr);
       }
     } else if (cameraBolaVisivel) {
       float anguloCameraVetorial = normalizarAngulo360((float)cameraBallAngle);
@@ -1625,5 +1670,5 @@ void loop() {
     ultimaTela = millis();
   }
 
-  delay(5);
+ // delay(5);
 }
