@@ -389,8 +389,8 @@ void setup() {
     EEPROM.begin(EEPROM_SIZE);
     CarregarCorGolEEPROM();
 
-    Serial1.begin(9600, SERIAL_8N1, RX_CABECA, TX_CABECA);
-    Serial2.begin(19200, SERIAL_8N1, RX_CAMERA, TX_CAMERA);
+    Serial1.begin(115200, SERIAL_8N1, RX_CABECA, TX_CABECA);
+    Serial2.begin(115200, SERIAL_8N1, RX_CAMERA, TX_CAMERA);
 }
 
 // Laco principal: handshake, leituras de sensores e envio de pacote.

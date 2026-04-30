@@ -141,7 +141,7 @@ const int SINAL_GIRO_PID = SINAL_GIRO;
 
 // Ganhos e saturacoes do PID usado para girar rumo ao gol.
 const float PID_BUS_KP = 0.8f;
-const float PID_BUS_KI = 0.00f;
+const float PID_BUS_KI = 0.01f;
 const float PID_BUS_KD = 0.5f;
 const float PID_BUS_INTEGRAL_MAX = 120.0f;
 const int PID_BUS_SAIDA_MIN = 25;
@@ -152,6 +152,10 @@ const float GANHO_GIRO_MISTO = 0.9f;
 
 // Velocidade dedicada para ataque frontal quando a bola estiver entre 330° e 30°.
 const int VELOCIDADE_IR_FRONTAL_PWM = 180;
+const unsigned long TRANSICAO_ANGULO_IR_MIN_MS = 75;
+const unsigned long TRANSICAO_ANGULO_IR_MAX_MS = 200;
+const float TRANSICAO_ANGULO_IR_MS_POR_GRAU = 4.0f;
+const float PASSO_ANGULO_IR_GRAUS = 5.0f;
 
 // Referencia salva da bussola e estados auxiliares do controle.
 int headingBussolaSalvo = 0;
@@ -167,6 +171,14 @@ const unsigned long INTERVALO_ENVIO_COR_GOL_MS = 500;
 float pidBusIntegral = 0.0f;
 float pidBusErroAnterior = 0.0f;
 unsigned long pidBusUltimoMs = 0;
+
+// Estado da rampa angular para evitar saltos bruscos entre faixas do IR.
+float anguloIrSuaveAtual = 0.0f;
+float anguloIrSuaveInicio = 0.0f;
+float anguloIrSuaveAlvo = 0.0f;
+unsigned long inicioTransicaoIrMs = 0;
+unsigned long duracaoTransicaoIrMs = TRANSICAO_ANGULO_IR_MIN_MS;
+bool anguloIrSuaveInicializado = false;
 
 // Controla o pulso do kicker com tempo minimo e intervalo entre disparos.
 void atualizarKicker() {
@@ -444,7 +456,61 @@ float mapearAnguloBolaParaMovimento(float anguloBolaGraus) {
 // Detecta a faixa frontal do IR em torno de 0°, tratando a transicao 360° -> 0°.
 bool irNaFaixaFrontal(float anguloBolaGraus) {
   float ang = normalizarAngulo360(anguloBolaGraus);
-  return (ang >= 335.0f || ang <= 25.0f);
+  return (ang >= 332.0f || ang <= 27.0f);
+}
+
+// Quantiza o comando em passos fixos para transicoes curtas e previsiveis.
+float quantizarAnguloPasso(float anguloGraus, float passoGraus) {
+  if (passoGraus <= 0.0f) {
+    return normalizarAngulo360(anguloGraus);
+  }
+  float ang = normalizarAngulo360(anguloGraus);
+  float quantizado = roundf(ang / passoGraus) * passoGraus;
+  return normalizarAngulo360(quantizado);
+}
+
+// Faz rampa curta (100-300 ms) entre angulos IR para nao pular seco entre faixas.
+float obterAnguloIrSuavizado(float anguloAlvoGraus) {
+  float alvo = normalizarAngulo360(anguloAlvoGraus);
+  unsigned long agora = millis();
+
+  if (!anguloIrSuaveInicializado) {
+    anguloIrSuaveAtual = alvo;
+    anguloIrSuaveInicio = alvo;
+    anguloIrSuaveAlvo = alvo;
+    inicioTransicaoIrMs = agora;
+    duracaoTransicaoIrMs = TRANSICAO_ANGULO_IR_MIN_MS;
+    anguloIrSuaveInicializado = true;
+    return quantizarAnguloPasso(anguloIrSuaveAtual, PASSO_ANGULO_IR_GRAUS);
+  }
+
+  float erroNovoAlvo = fabsf(normalizarErro180(alvo - anguloIrSuaveAlvo));
+  if (erroNovoAlvo >= 1.0f) {
+    anguloIrSuaveInicio = anguloIrSuaveAtual;
+    anguloIrSuaveAlvo = alvo;
+    inicioTransicaoIrMs = agora;
+
+    float delta = fabsf(normalizarErro180(anguloIrSuaveAlvo - anguloIrSuaveInicio));
+    unsigned long duracaoCalculada = (unsigned long)(delta * TRANSICAO_ANGULO_IR_MS_POR_GRAU);
+    if (duracaoCalculada < TRANSICAO_ANGULO_IR_MIN_MS) {
+      duracaoCalculada = TRANSICAO_ANGULO_IR_MIN_MS;
+    }
+    if (duracaoCalculada > TRANSICAO_ANGULO_IR_MAX_MS) {
+      duracaoCalculada = TRANSICAO_ANGULO_IR_MAX_MS;
+    }
+    duracaoTransicaoIrMs = duracaoCalculada;
+  }
+
+  unsigned long decorridoMs = agora - inicioTransicaoIrMs;
+  if (decorridoMs >= duracaoTransicaoIrMs) {
+    anguloIrSuaveAtual = anguloIrSuaveAlvo;
+  } else {
+    float progresso = (float)decorridoMs / (float)duracaoTransicaoIrMs;
+    float delta = normalizarErro180(anguloIrSuaveAlvo - anguloIrSuaveInicio);
+    anguloIrSuaveAtual = normalizarAngulo360(anguloIrSuaveInicio + delta * progresso);
+  }
+
+  return quantizarAnguloPasso(anguloIrSuaveAtual, PASSO_ANGULO_IR_GRAUS);
 }
 
 // Move para frente com PWM fixo nas rodas, mantendo a correcao de giro do alinhamento.
@@ -1413,7 +1479,7 @@ void lerSerialCabeca() {
 // Inicializa perifericos, faz handshake inicial e prepara o estado de operacao.
 void setup() {
   Serial.begin(115200);
-  Serial1.begin(9600, SERIAL_8N1, RX_CABECA, TX_CABECA);
+  Serial1.begin(115200, SERIAL_8N1, RX_CABECA, TX_CABECA);
 
   // Recupera da EEPROM o heading salvo como referencia de calibracao.
   EEPROM.begin(EEPROM_SIZE);
@@ -1511,7 +1577,7 @@ void loop() {
 
     // So gira para alinhar quando o gol estiver visivel na camera e fora da tolerancia.
     bool precisaAlinhar = golVisivelCamera && (fabsf(erroAlinhamentoGraus) > TOLERANCIA_ALINHAMENTO_GRAUS);
-    bool erroGrande = golVisivelCamera && (fabsf(erroAlinhamentoGraus) > 60.0f);
+    bool erroGrande = golVisivelCamera && (fabsf(erroAlinhamentoGraus) > 40.0f);
     if (precisaAlinhar) {
       alinhandoAgora = true;
       int cmdPid = calcularSaidaPidBussola(erroAlinhamentoGraus);
@@ -1521,15 +1587,24 @@ void loop() {
       resetPidBussola();
     }
 
-    // Erro > 60 graus: para tudo e alinha de vez.
-    // Erro <= 60 graus: segue bola com giro de correcao simultane (IR tem prioridade sobre camera).
-    // Se a bola IR estiver na faixa frontal (335-360 ou 0-25), move no angulo 0 (frente pura).
+    // Erro grande: para tudo e alinha de vez.
+    // Fora disso, segue bola com transicao angular curta em passos de 5 graus
+    // (100-300 ms) para evitar salto seco entre direcoes.
     if (erroGrande) {
       girarNoEixo(cmdPidAssinado);
     } else if (irDetectado) {
-      seguirDirecaoComGiro(anguloIr, velocidade_maxima, cmdPidAssinado);
+      if (irNaFaixaFrontal(anguloIr)) {
+        // Na faixa frontal o comando troca seco para 0 graus.
+        seguirDirecaoPorAngulo(0.0f, velocidade_maxima);
+      } else {
+        float anguloIrAlvo = mapearAnguloBolaParaMovimento(anguloIr);
+        float anguloIrComRampa = obterAnguloIrSuavizado(anguloIrAlvo);
+        seguirDirecaoPorAngulo(anguloIrComRampa, velocidade_maxima);
+      }
     } else if (cameraBolaVisivel) {
-      seguirDirecaoComGiro((float)cameraBallAngle, velocidade_maxima, cmdPidAssinado);
+      float anguloCameraVetorial = normalizarAngulo360((float)cameraBallAngle);
+      float anguloCameraComRampa = obterAnguloIrSuavizado(anguloCameraVetorial);
+      seguirDirecaoComGiro(anguloCameraComRampa, velocidade_maxima, cmdPidAssinado);
     } else if (precisaAlinhar) {
       girarNoEixo(cmdPidAssinado);
     } else {

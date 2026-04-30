@@ -26,7 +26,7 @@
 #define TX_OLHO 7
 #define RX_PE 4
 #define TX_PE 5
-#define BAUD_PE_CABECA 19200
+#define BAUD_PE_CABECA 115200
 
 #define BOTAO_1 3
 #define BOTAO_2 37
@@ -903,12 +903,12 @@ void lerSerialMusculo() {
 // Inicializa serials, sensores e handshakes iniciais do sistema.
 void setup() {
   Serial.begin(115200);
-  SerialMusculo.begin(9600, SERIAL_8N1, RX_MUSCULO, TX_MUSCULO);
-  SerialOlho.begin(9600, SERIAL_8N1, RX_OLHO, TX_OLHO);
+  SerialMusculo.begin(115200, SERIAL_8N1, RX_MUSCULO, TX_MUSCULO);
+  SerialOlho.begin(115200, SERIAL_8N1, RX_OLHO, TX_OLHO);
   SerialPe.begin(BAUD_PE_CABECA, SERIAL_8N1, RX_PE, TX_PE);
   Wire.begin(I2C_SDA, I2C_SCL);
   Wire.setClock(I2C_FREQ);
-  Wire.setTimeOut(20);
+  Wire.setTimeOut(10);
 
   pinMode(BOTAO_1, INPUT_PULLUP);
   pinMode(BOTAO_2, INPUT_PULLUP);
