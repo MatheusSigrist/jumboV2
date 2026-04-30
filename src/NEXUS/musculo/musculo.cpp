@@ -153,7 +153,7 @@ const float GANHO_GIRO_MISTO = 0.7f;
 
 // Velocidade dedicada para ataque frontal quando a bola estiver entre 330° e 30°.
 const int VELOCIDADE_IR_FRONTAL_PWM = 200;
-const int VELOCIDADE_IR_FAIXA_REDUZIDA_PWM = 150;
+const int VELOCIDADE_IR_FAIXA_REDUZIDA_PWM = 160;
 const unsigned long TRANSICAO_ANGULO_IR_MIN_MS = 75;
 const unsigned long TRANSICAO_ANGULO_IR_MAX_MS = 200;
 const float TRANSICAO_ANGULO_IR_MS_POR_GRAU = 4.0f;
