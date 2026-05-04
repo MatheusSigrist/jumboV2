@@ -153,10 +153,11 @@ const float GANHO_GIRO_MISTO = 0.7f;
 
 // Velocidade dedicada para ataque frontal quando a bola estiver entre 330° e 30°.
 const int VELOCIDADE_IR_FRONTAL_PWM = 200;
-const int VELOCIDADE_IR_FAIXA_REDUZIDA_PWM = 160;
-const unsigned long TRANSICAO_ANGULO_IR_MIN_MS = 75;
-const unsigned long TRANSICAO_ANGULO_IR_MAX_MS = 200;
-const float TRANSICAO_ANGULO_IR_MS_POR_GRAU = 4.0f;
+const int VELOCIDADE_IR_FAIXA_REDUZIDA_PWM = 140;
+const int PASSO_RAMPA_PWM = 16;
+const unsigned long TRANSICAO_ANGULO_IR_MIN_MS = 50;
+const unsigned long TRANSICAO_ANGULO_IR_MAX_MS = 100;
+const float TRANSICAO_ANGULO_IR_MS_POR_GRAU = 2.0f;
 const float PASSO_ANGULO_IR_GRAUS = 5.0f;
 
 // Referencia salva da bussola e estados auxiliares do controle.
@@ -267,6 +268,36 @@ void Motor_3(int vel4) {
   }
 }
 
+// Suaviza variacoes de comando para reduzir tranco e excesso de inercia.
+int aplicarRampaPwm(int alvo, int atual, int passoMaximo) {
+  int delta = alvo - atual;
+  if (delta > passoMaximo) return atual + passoMaximo;
+  if (delta < -passoMaximo) return atual - passoMaximo;
+  return alvo;
+}
+
+void aplicarComandoMotoresComRampa(int v1Alvo, int v2Alvo, int v3Alvo, int v4Alvo) {
+  static int v1Atual = 0;
+  static int v2Atual = 0;
+  static int v3Atual = 0;
+  static int v4Atual = 0;
+
+  int alvo1 = constrain(v1Alvo, -255, 255);
+  int alvo2 = constrain(v2Alvo, -255, 255);
+  int alvo3 = constrain(v3Alvo, -255, 255);
+  int alvo4 = constrain(v4Alvo, -255, 255);
+
+  v1Atual = aplicarRampaPwm(alvo1, v1Atual, PASSO_RAMPA_PWM);
+  v2Atual = aplicarRampaPwm(alvo2, v2Atual, PASSO_RAMPA_PWM);
+  v3Atual = aplicarRampaPwm(alvo3, v3Atual, PASSO_RAMPA_PWM);
+  v4Atual = aplicarRampaPwm(alvo4, v4Atual, PASSO_RAMPA_PWM);
+
+  Motor_1(v1Atual);
+  Motor_2(v2Atual);
+  Motor_3(v3Atual);
+  Motor_4(v4Atual);
+}
+
 // Converte um angulo de translacao em velocidades individuais de roda.
 void seguirDirecaoPorAngulo(float anguloGraus, int velocidade) {
   int velocidadeAlvo = constrain(velocidade, 0, velocidade_maxima);
@@ -298,10 +329,7 @@ void seguirDirecaoPorAngulo(float anguloGraus, int velocidade) {
     v4 *= escala;
   }
 
-  Motor_1((int)v1);
-  Motor_2((int)v2);
-  Motor_3((int)v3);
-  Motor_4((int)v4);
+  aplicarComandoMotoresComRampa((int)v1, (int)v2, (int)v3, (int)v4);
 }
 
 // Move por angulo e soma um termo de giro para alinhar durante o deslocamento.
@@ -340,10 +368,7 @@ void seguirDirecaoComGiro(float anguloGraus, int velocidade, int cmdGiro) {
     v4 *= escala;
   }
 
-  Motor_1((int)v1);
-  Motor_2((int)v2);
-  Motor_3((int)v3);
-  Motor_4((int)v4);
+  aplicarComandoMotoresComRampa((int)v1, (int)v2, (int)v3, (int)v4);
 }
 
 // Para todos os motores desligando PWM e deixando pontes em estado neutro.
@@ -371,10 +396,7 @@ void girarNoEixo(int velocidade) {
   // Mapeamento de giro da base:
   // horario: M1/M2 frente e M3/M4 tras
   // anti-horario: inverso
-  Motor_1(-vel);
-  Motor_2(-vel);
-  Motor_3(-vel);
-  Motor_4(-vel);
+  aplicarComandoMotoresComRampa(-vel, -vel, -vel, -vel);
 }
 
 // Normaliza um erro angular para a faixa [-180, 180].
@@ -480,7 +502,7 @@ int calcularVelocidadeIrPorAngulo(float anguloBolaGraus) {
 // Detecta a faixa frontal do IR em torno de 0°, tratando a transicao 360° -> 0°.
 bool irNaFaixaFrontal(float anguloBolaGraus) {
   float ang = normalizarAngulo360(anguloBolaGraus);
-  return (ang >= 335.0f || ang <= 25.0f);
+  return (ang >= 340.0f || ang <= 20.0f);
 }
 
 // Quantiza o comando em passos fixos para transicoes curtas e previsiveis.
@@ -554,10 +576,7 @@ void moverFrenteComGiro(int velocidadePwm, int cmdGiro) {
   v3 += termoGiro;
   v4 += termoGiro;
 
-  Motor_1((int)v1);
-  Motor_2((int)v2);
-  Motor_3((int)v3);
-  Motor_4((int)v4);
+  aplicarComandoMotoresComRampa((int)v1, (int)v2, (int)v3, (int)v4);
 }
 
 // Zera os estados internos do PID de alinhamento.
@@ -608,7 +627,7 @@ uint16_t golPixels = 0;
 float anguloLinhaPe = -1.0f;
 bool linhaDetectada = false;
 unsigned long ultimoRxLinhaMs = 0;
-const int VELOCIDADE_FUGA_LINHA = 170;
+const int VELOCIDADE_FUGA_LINHA = 255;
 bool fugindoLinhaAgora = false;
 float anguloFugaLinhaCmd = 0.0f;
 
@@ -1634,6 +1653,7 @@ void loop() {
       fugindoLinhaAgora = true;
       anguloFugaLinhaCmd = normalizarAngulo360(anguloLinhaPe + 180.0f);
       seguirDirecaoPorAngulo(anguloFugaLinhaCmd, VELOCIDADE_FUGA_LINHA);
+      
     } else if (erroGrande) {
       girarNoEixo(cmdPidAssinado);
     } else if (irDetectado) {
@@ -1654,6 +1674,7 @@ void loop() {
       girarNoEixo(cmdPidAssinado);
     } else {
       pararMotores();
+      delay(10);
     }
   } else {
     // Fora do modo de jogo, zera controle e mantem a base parada.
