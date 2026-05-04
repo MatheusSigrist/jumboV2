@@ -232,6 +232,9 @@ bool botao3Anterior = HIGH;
 bool comunicacaoMusculoOK = false;
 bool comunicacaoOlhoOK = false;
 bool comunicacaoPeOK = false;
+//==============================//
+bool atacanteCfg = false;
+//==============================//
 bool corGolAzulCfg = false;
 
 String bufferOlho = "";
@@ -567,6 +570,35 @@ void enviarStatusPlacasParaMusculo() {
   SerialMusculo.print(comunicacaoOlhoOK ? 1 : 0);
   SerialMusculo.print(",");
   SerialMusculo.println(comunicacaoPeOK ? 1 : 0);
+}
+
+// Envia estado global (sozinho/atacante/cor de gol) para Olho, Pe e Musculo.
+void enviarEstadoParaPlacas() {
+  if (ultimoEnvioEstadoOlhoMs > 0 && (millis() - ultimoEnvioEstadoOlhoMs) < INTERVALO_ENVIO_ESTADO_OLHO_MS) {
+    return;
+  }
+
+  bool espnowRecente = (espnowUltimoRxMs > 0) && ((millis() - espnowUltimoRxMs) < ESPNOW_TIMEOUT_MS);
+
+  PacoteEstado estado;
+  estado.sozinho = (!espnowComOK) || (!espnowRecente);
+  estado.atacante = atacanteCfg;
+  estado.corGolAzul = corGolAzulCfg;
+
+  SerialOlho.write(BYTE_INICIA);
+  SerialOlho.write(ID_PLACA_OLHO);
+  SerialOlho.write((uint8_t*)&estado, sizeof(PacoteEstado));
+  SerialOlho.write(BYTE_PARA);
+
+  SerialPe.write(BYTE_INICIA);
+  SerialPe.write(ID_PLACA_PE);
+  SerialPe.write((uint8_t*)&estado, sizeof(PacoteEstado));
+  SerialPe.write(BYTE_PARA);
+
+  SerialMusculo.print("ATC:");
+  SerialMusculo.println(atacanteCfg ? 1 : 0);
+
+  ultimoEnvioEstadoOlhoMs = millis();
 }
 
 // Publica periodicamente o angulo IR recebido da placa Olho.
@@ -935,7 +967,7 @@ void setup() {
   }
 
   testarOlhoPe();
-  // [REMOVIDO] enviarEstadoParaOlho(true) - Olho não recebe mais config de cor
+  enviarEstadoParaPlacas();
 }
 
 // Laco principal da Cabeca: coleta entradas e redistribui dados para o Musculo.
@@ -958,6 +990,7 @@ void loop() {
   enviarUltrasParaMusculo();
   enviarUltrasRemotosParaMusculo();
   enviarEstadoKickerParaMusculo();
+  enviarEstadoParaPlacas();
   atualizarEspNow();
 
   delay(5);
