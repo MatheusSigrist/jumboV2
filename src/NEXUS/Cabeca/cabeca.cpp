@@ -233,7 +233,7 @@ bool comunicacaoMusculoOK = false;
 bool comunicacaoOlhoOK = false;
 bool comunicacaoPeOK = false;
 //==============================//
-bool atacanteCfg = false;
+bool atacanteCfg = true;
 //==============================//
 bool corGolAzulCfg = false;
 

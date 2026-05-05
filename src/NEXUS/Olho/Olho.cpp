@@ -61,6 +61,7 @@ float angulos[NUM_SENSORES] = {
   0, 30, 60, 90, 120, 150, 180, 210,
   240, 270, 300, 330 
 };
+
 const unsigned long JANELA_TEMPO = 15;    // <-- Janela de tempo para contagens de pulso de IR (10ms)
 const int LIMIAR_PULSOS = 8;    // <-- Limiar de pulsos para identificar que é a bola
 const int NUM_AMOSTRAS_VOTO = 5;          // <-- Qtd de amostras para votacao
@@ -104,15 +105,13 @@ void contarPulsosSensores() {     // <-- Função de contagens de pulsos IR emit
     amostrasJanela = 1;
   }
 
-  // Atualizar intensidade global
+  // Atualizar intensidade global somente por contagem de pulsos validos.
   intensidade = 0;
   for (int i = 0; i < NUM_SENSORES; i++) {
-    float dutyLow = (float)nivelBaixo[i] / (float)amostrasJanela;
-    bool detectou = (pulsos[i] >= LIMIAR_PULSOS) || (dutyLow >= 0.18f);
+    bool detectou = (pulsos[i] >= LIMIAR_PULSOS);
 
     if (detectou) {
-      // Mistura contagem de pulsos com tempo em LOW para funcionar com bola pulsada e continua.
-      pesosIr[i] = (float)pulsos[i] + (dutyLow * 8.0f);
+      pesosIr[i] = (float)pulsos[i];
       intensidade += pesosIr[i];
     }
   }
@@ -186,6 +185,27 @@ float filtrarAnguloBola() {
   float resultado = atan2f(sy, sx) * 180.0f / PI;
   if (resultado < 0) resultado += 360.0f;
   return resultado;
+}
+
+// Imprime debug IR no mesmo formato do teste de bancada.
+void imprimirDebugSensoresIR(float angulo) {
+  Serial.println("===== TESTE PLACA OLHO (IR) =====");
+  for (int i = 0; i < NUM_SENSORES; i++) {
+    Serial.print("IR[");
+    Serial.print(i);
+    Serial.print("] = ");
+    Serial.println(pulsos[i]);
+  }
+
+  if (angulo < 0.0f) {
+    Serial.println("Angulo: sem deteccao");
+  } else {
+    Serial.print("Angulo: ");
+    Serial.print(angulo, 1);
+    Serial.println(" graus");
+  }
+
+  Serial.println();
 }
 
 
@@ -386,6 +406,13 @@ void setup() {
     for (int i = 0; i < NUM_SENSORES; i++)
       pinMode(sensoresTSOP[i], INPUT);
 
+    Serial.begin(115200);
+    unsigned long tSerial = millis();
+    while (!Serial && (millis() - tSerial) < 2000) {
+      delay(10);
+    }
+    Serial.println("OLHO boot");
+
     EEPROM.begin(EEPROM_SIZE);
     CarregarCorGolEEPROM();
 
@@ -397,7 +424,10 @@ void setup() {
 void loop(){
   ProcessarPingCabeca();
 
+
   contarPulsosSensores(); // Leitura IR SEEKER
+  float angulo = calculaAnguloBola();
+  imprimirDebugSensoresIR(angulo);
   L_Ultra(); // Leitura dos ultras
 
   // ler estado recebido da cabeça (atacante/defensor)

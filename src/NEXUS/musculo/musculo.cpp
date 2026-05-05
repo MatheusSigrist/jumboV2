@@ -156,10 +156,17 @@ const int SINAL_GIRO_PID = SINAL_GIRO;
 const float PID_BUS_KP = 0.8f;
 const float PID_BUS_KI = 0.01f;
 const float PID_BUS_KD = 0.5f;
+const float PID_BUS_DEF_KP = 0.95f;
+const float PID_BUS_DEF_KI = 0.05f;
 const float PID_BUS_INTEGRAL_MAX = 120.0f;
 const int PID_BUS_SAIDA_MIN = 30;
 const int PID_BUS_SAIDA_MAX = 180;
 const float GANHO_GIRO_MISTO = 0.7f;
+const float DEFENSOR_PESO_GIRO_GOL = 0.50f;
+const int DEFENSOR_VEL_FAIXA_0_45 = 140;
+const int DEFENSOR_VEL_FAIXA_45_90 = 200;
+const float DEFENSOR_JANELA_FRONTAL_1_GRAUS = 45.0f;
+const float DEFENSOR_JANELA_FRONTAL_2_GRAUS = 90.0f;
 
 
 
@@ -188,6 +195,9 @@ const unsigned long RETENCAO_FUGA_LINHA_MS = 250;
 float pidBusIntegral = 0.0f;
 float pidBusErroAnterior = 0.0f;
 unsigned long pidBusUltimoMs = 0;
+float pidBusDefIntegral = 0.0f;
+float pidBusDefErroAnterior = 0.0f;
+unsigned long pidBusDefUltimoMs = 0;
 unsigned long inicioCameraSemIrMs = 0;
 
 // Estado da rampa angular para evitar saltos bruscos entre faixas do IR.
@@ -578,12 +588,13 @@ int calcularVelocidadeDefensorPorLinha(float anguloLinhaGraus, int velocidadeBas
     erroCentroGraus = fabsf(normalizarErro180(ang - 180.0f));
   }
 
-  // Puro proporcional: 90 graus de erro -> velocidade 0, 0 grau -> velocidade maxima.
+  // Mais bruto: reduz menos a velocidade com erro e aplica piso minimo para nao "morrer".
   int velocidadeBase = constrain(velocidadeBaseMax, 0, velocidade_maxima);
-  const float kpVelocidadeDefensor = (float)velocidadeBase / 90.0f;
+  const float kpVelocidadeDefensor = (float)velocidadeBase / 140.0f;
+  const int velocidadeMinLinha = 150;
   float velocidade = (float)velocidadeBase - (kpVelocidadeDefensor * erroCentroGraus);
 
-  if (velocidade < 0.0f) velocidade = 0.0f;
+  if (velocidade < (float)velocidadeMinLinha) velocidade = (float)velocidadeMinLinha;
   if (velocidade > velocidadeBase) velocidade = (float)velocidadeBase;
 
   return (int)velocidade;
@@ -700,6 +711,41 @@ int calcularSaidaPidBussola(float erroGraus) {
   if (saida > VELOCIDADE_GIRO_ALINHAMENTO) saida = VELOCIDADE_GIRO_ALINHAMENTO;
 
   // O sinal da saida preserva o sentido do erro angular.
+  return (u >= 0.0f) ? saida : -saida;
+}
+
+// Zera os estados internos do PID de alinhamento exclusivo do defensor.
+void resetPidBussolaDefensor() {
+  pidBusDefIntegral = 0.0f;
+  pidBusDefErroAnterior = 0.0f;
+  pidBusDefUltimoMs = 0;
+}
+
+// PID dedicado do defensor com ganhos mais altos de Kp/Ki.
+int calcularSaidaPidBussolaDefensor(float erroGraus) {
+  unsigned long agora = millis();
+  float dt = 0.02f;
+
+  if (pidBusDefUltimoMs != 0) {
+    dt = (agora - pidBusDefUltimoMs) / 1000.0f;
+    if (dt < 0.005f) dt = 0.005f;
+    if (dt > 0.2f) dt = 0.2f;
+  }
+  pidBusDefUltimoMs = agora;
+
+  pidBusDefIntegral += erroGraus * dt;
+  if (pidBusDefIntegral > PID_BUS_INTEGRAL_MAX) pidBusDefIntegral = PID_BUS_INTEGRAL_MAX;
+  if (pidBusDefIntegral < -PID_BUS_INTEGRAL_MAX) pidBusDefIntegral = -PID_BUS_INTEGRAL_MAX;
+
+  float derivada = (erroGraus - pidBusDefErroAnterior) / dt;
+  pidBusDefErroAnterior = erroGraus;
+
+  float u = PID_BUS_DEF_KP * erroGraus + PID_BUS_DEF_KI * pidBusDefIntegral + PID_BUS_KD * derivada;
+  int saida = (int)fabsf(u);
+  if (saida < PID_BUS_SAIDA_MIN) saida = PID_BUS_SAIDA_MIN;
+  if (saida > PID_BUS_SAIDA_MAX) saida = PID_BUS_SAIDA_MAX;
+  if (saida > VELOCIDADE_GIRO_ALINHAMENTO) saida = VELOCIDADE_GIRO_ALINHAMENTO;
+
   return (u >= 0.0f) ? saida : -saida;
 }
 
@@ -1775,7 +1821,7 @@ void atacante() {
 // Busca a linha indo para tras (180°) e, ao detectar, aplica imediatamente a logica angular.
 bool ultras_defensor() {
   if (ultrasValidos && ((millis() - ultimoRxUltraMs) < TIMEOUT_ULTRA_MS) &&
-      ultraTcm >= 0.0f && ultraTcm < 30.0f && ultraFcm >= 0.0f && ultraFcm > 150.0f) {
+      ultraTcm >= 0.0f && ultraTcm < 30.0f && ultraFcm >= 0.0f && ultraFcm > 120.0f) {
     // Obstaculo muito proximo atras: prioriza avancar com velocidade maxima.
     alinhandoAgora = false;
     fugindoLinhaAgora = false;
@@ -1799,7 +1845,7 @@ bool ultras_defensor() {
     seguirDirecaoPorAngulo(270.0f, velocidade_maxima);
     return true;
   } else if (ultrasValidos && ((millis() - ultimoRxUltraMs) < TIMEOUT_ULTRA_MS) &&
-             ultraFcm >= 0.0f && ultraFcm < 180.0f && ultraTcm > 39.0f) {
+             ultraFcm >= 0.0f && ultraFcm < 160.0f && ultraTcm > 37.0f) {
     // frente perto e tras livre -> desloca para tras
     alinhandoAgora = false;
     fugindoLinhaAgora = false;
@@ -1812,6 +1858,7 @@ bool ultras_defensor() {
 }
 
 void defensor() {
+  const float TOLERANCIA_ALINHAMENTO_PRIORITARIO_DEFENSOR = 40.0f;
   int16_t anguloGolDefensor = -999;
   bool golVisivelDefensor = cameraTemGolSelecionadoValido(anguloGolDefensor);
   float erroGolDefensor = 0.0f;
@@ -1835,15 +1882,28 @@ void defensor() {
     if (precisaAlinharInicial) {
       alinhandoAgora = true;
       fugindoLinhaAgora = false;
-      int cmdPid = calcularSaidaPidBussola(erroAlinhamentoGraus);
+      int cmdPid = calcularSaidaPidBussolaDefensor(erroAlinhamentoGraus);
       int cmdPidAssinado = -SINAL_GIRO_PID * cmdPid;
       girarNoEixo(cmdPidAssinado);
       return;
     }
 
     alinhandoAgora = false;
-    resetPidBussola();
+    resetPidBussolaDefensor();
     defensorAlinhamentoInicialConcluido = true;
+  }
+
+  // Prioridade alta: antes da logica de linha, alinha com o gol se erro > 20 graus.
+  erroAlinhamentoGraus = erroGolDefensor;
+  bool precisaAlinharPrioritario = erroGolDefensorDisponivel &&
+                                   (fabsf(erroAlinhamentoGraus) > TOLERANCIA_ALINHAMENTO_PRIORITARIO_DEFENSOR);
+  if (precisaAlinharPrioritario) {
+    alinhandoAgora = true;
+    fugindoLinhaAgora = false;
+    int cmdPid = calcularSaidaPidBussolaDefensor(erroAlinhamentoGraus);
+    int cmdPidAssinado = -SINAL_GIRO_PID * cmdPid;
+    girarNoEixo(cmdPidAssinado);
+    return;
   }
 
   bool linhaValida = linhaDetectada && (anguloLinhaPe >= 0.0f);
@@ -1858,7 +1918,7 @@ void defensor() {
       if (defensorLeiturasLinhaConsecutivas < DEFENSOR_MIN_LEITURAS_CONSECUTIVAS) {
         alinhandoAgora = false;
         fugindoLinhaAgora = false;
-        resetPidBussola();
+        resetPidBussolaDefensor();
         seguirDirecaoPorAngulo(180.0f, VELOCIDADE_FUGA_LINHA);
         return;
       }
@@ -1869,28 +1929,35 @@ void defensor() {
       defensorLeiturasLinhaConsecutivas = 0;
       alinhandoAgora = false;
       fugindoLinhaAgora = false;
-      resetPidBussola();
+      resetPidBussolaDefensor();
       seguirDirecaoPorAngulo(180.0f, VELOCIDADE_FUGA_LINHA);
       return;
     }
   }
 
-  // Fase 3 (padrao): prioridade = alinhamento > linha > ultrassonico.
+  // Fase 3 (padrao): prioridade = linha > ultrassonico, com giro leve pelo gol.
   erroAlinhamentoGraus = erroGolDefensor;
-  bool precisaAlinhar = erroGolDefensorDisponivel && (fabsf(erroAlinhamentoGraus) > TOLERANCIA_ALINHAMENTO_GRAUS);
-  if (precisaAlinhar) {
-    alinhandoAgora = true;
-    fugindoLinhaAgora = false;
-    int cmdPid = calcularSaidaPidBussola(erroAlinhamentoGraus);
-    int cmdPidAssinado = -SINAL_GIRO_PID * cmdPid;
-    girarNoEixo(cmdPidAssinado);
-    return;
-  }
   alinhandoAgora = false;
-  resetPidBussola();
 
   if (linhaValida) {
-    // Linha detectada: aplica logica angular normalmente.
+    // Fonte da bola no defensor:
+    // 1) IR (prioridade)
+    // 2) Camera apenas se distancia < 60
+    // 3) Sem bola valida: para.
+    bool bolaValida = false;
+    float angBola = -1.0f;
+    if (irDetectado && (anguloIr >= 0.0f)) {
+      bolaValida = true;
+      angBola = normalizarAngulo360(anguloIr);
+    } else {
+      bool cameraBolaValida = cameraTemBolaValida() && (cameraBallDist < 60);
+      if (cameraBolaValida && (cameraBallAngle != -999)) {
+        bolaValida = true;
+        angBola = normalizarAngulo360((float)cameraBallAngle);
+      }
+    }
+
+    // Base antiga (frente/tras) pela orientacao da linha.
     float angDefensor = normalizarAngulo360(anguloLinhaPe);
     float cmdDefensor = 180.0f;
     int velocidadeDefensor = calcularVelocidadeDefensorPorLinha(angDefensor, 255);
@@ -1901,19 +1968,113 @@ void defensor() {
       cmdDefensor = 180.0f;
     }
 
-    // No defensor, aplica diretamente o comando 0/180 da regra da linha.
-    float cmdDefensorFisico = cmdDefensor;
+    if (!bolaValida) {
+      alinhandoAgora = false;
+      fugindoLinhaAgora = false;
+      anguloFugaLinhaCmd = cmdDefensor;
+      resetPidBussolaDefensor();
+      pararMotores();
+      return;
+    }
+
+    bool bolaLateralValida = false;
+    float cmdBolaLateral = 0.0f;
+    if (bolaValida && (angBola >= 240.0f) && (angBola < 350.0f)) {
+      bolaLateralValida = true;
+      cmdBolaLateral = 260.0f;
+    } else if (bolaValida && (angBola > 10.0f) && (angBola < 120.0f)) {
+      bolaLateralValida = true;
+      cmdBolaLateral = 100.0f;
+    }
+
+    const float pesoLinha = 1.4f;
+    const float pesoBola = 2.4f;
+    float xLinha = sinf(cmdDefensor * PI / 180.0f);
+    float yLinha = cosf(cmdDefensor * PI / 180.0f);
+
+    float xComb = pesoLinha * xLinha;
+    float yComb = pesoLinha * yLinha;
+
+    if (bolaLateralValida) {
+      float xBola = sinf(cmdBolaLateral * PI / 180.0f);
+      float yBola = cosf(cmdBolaLateral * PI / 180.0f);
+      xComb += pesoBola * xBola;
+      yComb += pesoBola * yBola;
+    }
+
+    float cmdCombinado = atan2f(xComb, yComb) * 180.0f / PI;
+    cmdCombinado = normalizarAngulo360(cmdCombinado);
+
+    // No movimento combinado, aplica apenas 30% do giro de alinhamento com o gol.
+    int cmdGiroComGol = 0;
+    bool erroPequenoGol = !erroGolDefensorDisponivel ||
+                          (fabsf(erroAlinhamentoGraus) <= TOLERANCIA_ALINHAMENTO_GRAUS);
+    if (!erroPequenoGol) {
+      int cmdPid = calcularSaidaPidBussolaDefensor(erroAlinhamentoGraus);
+      int cmdPidAssinado = -SINAL_GIRO_PID * cmdPid;
+      cmdGiroComGol = (int)roundf((float)cmdPidAssinado * DEFENSOR_PESO_GIRO_GOL);
+      alinhandoAgora = true;
+    } else {
+      resetPidBussolaDefensor();
+    }
+
+    // Em movimento combinado com bola lateral, aplica duas faixas de velocidade frontal:
+    // 0..45 -> 140 | 45..90 -> 200 | acima de 90 -> velocidade maxima.
+    int velocidadeFinal = velocidadeDefensor;
+    if (bolaLateralValida) {
+      int velMaxCombinado = VELOCIDADE_FUGA_LINHA;
+      float erroFrontal = fabsf(normalizarErro180(angBola));
+      if (erroFrontal < DEFENSOR_JANELA_FRONTAL_1_GRAUS) {
+        velocidadeFinal = DEFENSOR_VEL_FAIXA_0_45;
+      } else if (erroFrontal < DEFENSOR_JANELA_FRONTAL_2_GRAUS) {
+        velocidadeFinal = DEFENSOR_VEL_FAIXA_45_90;
+      } else {
+        velocidadeFinal = velMaxCombinado;
+      }
+    }
     fugindoLinhaAgora = true;
-    anguloFugaLinhaCmd = cmdDefensorFisico;
-    seguirDirecaoPorAngulo(cmdDefensorFisico, velocidadeDefensor);
+    anguloFugaLinhaCmd = cmdCombinado;
+    seguirDirecaoComGiro(cmdCombinado, velocidadeFinal, cmdGiroComGol);
   } else {
     if (ultras_defensor()) {
       return;
     }
-    // Ja encontrou linha anteriormente e agora perdeu: para motores.
+    // Sem linha e sem acao de ultra: segue bola lateralmente (IR -> camera < 60).
+    bool bolaValidaSemLinha = false;
+    float angBolaSemLinha = -1.0f;
+    if (irDetectado && (anguloIr >= 0.0f)) {
+      bolaValidaSemLinha = true;
+      angBolaSemLinha = normalizarAngulo360(anguloIr);
+    } else {
+      bool cameraBolaValidaSemLinha = cameraTemBolaValida() && (cameraBallDist < 60);
+      if (cameraBolaValidaSemLinha && (cameraBallAngle != -999)) {
+        bolaValidaSemLinha = true;
+        angBolaSemLinha = normalizarAngulo360((float)cameraBallAngle);
+      }
+    }
+
+    if (bolaValidaSemLinha) {
+      float cmdLateralSemLinha = (angBolaSemLinha < 180.0f) ? 100.0f : 260.0f;
+      float erroFrontalSemLinha = fabsf(normalizarErro180(angBolaSemLinha));
+      int velocidadeSemLinha = VELOCIDADE_FUGA_LINHA;
+      if (erroFrontalSemLinha < DEFENSOR_JANELA_FRONTAL_1_GRAUS) {
+        velocidadeSemLinha = DEFENSOR_VEL_FAIXA_0_45;
+      } else if (erroFrontalSemLinha < DEFENSOR_JANELA_FRONTAL_2_GRAUS) {
+        velocidadeSemLinha = DEFENSOR_VEL_FAIXA_45_90;
+      }
+
+      alinhandoAgora = false;
+      fugindoLinhaAgora = true;
+      anguloFugaLinhaCmd = cmdLateralSemLinha;
+      resetPidBussolaDefensor();
+      seguirDirecaoPorAngulo(cmdLateralSemLinha, velocidadeSemLinha);
+      return;
+    }
+
+    // Sem linha, sem ultra e sem bola valida: para motores.
     alinhandoAgora = false;
     fugindoLinhaAgora = false;
-    resetPidBussola();
+    resetPidBussolaDefensor();
     pararMotores();
   }
 }
@@ -1925,6 +2086,7 @@ void defensor_resetFlag() {
   defensorAlinhamentoInicialConcluido = false;
   defensorTemUltimoErroGolValido = false;
   defensorUltimoErroGolValido = 0.0f;
+  resetPidBussolaDefensor();
 }
 
 // Laco principal: comunica, atualiza controle de movimento e redesenha interface.
