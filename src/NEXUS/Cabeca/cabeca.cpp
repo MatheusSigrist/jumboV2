@@ -228,6 +228,7 @@ unsigned long ultimoEnvioBussolaMs = 0;
 unsigned long ultimoEnvioBussolaMusculoMs = 0;
 unsigned long ultimoEnvioGolMusculoMs = 0;
 unsigned long ultimoEnvioLinhaMusculoMs = 0;
+unsigned long ultimoEnvioLinhaZonasMusculoMs = 0;
 unsigned long ultimoEnvioIntMusculoMs = 0;
 unsigned long ultimoEnvioUltraMusculoMs = 0;
 unsigned long ultimoEnvioEstadoOlhoMs = 0;
@@ -602,6 +603,9 @@ void enviarStatusPlacasParaMusculo() {
 
 // Envia estado imediatamente para Pe (sem delay de 700ms) quando papel muda.
 void enviarEstadoParaPeSemDelay() {
+  // Descarta buffer serial da Pe para evitar dessincronia de tamanho de pacote
+  while (SerialPe.available() > 0) SerialPe.read();
+
   bool espnowRecente = (espnowUltimoRxMs > 0) && ((millis() - espnowUltimoRxMs) < ESPNOW_TIMEOUT_MS);
 
   PacoteEstado estado;
@@ -609,10 +613,14 @@ void enviarEstadoParaPeSemDelay() {
   estado.atacante = atacanteCfg;
   estado.corGolAzul = corGolAzulCfg;
 
-  SerialPe.write(BYTE_INICIA);
-  SerialPe.write(ID_PLACA_PE);
-  SerialPe.write((uint8_t*)&estado, sizeof(PacoteEstado));
-  SerialPe.write(BYTE_PARA);
+  // Envia 3x para garantir que Pe receba mesmo com perda de byte
+  for (int i = 0; i < 3; i++) {
+    SerialPe.write(BYTE_INICIA);
+    SerialPe.write(ID_PLACA_PE);
+    SerialPe.write((uint8_t*)&estado, sizeof(PacoteEstado));
+    SerialPe.write(BYTE_PARA);
+    delay(2);
+  }
 
   Serial.print("Enviado estado IMEDIATO para Pe: atacante=");
   Serial.println(atacanteCfg ? 1 : 0);
@@ -715,9 +723,11 @@ void enviarLinhaParaMusculo() {
   float angLinha = ultimoAnguloLinhaX10 / 10.0f;
   SerialMusculo.print("LIN:");
   SerialMusculo.println(angLinha, 1);
+  ultimoEnvioLinhaMusculoMs = millis();
 
   // Telemetria expandida para o defensor com duas zonas da linha.
-  if (!atacanteCfg) {
+  // Usa timer proprio para nao inundar o serial junto com CAM:.
+  if (!atacanteCfg && (millis() - ultimoEnvioLinhaZonasMusculoMs) >= INTERVALO_ENVIO_LINHA_MS + 20) {
     SerialMusculo.print("LINA:");
     if (linhaZonaAValida) {
       SerialMusculo.println(ultimoAnguloLinhaZonaAX10 / 10.0f, 1);
@@ -731,9 +741,8 @@ void enviarLinhaParaMusculo() {
     } else {
       SerialMusculo.println(-1.0f, 1);
     }
+    ultimoEnvioLinhaZonasMusculoMs = millis();
   }
-
-  ultimoEnvioLinhaMusculoMs = millis();
 }
 
 // Publica intensidade IR estimada pela placa Olho.
@@ -898,10 +907,13 @@ void lerRespostaPe() {
         PacotePe pacote;
         SerialPe.readBytes((uint8_t*)&pacote, sizeof(PacotePe));
         byte stop = SerialPe.read();
-        if (stop == BYTE_PARA) {
-          comunicacaoPeOK = true;
-          ultimoAnguloLinhaX10 = pacote.angulo;
+        if (stop != BYTE_PARA) {
+          // Stop byte errado: flush buffer para resincronizar
+          while (SerialPe.available() > 0) SerialPe.read();
+          return;
         }
+        comunicacaoPeOK = true;
+        ultimoAnguloLinhaX10 = pacote.angulo;
       } else {
         if (SerialPe.available() < (int)(sizeof(PacotePeDefensor) + 1)) {
           return;
@@ -910,7 +922,12 @@ void lerRespostaPe() {
         PacotePeDefensor pacoteDef;
         SerialPe.readBytes((uint8_t*)&pacoteDef, sizeof(PacotePeDefensor));
         byte stop = SerialPe.read();
-        if (stop == BYTE_PARA) {
+        if (stop != BYTE_PARA) {
+          // Stop byte errado: flush buffer para resincronizar
+          while (SerialPe.available() > 0) SerialPe.read();
+          return;
+        }
+        {
           comunicacaoPeOK = true;
           linhaZonaAValida = (pacoteDef.temLinhaZonaA == 1);
           linhaZonaBValida = (pacoteDef.temLinhaZonaB == 1);

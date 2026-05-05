@@ -5,7 +5,7 @@ import struct
 from machine import UART
 
 # ===== COMUNICAÇÃO SERIAL COM OLHO =====
-uart_olho = UART(1, 19200, timeout_char=200)
+uart_olho = UART(1, 115200, timeout_char=200)
 
 # ===== PROTOCOLO SERIAL =====
 BYTE_INICIA = 0xAA
