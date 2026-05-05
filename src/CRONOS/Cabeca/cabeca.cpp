@@ -10,8 +10,8 @@
 #include <esp_now.h>
 
 // ===================== ESP-NOW - ALTERE O MAC AQUI =====================
-// MAC da Cabeca do outro robo (NEXUS). Use o ambiente descobridor_mac para encontrar.
-#define ESPNOW_TARGET_MAC_STR "1C:DB:D4:46:CB:FC"
+// MAC da Cabeca do outro robo (CRONOS). Use o ambiente descobridor_mac para encontrar.
+#define ESPNOW_TARGET_MAC_STR "AC:A7:04:2B:9B:60"
 // =======================================================================
 
 #define RX_MUSCULO 44
@@ -26,7 +26,7 @@
 #define TX_OLHO 7
 #define RX_PE 4
 #define TX_PE 5
-#define BAUD_PE_CABECA 19200
+#define BAUD_PE_CABECA 115200
 
 #define BOTAO_1 3
 #define BOTAO_2 37
@@ -206,6 +206,13 @@ struct PacotePe {
   int16_t angulo;
 };
 
+struct PacotePeDefensor {
+  int16_t anguloZonaA;
+  int16_t anguloZonaB;
+  uint8_t temLinhaZonaA;
+  uint8_t temLinhaZonaB;
+};
+
 struct PacoteEstado {
   bool sozinho;
   bool atacante;
@@ -232,6 +239,9 @@ bool botao3Anterior = HIGH;
 bool comunicacaoMusculoOK = false;
 bool comunicacaoOlhoOK = false;
 bool comunicacaoPeOK = false;
+//==============================//
+bool atacanteCfg = false;
+//==============================//
 bool corGolAzulCfg = false;
 
 String bufferOlho = "";
@@ -250,6 +260,10 @@ int16_t ultimoUltraRemotoEX10 = -10;
 int16_t ultimoUltraRemotoFX10 = -10;
 int16_t ultimoUltraRemotoTX10 = -10;
 int16_t ultimoAnguloLinhaX10 = -10;
+int16_t ultimoAnguloLinhaZonaAX10 = -10;
+int16_t ultimoAnguloLinhaZonaBX10 = -10;
+bool linhaZonaAValida = false;
+bool linhaZonaBValida = false;
 unsigned long ultimoRxUltraRemotoMs = 0;
 
 // ===== NOVOS: dados de camera (bola + 2 gols) =====
@@ -292,6 +306,7 @@ struct EspNowMsg {
   int16_t uT;
   char text[12];
 };
+
 static uint8_t espnowTargetMac[6] = {0};
 static bool espnowInicializado = false;
 static bool espnowComOK = false;
@@ -321,6 +336,9 @@ static bool macEq(const uint8_t* a, const uint8_t* b) {
 static bool ultrasLocaisRecentes() {
   return (ultimoRxOlhoMs > 0) && ((millis() - ultimoRxOlhoMs) < TIMEOUT_DADO_OLHO_MS);
 }
+
+// Declaracao forward para processar mudancas de papel
+void enviarEstadoParaPeSemDelay();
 
 void enviarPacoteUltraEspNow(bool resposta) {
   if (!espnowInicializado) {
@@ -432,12 +450,17 @@ void atualizarEspNow() {
     return;
   }
 
+  // Envia periodicamente o pacote local de ultrassonicos para o outro robo.
   if (agora - espnowUltimoEnvioMs >= ESPNOW_SEND_INTERVAL_MS) {
     enviarPacoteUltraEspNow(false);
   }
+
+  // Verifica timeout de comunicacao.
   bool semRx  = (agora - espnowUltimoRxMs)  > ESPNOW_TIMEOUT_MS;
   bool semAck = (agora - espnowUltimoAckMs) > ESPNOW_TIMEOUT_MS;
   if (semRx && semAck) espnowComOK = false;
+
+  // Envia status para o Musculo periodicamente.
   if (agora - espnowUltimoStatusMusculoMs >= ESPNOW_STATUS_INTERVAL_MS) {
     espnowUltimoStatusMusculoMs = agora;
     SerialMusculo.print("ESN:");
@@ -537,6 +560,20 @@ void processarMensagem(String msg) {
     Serial.print("Cor do gol configurada via musculo: ");
     Serial.println(corGolAzulCfg ? "AZUL" : "AMARELO");
     SerialMusculo.println("CFG:GOL:OK");
+  } else if (msg.startsWith("atcfb:")) {
+    // Feedback do Musculo: papel mudou, resincroniza Pe imediatamente
+    String v = msg.substring(6);
+    v.trim();
+    if (v == "0" || v == "1") {
+      bool novoAtacante = (v == "1");
+      if (novoAtacante != atacanteCfg) {
+        atacanteCfg = novoAtacante;
+        Serial.print("Papel mudou para: ");
+        Serial.println(atacanteCfg ? "ATACANTE" : "DEFENSOR");
+        // Envia imediatamente para Pe (sem wait de 700ms)
+        enviarEstadoParaPeSemDelay();
+      }
+    }
   } else if (msg.length() > 0) {
     Serial.print("Recebido do musculo: ");
     Serial.println(msg);
@@ -561,6 +598,53 @@ void enviarStatusPlacasParaMusculo() {
   SerialMusculo.print(comunicacaoOlhoOK ? 1 : 0);
   SerialMusculo.print(",");
   SerialMusculo.println(comunicacaoPeOK ? 1 : 0);
+}
+
+// Envia estado imediatamente para Pe (sem delay de 700ms) quando papel muda.
+void enviarEstadoParaPeSemDelay() {
+  bool espnowRecente = (espnowUltimoRxMs > 0) && ((millis() - espnowUltimoRxMs) < ESPNOW_TIMEOUT_MS);
+
+  PacoteEstado estado;
+  estado.sozinho = (!espnowComOK) || (!espnowRecente);
+  estado.atacante = atacanteCfg;
+  estado.corGolAzul = corGolAzulCfg;
+
+  SerialPe.write(BYTE_INICIA);
+  SerialPe.write(ID_PLACA_PE);
+  SerialPe.write((uint8_t*)&estado, sizeof(PacoteEstado));
+  SerialPe.write(BYTE_PARA);
+
+  Serial.print("Enviado estado IMEDIATO para Pe: atacante=");
+  Serial.println(atacanteCfg ? 1 : 0);
+}
+
+// Envia estado global (sozinho/atacante/cor de gol) para Olho, Pe e Musculo.
+void enviarEstadoParaPlacas() {
+  if (ultimoEnvioEstadoOlhoMs > 0 && (millis() - ultimoEnvioEstadoOlhoMs) < INTERVALO_ENVIO_ESTADO_OLHO_MS) {
+    return;
+  }
+
+  bool espnowRecente = (espnowUltimoRxMs > 0) && ((millis() - espnowUltimoRxMs) < ESPNOW_TIMEOUT_MS);
+
+  PacoteEstado estado;
+  estado.sozinho = (!espnowComOK) || (!espnowRecente);
+  estado.atacante = atacanteCfg;
+  estado.corGolAzul = corGolAzulCfg;
+
+  SerialOlho.write(BYTE_INICIA);
+  SerialOlho.write(ID_PLACA_OLHO);
+  SerialOlho.write((uint8_t*)&estado, sizeof(PacoteEstado));
+  SerialOlho.write(BYTE_PARA);
+
+  SerialPe.write(BYTE_INICIA);
+  SerialPe.write(ID_PLACA_PE);
+  SerialPe.write((uint8_t*)&estado, sizeof(PacoteEstado));
+  SerialPe.write(BYTE_PARA);
+
+  SerialMusculo.print("ATC:");
+  SerialMusculo.println(atacanteCfg ? 1 : 0);
+
+  ultimoEnvioEstadoOlhoMs = millis();
 }
 
 // Publica periodicamente o angulo IR recebido da placa Olho.
@@ -631,6 +715,24 @@ void enviarLinhaParaMusculo() {
   float angLinha = ultimoAnguloLinhaX10 / 10.0f;
   SerialMusculo.print("LIN:");
   SerialMusculo.println(angLinha, 1);
+
+  // Telemetria expandida para o defensor com duas zonas da linha.
+  if (!atacanteCfg) {
+    SerialMusculo.print("LINA:");
+    if (linhaZonaAValida) {
+      SerialMusculo.println(ultimoAnguloLinhaZonaAX10 / 10.0f, 1);
+    } else {
+      SerialMusculo.println(-1.0f, 1);
+    }
+
+    SerialMusculo.print("LINB:");
+    if (linhaZonaBValida) {
+      SerialMusculo.println(ultimoAnguloLinhaZonaBX10 / 10.0f, 1);
+    } else {
+      SerialMusculo.println(-1.0f, 1);
+    }
+  }
+
   ultimoEnvioLinhaMusculoMs = millis();
 }
 
@@ -782,19 +884,47 @@ void lerRespostaOlho() {
 void lerRespostaPe() {
   while (SerialPe.available() > 0) {
     if (SerialPe.peek() == BYTE_INICIA) {
-      if (SerialPe.available() < (int)(sizeof(PacotePe) + 3)) {
-        return;
-      }
-
       SerialPe.read();
       byte id = SerialPe.read();
-      if (id == ID_PLACA_PE) {
+      if (id != ID_PLACA_PE) {
+        continue;
+      }
+
+      if (atacanteCfg) {
+        if (SerialPe.available() < (int)(sizeof(PacotePe) + 1)) {
+          return;
+        }
+
         PacotePe pacote;
         SerialPe.readBytes((uint8_t*)&pacote, sizeof(PacotePe));
         byte stop = SerialPe.read();
         if (stop == BYTE_PARA) {
           comunicacaoPeOK = true;
           ultimoAnguloLinhaX10 = pacote.angulo;
+        }
+      } else {
+        if (SerialPe.available() < (int)(sizeof(PacotePeDefensor) + 1)) {
+          return;
+        }
+
+        PacotePeDefensor pacoteDef;
+        SerialPe.readBytes((uint8_t*)&pacoteDef, sizeof(PacotePeDefensor));
+        byte stop = SerialPe.read();
+        if (stop == BYTE_PARA) {
+          comunicacaoPeOK = true;
+          linhaZonaAValida = (pacoteDef.temLinhaZonaA == 1);
+          linhaZonaBValida = (pacoteDef.temLinhaZonaB == 1);
+          ultimoAnguloLinhaZonaAX10 = linhaZonaAValida ? pacoteDef.anguloZonaA : -10;
+          ultimoAnguloLinhaZonaBX10 = linhaZonaBValida ? pacoteDef.anguloZonaB : -10;
+
+          // Mantem compatibilidade com consumidores legados de LIN:.
+          if (linhaZonaAValida) {
+            ultimoAnguloLinhaX10 = ultimoAnguloLinhaZonaAX10;
+          } else if (linhaZonaBValida) {
+            ultimoAnguloLinhaX10 = ultimoAnguloLinhaZonaBX10;
+          } else {
+            ultimoAnguloLinhaX10 = -10;
+          }
         }
       }
       continue;
@@ -897,12 +1027,12 @@ void lerSerialMusculo() {
 // Inicializa serials, sensores e handshakes iniciais do sistema.
 void setup() {
   Serial.begin(115200);
-  SerialMusculo.begin(9600, SERIAL_8N1, RX_MUSCULO, TX_MUSCULO);
-  SerialOlho.begin(9600, SERIAL_8N1, RX_OLHO, TX_OLHO);
+  SerialMusculo.begin(115200, SERIAL_8N1, RX_MUSCULO, TX_MUSCULO);
+  SerialOlho.begin(115200, SERIAL_8N1, RX_OLHO, TX_OLHO);
   SerialPe.begin(BAUD_PE_CABECA, SERIAL_8N1, RX_PE, TX_PE);
   Wire.begin(I2C_SDA, I2C_SCL);
   Wire.setClock(I2C_FREQ);
-  Wire.setTimeOut(20);
+  Wire.setTimeOut(10);
 
   pinMode(BOTAO_1, INPUT_PULLUP);
   pinMode(BOTAO_2, INPUT_PULLUP);
@@ -929,7 +1059,7 @@ void setup() {
   }
 
   testarOlhoPe();
-  // [REMOVIDO] enviarEstadoParaOlho(true) - Olho não recebe mais config de cor
+  enviarEstadoParaPlacas();
 }
 
 // Laco principal da Cabeca: coleta entradas e redistribui dados para o Musculo.
@@ -952,6 +1082,7 @@ void loop() {
   enviarUltrasParaMusculo();
   enviarUltrasRemotosParaMusculo();
   enviarEstadoKickerParaMusculo();
+  enviarEstadoParaPlacas();
   atualizarEspNow();
 
   delay(5);

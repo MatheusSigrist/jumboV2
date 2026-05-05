@@ -17,7 +17,7 @@
 #define TX_CABECA 18
 
 #define NUM_SENSORES 32
-#define LIMIAR_LINHA 4000
+#define LIMIAR_LINHA 3850
 #define INTERVALO_DEBUG_MS 250
 #define BAUD_PE_CABECA 115200
 #define DEBUG_LINHA 0
@@ -49,13 +49,20 @@ const int MUX2_S3 = 7;
 int ldr[NUM_SENSORES];
 float sensorX[NUM_SENSORES];
 float sensorY[NUM_SENSORES];
-bool atacante = false;
+bool atacante = true;  // Inicia como ATACANTE para sincronizar com Cabeca
 unsigned long ultimoDebugMs = 0;
 String bufferHandshakeCabeca = "";
 unsigned long ultimoByteHandshakeCabeca = 0;
 
 struct Pacote {
   int16_t angulo;
+};
+
+struct PacoteDefensor {
+  int16_t anguloZonaA;
+  int16_t anguloZonaB;
+  uint8_t temLinhaZonaA;
+  uint8_t temLinhaZonaB;
 };
 
 struct PacoteEstado {
@@ -120,8 +127,24 @@ void LeituraSerial() {
           Serial1.readBytes((uint8_t*)&temp, sizeof(PacoteEstado));
           byte stop = Serial1.read();
           if (stop == BYTE_PARA) {
+            bool mudouPapel = (temp.atacante != atacante);
             atacante = temp.atacante;
+            
+            Serial.print("Recebido estado da Cabeca: atacante=");
+            Serial.println(atacante ? "1" : "0");
+            
+            // Se papel mudou, resincroniza
+            if (mudouPapel) {
+              Serial.println("Papel mudou! Resincronizando...");
+              // Pequeno delay para estabilizar buffer
+              delay(5);
+            }
           }
+        }
+      } else {
+        // ID invalido, limpa o buffer
+        while (Serial1.available() > 0 && Serial1.peek() != BYTE_INICIA) {
+          Serial1.read();
         }
       }
     }
@@ -161,6 +184,78 @@ int16_t calcularAngulo(bool repulsao) {
   }
 
   return (int16_t)round(anguloGraus * 10.0);
+}
+
+// Calcula o angulo da linha em uma faixa de sensores [inicio, fim].
+int16_t calcularAnguloZona(int inicio, int fim, bool &temLinha) {
+  float centroX = 0.0f;
+  float centroY = 0.0f;
+  float somaPesos = 0.0f;
+
+  for (int i = inicio; i <= fim; i++) {
+    int idxFisico = mapaSensores[i];
+    int leitura = ldr[idxFisico];
+    float peso = (float)(leitura - LIMIAR_LINHA);
+    if (peso <= 0.0f) {
+      continue;
+    }
+
+    centroX += peso * sensorX[i];
+    centroY += peso * sensorY[i];
+    somaPesos += peso;
+  }
+
+  if (somaPesos <= 0.0f) {
+    temLinha = false;
+    return -1;
+  }
+
+  temLinha = true;
+  centroX /= somaPesos;
+  centroY /= somaPesos;
+
+  float anguloRad = atan2(centroY, centroX);
+  float anguloGraus = anguloRad * 180.0f / PI;
+  if (anguloGraus < 0.0f) {
+    anguloGraus += 360.0f;
+  }
+
+  return (int16_t)round(anguloGraus * 10.0f);
+}
+
+// Deteccao de linha para atacante (modo repulsao da linha).
+int16_t detectarLinhaAtacante() {
+  return calcularAngulo(true);
+}
+
+// Deteccao de linha para defensor (modo atracao da linha).
+int16_t detectarLinhaDefensor() {
+  return calcularAngulo(false);
+}
+
+// Deteccao do defensor separada por zonas: A (0-180) e B (180-360).
+PacoteDefensor detectarLinhaDefensorPorZonas() {
+  PacoteDefensor pacote;
+  bool temZonaA = false;
+  bool temZonaB = false;
+
+  pacote.anguloZonaA = calcularAnguloZona(0, 15, temZonaA);
+  pacote.anguloZonaB = calcularAnguloZona(16, 31, temZonaB);
+
+  // Inverte apenas o sentido da Zona B, mantendo a faixa absoluta em 180..360.
+  // Ex.: 360 -> 180, 350 -> 190, 180 -> 360.
+  if (pacote.anguloZonaB >= 0) {
+    float angB = pacote.anguloZonaB / 10.0f;
+    angB = 540.0f - angB;
+    if (angB > 360.0f) {
+      angB -= 360.0f;
+    }
+    pacote.anguloZonaB = (int16_t)round(angB * 10.0f);
+  }
+
+  pacote.temLinhaZonaA = temZonaA ? 1 : 0;
+  pacote.temLinhaZonaB = temZonaB ? 1 : 0;
+  return pacote;
 }
 
 // Imprime leitura bruta de todos os sensores para depuracao.
@@ -221,23 +316,41 @@ void loop() {
 
   LeituraSerial();
 
-  Pacote pacote;
-  pacote.angulo = calcularAngulo(atacante);
+  if (atacante) {
+    Pacote pacote;
+    pacote.angulo = detectarLinhaAtacante();
 
-  Serial1.write(BYTE_INICIA);
-  Serial1.write(ID_PLACA_PE);
-  Serial1.write((uint8_t*)&pacote, sizeof(Pacote));
-  Serial1.write(BYTE_PARA);
+    Serial1.write(BYTE_INICIA);
+    Serial1.write(ID_PLACA_PE);
+    Serial1.write((uint8_t*)&pacote, sizeof(Pacote));
+    Serial1.write(BYTE_PARA);
+  } else {
+    PacoteDefensor pacoteDef;
+    pacoteDef = detectarLinhaDefensorPorZonas();
+
+    Serial1.write(BYTE_INICIA);
+    Serial1.write(ID_PLACA_PE);
+    Serial1.write((uint8_t*)&pacoteDef, sizeof(PacoteDefensor));
+    Serial1.write(BYTE_PARA);
+  }
 
   unsigned long agora = millis();
   if (DEBUG_LINHA && (agora - ultimoDebugMs >= INTERVALO_DEBUG_MS)) {
     ultimoDebugMs = agora;
     imprimirLeituraSensores();
-    if (pacote.angulo == -1) {
+    int16_t anguloDebug = -1;
+    if (atacante) {
+      anguloDebug = detectarLinhaAtacante();
+    } else {
+      PacoteDefensor dbg = detectarLinhaDefensorPorZonas();
+      anguloDebug = (dbg.temLinhaZonaA == 1) ? dbg.anguloZonaA : dbg.anguloZonaB;
+    }
+
+    if (anguloDebug == -1) {
       Serial.println("Linha: NAO detectada");
     } else {
       Serial.print("Linha angulo (deg): ");
-      Serial.println(pacote.angulo / 10.0, 1);
+      Serial.println(anguloDebug / 10.0, 1);
     }
   }
 

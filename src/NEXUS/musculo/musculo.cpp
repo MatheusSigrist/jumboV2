@@ -10,14 +10,7 @@
 #include <Adafruit_SSD1306.h>
 // Papel recebido da Cabeca: true = atacante, false = defensor.
 bool papelAtacante = true;
-
-// Estado de busca de linha no modo defensor (reseta quando sai de INICIAR).
-bool defensorJaProcurouLinha = false;
-uint8_t defensorLeiturasLinhaConsecutivas = 0;
-const uint8_t DEFENSOR_MIN_LEITURAS_CONSECUTIVAS = 5;
-bool defensorAlinhamentoInicialConcluido = false;
-bool defensorTemUltimoErroGolValido = false;
-float defensorUltimoErroGolValido = 0.0f;
+bool papelAtacanteAnterior = true;  // Para detectar mudancas
 
 // ===================== GIRO ALINHAMENTO - ALTERE AQUI =====================
 #define VELOCIDADE_GIRO  180
@@ -156,17 +149,10 @@ const int SINAL_GIRO_PID = SINAL_GIRO;
 const float PID_BUS_KP = 0.8f;
 const float PID_BUS_KI = 0.01f;
 const float PID_BUS_KD = 0.5f;
-const float PID_BUS_DEF_KP = 0.95f;
-const float PID_BUS_DEF_KI = 0.05f;
 const float PID_BUS_INTEGRAL_MAX = 120.0f;
 const int PID_BUS_SAIDA_MIN = 30;
 const int PID_BUS_SAIDA_MAX = 180;
 const float GANHO_GIRO_MISTO = 0.7f;
-const float DEFENSOR_PESO_GIRO_GOL = 0.50f;
-const int DEFENSOR_VEL_FAIXA_0_45 = 140;
-const int DEFENSOR_VEL_FAIXA_45_90 = 200;
-const float DEFENSOR_JANELA_FRONTAL_1_GRAUS = 45.0f;
-const float DEFENSOR_JANELA_FRONTAL_2_GRAUS = 90.0f;
 
 
 
@@ -195,9 +181,6 @@ const unsigned long RETENCAO_FUGA_LINHA_MS = 250;
 float pidBusIntegral = 0.0f;
 float pidBusErroAnterior = 0.0f;
 unsigned long pidBusUltimoMs = 0;
-float pidBusDefIntegral = 0.0f;
-float pidBusDefErroAnterior = 0.0f;
-unsigned long pidBusDefUltimoMs = 0;
 unsigned long inicioCameraSemIrMs = 0;
 
 // Estado da rampa angular para evitar saltos bruscos entre faixas do IR.
@@ -550,6 +533,38 @@ int calcularVelocidadeIrPorAngulo(float anguloBolaGraus) {
   return velocidade_maxima;
 }
 
+// Controle proporcional da velocidade lateral do defensor pelo angulo do IR.
+// Direita: 20..160 (130 -> 255). Esquerda: 200..340 (255 -> 130).
+// Zonas mortas: 0..20 e 340..360 (parado para lateral).
+int calcularVelocidadeLateralDefensorPorIr(float anguloBolaGraus) {
+  const float ANG_DIREITA_MIN = 20.0f;
+  const float ANG_DIREITA_MAX = 160.0f;
+  const float ANG_ESQUERDA_MIN = 200.0f;
+  const float ANG_ESQUERDA_MAX = 340.0f;
+  const int VEL_MIN = 130;
+  const int VEL_MAX = 255;
+
+  float ang = normalizarAngulo360(anguloBolaGraus);
+
+  if ((ang >= 0.0f && ang <= ANG_DIREITA_MIN) || (ang >= ANG_ESQUERDA_MAX && ang <= 360.0f)) {
+    return 0;
+  }
+
+  if (ang > ANG_DIREITA_MIN && ang <= ANG_DIREITA_MAX) {
+    float ganho = (float)(VEL_MAX - VEL_MIN) / (ANG_DIREITA_MAX - ANG_DIREITA_MIN);
+    int vel = (int)(VEL_MIN + ganho * (ang - ANG_DIREITA_MIN));
+    return constrain(vel, VEL_MIN, VEL_MAX);
+  }
+
+  if (ang >= ANG_ESQUERDA_MIN && ang < ANG_ESQUERDA_MAX) {
+    float ganho = (float)(VEL_MAX - VEL_MIN) / (ANG_ESQUERDA_MAX - ANG_ESQUERDA_MIN);
+    int vel = (int)(VEL_MIN + ganho * (ANG_ESQUERDA_MAX - ang));
+    return constrain(vel, VEL_MIN, VEL_MAX);
+  }
+
+  return 0;
+}
+
 // Detecta a faixa frontal do IR em torno de 0°, tratando a transicao 360° -> 0°.
 bool irNaFaixaFrontal(float anguloBolaGraus) {
   float ang = normalizarAngulo360(anguloBolaGraus);
@@ -564,40 +579,6 @@ float calcularDirecaoCentroLinhaTeste() {
 
   // Exibe o comando puro da linha, sem inversao de repulsao.
   return normalizarAngulo360(anguloLinhaPe);
-}
-
-// Regra simples do defensor: linha em cima -> vai frente (0), linha embaixo -> vai tras (180).
-float calcularComandoDefensorPorLinha(float anguloLinhaGraus) {
-  float ang = normalizarAngulo360(anguloLinhaGraus);
-  if ((ang >= 0.0f && ang <= 90.0f) || (ang >= 270.0f && ang < 360.0f)) {
-    return 0.0f;
-  }
-  return 180.0f;
-}
-
-// No defensor, usa controle proporcional de velocidade:
-// maxima nos centros das zonas (0/180/360) e zero nas trocas de faixa (90/270).
-int calcularVelocidadeDefensorPorLinha(float anguloLinhaGraus, int velocidadeBaseMax) {
-  float ang = normalizarAngulo360(anguloLinhaGraus);
-  float erroCentroGraus = 0.0f;
-
-  // Zonas comandadas para 0/360 tem centro em 0, e a zona de 180 tem centro em 180.
-  if ((ang >= 0.0f && ang <= 90.0f) || (ang >= 270.0f && ang < 360.0f)) {
-    erroCentroGraus = fabsf(normalizarErro180(ang - 0.0f));
-  } else {
-    erroCentroGraus = fabsf(normalizarErro180(ang - 180.0f));
-  }
-
-  // Mais bruto: reduz menos a velocidade com erro e aplica piso minimo para nao "morrer".
-  int velocidadeBase = constrain(velocidadeBaseMax, 0, velocidade_maxima);
-  const float kpVelocidadeDefensor = (float)velocidadeBase / 140.0f;
-  const int velocidadeMinLinha = 150;
-  float velocidade = (float)velocidadeBase - (kpVelocidadeDefensor * erroCentroGraus);
-
-  if (velocidade < (float)velocidadeMinLinha) velocidade = (float)velocidadeMinLinha;
-  if (velocidade > velocidadeBase) velocidade = (float)velocidadeBase;
-
-  return (int)velocidade;
 }
 
 // Quantiza o comando em passos fixos para transicoes curtas e previsiveis.
@@ -714,48 +695,16 @@ int calcularSaidaPidBussola(float erroGraus) {
   return (u >= 0.0f) ? saida : -saida;
 }
 
-// Zera os estados internos do PID de alinhamento exclusivo do defensor.
-void resetPidBussolaDefensor() {
-  pidBusDefIntegral = 0.0f;
-  pidBusDefErroAnterior = 0.0f;
-  pidBusDefUltimoMs = 0;
-}
-
-// PID dedicado do defensor com ganhos mais altos de Kp/Ki.
-int calcularSaidaPidBussolaDefensor(float erroGraus) {
-  unsigned long agora = millis();
-  float dt = 0.02f;
-
-  if (pidBusDefUltimoMs != 0) {
-    dt = (agora - pidBusDefUltimoMs) / 1000.0f;
-    if (dt < 0.005f) dt = 0.005f;
-    if (dt > 0.2f) dt = 0.2f;
-  }
-  pidBusDefUltimoMs = agora;
-
-  pidBusDefIntegral += erroGraus * dt;
-  if (pidBusDefIntegral > PID_BUS_INTEGRAL_MAX) pidBusDefIntegral = PID_BUS_INTEGRAL_MAX;
-  if (pidBusDefIntegral < -PID_BUS_INTEGRAL_MAX) pidBusDefIntegral = -PID_BUS_INTEGRAL_MAX;
-
-  float derivada = (erroGraus - pidBusDefErroAnterior) / dt;
-  pidBusDefErroAnterior = erroGraus;
-
-  float u = PID_BUS_DEF_KP * erroGraus + PID_BUS_DEF_KI * pidBusDefIntegral + PID_BUS_KD * derivada;
-  int saida = (int)fabsf(u);
-  if (saida < PID_BUS_SAIDA_MIN) saida = PID_BUS_SAIDA_MIN;
-  if (saida > PID_BUS_SAIDA_MAX) saida = PID_BUS_SAIDA_MAX;
-  if (saida > VELOCIDADE_GIRO_ALINHAMENTO) saida = VELOCIDADE_GIRO_ALINHAMENTO;
-
-  return (u >= 0.0f) ? saida : -saida;
-}
-
-
 // Telemetria de gol/linha.
 float erroGolGraus = 0.0f;
 bool golDetectado = false;
 uint16_t golPixels = 0;
 float anguloLinhaPe = -1.0f;
 bool linhaDetectada = false;
+float anguloLinhaZonaA = -1.0f;
+float anguloLinhaZonaB = -1.0f;
+bool linhaZonaAValida = false;
+bool linhaZonaBValida = false;
 unsigned long ultimoRxLinhaMs = 0;
 float ultimoAnguloLinhaValido = -1.0f;
 unsigned long ultimoComandoLinhaMs = 0;
@@ -768,6 +717,13 @@ void atualizarValidadeLinha() {
   if (linhaDetectada && (millis() - ultimoRxLinhaMs) > TIMEOUT_LINHA_MS) {
     linhaDetectada = false;
     anguloLinhaPe = -1.0f;
+  }
+
+  if ((millis() - ultimoRxLinhaMs) > TIMEOUT_LINHA_MS) {
+    linhaZonaAValida = false;
+    linhaZonaBValida = false;
+    anguloLinhaZonaA = -1.0f;
+    anguloLinhaZonaB = -1.0f;
   }
 }
 
@@ -1017,33 +973,43 @@ void desenharSubmenuCalibracao() {
     display.setTextSize(1);
     display.setTextColor(SSD1306_WHITE);
     display.setCursor(0, 0);
-    display.println("=== TESTE CENTRO ===");
-    float cmdCentro = calcularDirecaoCentroLinhaTeste();
+    display.println("=== TESTE LINHA ===");
 
     display.setCursor(0, 12);
     display.print("PAPEL: ");
     display.println(papelAtacante ? "ATC" : "DEF");
 
-    display.setCursor(0, 24);
-    display.print("LINHA: ");
-    if (linhaDetectada && anguloLinhaPe >= 0.0f) {
-      display.print(anguloLinhaPe, 1);
-      display.println(" deg");
+    if (papelAtacante) {
+      display.setCursor(0, 26);
+      display.print("ANG: ");
+      if (linhaDetectada && anguloLinhaPe >= 0.0f) {
+        display.print(anguloLinhaPe, 1);
+        display.println(" deg");
+      } else {
+        display.println("SEM LEITURA");
+      }
     } else {
-      display.println("SEM LEITURA");
-    }
+      display.setCursor(0, 24);
+      display.print("A: ");
+      if (linhaZonaAValida && anguloLinhaZonaA >= 0.0f) {
+        display.print(anguloLinhaZonaA, 1);
+        display.println(" deg");
+      } else {
+        display.println("SEM LEITURA");
+      }
 
-    display.setCursor(0, 36);
-    display.print("CMD CENTRO: ");
-    if (cmdCentro >= 0.0f) {
-      display.print(cmdCentro, 1);
-      display.println(" deg");
-    } else {
-      display.println("---");
+      display.setCursor(0, 36);
+      display.print("B: ");
+      if (linhaZonaBValida && anguloLinhaZonaB >= 0.0f) {
+        display.print(anguloLinhaZonaB, 1);
+        display.println(" deg");
+      } else {
+        display.println("SEM LEITURA");
+      }
     }
 
     display.setCursor(0, 48);
-    display.println("OBJ: CENTRO NA LINHA");
+    display.println("AUTO: PAPEL CABECA");
 
     display.setCursor(0, 56);
     display.println("BTN1/2/3 VOLTAR");
@@ -1114,6 +1080,7 @@ void desenharSubmenuCalibracao() {
 // Desenha a tela de operacao com telemetria de jogo e modos ativos.
 void desenharOperacao() {
   display.clearDisplay();
+
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
   display.setCursor(0, 0);
@@ -1511,6 +1478,32 @@ void processarMensagemCabeca(String msg) {
     return;
   }
 
+  // Angulo de linha da zona A (0-180) no modo defensor.
+  if (msg.startsWith("LINA:")) {
+    String sLinhaA = msg.substring(5);
+    sLinhaA.trim();
+    float novoAngA = sLinhaA.toFloat();
+    linhaZonaAValida = (novoAngA >= 0.0f);
+    anguloLinhaZonaA = linhaZonaAValida ? novoAngA : -1.0f;
+    ultimoRxLinhaMs = millis();
+    comunicacaoCabecaOK = true;
+    ultimoRxCabeca = millis();
+    return;
+  }
+
+  // Angulo de linha da zona B (180-360) no modo defensor.
+  if (msg.startsWith("LINB:")) {
+    String sLinhaB = msg.substring(5);
+    sLinhaB.trim();
+    float novoAngB = sLinhaB.toFloat();
+    linhaZonaBValida = (novoAngB >= 0.0f);
+    anguloLinhaZonaB = linhaZonaBValida ? novoAngB : -1.0f;
+    ultimoRxLinhaMs = millis();
+    comunicacaoCabecaOK = true;
+    ultimoRxCabeca = millis();
+    return;
+  }
+
   // Distancias dos ultrassonicos vindas da Cabeca no formato ULT:D,E,F,T.
   if (msg.startsWith("ULT:")) {
     String payload = msg.substring(4);
@@ -1586,7 +1579,14 @@ void processarMensagemCabeca(String msg) {
     String sAtc = msg.substring(4);
     sAtc.trim();
     if (sAtc == "0" || sAtc == "1") {
-      papelAtacante = (sAtc == "1");
+      bool novoValor = (sAtc == "1");
+      if (novoValor != papelAtacante) {
+        // Detectou mudanca, envia feedback para Cabeca resincronizar Pe
+        Serial0.print("ATCFB:");
+        Serial0.println(novoValor ? 1 : 0);
+      }
+      papelAtacante = novoValor;
+      papelAtacanteAnterior = papelAtacante;
       comunicacaoCabecaOK = true;
       ultimoRxCabeca = millis();
     }
@@ -1817,276 +1817,205 @@ void atacante() {
   }
 }
 
-// Funcao de controle para o robo defensor: atrai linha com logica de zonas angulares.
-// Busca a linha indo para tras (180°) e, ao detectar, aplica imediatamente a logica angular.
-bool ultras_defensor() {
-  if (ultrasValidos && ((millis() - ultimoRxUltraMs) < TIMEOUT_ULTRA_MS) &&
-      ultraTcm >= 0.0f && ultraTcm < 30.0f && ultraFcm >= 0.0f && ultraFcm > 120.0f) {
-    // Obstaculo muito proximo atras: prioriza avancar com velocidade maxima.
-    alinhandoAgora = false;
-    fugindoLinhaAgora = false;
-    resetPidBussola();
-    moverFrenteComGiro(velocidade_maxima, 0);
-    return true;
-  } else if (ultrasValidos && ((millis() - ultimoRxUltraMs) < TIMEOUT_ULTRA_MS) &&
-             ultraEcm >= 0.0f && ultraEcm < 50.0f) {
-    // esquerda perto -> desloca para 90 graus
-    alinhandoAgora = false;
-    fugindoLinhaAgora = false;
-    resetPidBussola();
-    seguirDirecaoPorAngulo(90.0f, velocidade_maxima);
-    return true;
-  } else if (ultrasValidos && ((millis() - ultimoRxUltraMs) < TIMEOUT_ULTRA_MS) &&
-             ultraDcm >= 0.0f && ultraDcm < 50.0f) {
-    // direita perto -> desloca para 270 graus
-    alinhandoAgora = false;
-    fugindoLinhaAgora = false;
-    resetPidBussola();
-    seguirDirecaoPorAngulo(270.0f, velocidade_maxima);
-    return true;
-  } else if (ultrasValidos && ((millis() - ultimoRxUltraMs) < TIMEOUT_ULTRA_MS) &&
-             ultraFcm >= 0.0f && ultraFcm < 160.0f && ultraTcm > 37.0f) {
-    // frente perto e tras livre -> desloca para tras
-    alinhandoAgora = false;
-    fugindoLinhaAgora = false;
-    resetPidBussola();
-    seguirDirecaoPorAngulo(180.0f, velocidade_maxima);
-    return true;
-  }
-
+bool ultrassonico_defensor() {
+  // Placeholder para a nova logica de ultrassonico do defensor.
   return false;
 }
 
+int sinalErroDefensor(float erro, float toleranciaZero) {
+  if (erro > toleranciaZero) {
+    return 1;
+  }
+  if (erro < -toleranciaZero) {
+    return -1;
+  }
+  return 0;
+}
+
+int calcularGiroDefensor(float erroA, float erroB, float toleranciaIgual, int giroMaximo) {
+  float deltaMag = fabsf(erroA) - fabsf(erroB);
+  if (fabsf(deltaMag) <= toleranciaIgual) {
+    return 0;
+  }
+
+  float ganho = 2.0f;
+  int cmdGiro = (int)(fabsf(deltaMag) * ganho);
+  if (cmdGiro < 35) {
+    cmdGiro = 35;
+  }
+  if (cmdGiro > giroMaximo) {
+    cmdGiro = giroMaximo;
+  }
+
+  return (deltaMag >= 0.0f) ? cmdGiro : -cmdGiro;
+}
+
+// Velocidade proporcional para frente/tras no defensor conforme intensidade do erro da linha.
+int calcularVelocidadeLinhaDefensor(float erroA, float erroB, bool temZonaA, bool temZonaB,
+                                    float toleranciaZero, float erroMaxRef,
+                                    int velocidadeMinima, int velocidadeMaxima) {
+  float intensidade = 0.0f;
+
+  if (temZonaA) {
+    float magA = fabsf(erroA) - toleranciaZero;
+    if (magA > intensidade) intensidade = magA;
+  }
+  if (temZonaB) {
+    float magB = fabsf(erroB) - toleranciaZero;
+    if (magB > intensidade) intensidade = magB;
+  }
+
+  if (intensidade <= 0.0f) {
+    return 0;
+  }
+
+  if (intensidade > erroMaxRef) {
+    intensidade = erroMaxRef;
+  }
+
+  float t = intensidade / erroMaxRef;
+  int vel = (int)(velocidadeMinima + t * (float)(velocidadeMaxima - velocidadeMinima));
+  return constrain(vel, velocidadeMinima, velocidadeMaxima);
+}
+
 void defensor() {
-  const float TOLERANCIA_ALINHAMENTO_PRIORITARIO_DEFENSOR = 40.0f;
-  int16_t anguloGolDefensor = -999;
-  bool golVisivelDefensor = cameraTemGolSelecionadoValido(anguloGolDefensor);
-  float erroGolDefensor = 0.0f;
-  bool erroGolDefensorDisponivel = false;
+  const float REFERENCIA_ZONA_A = 90.0f;
+  const float REFERENCIA_ZONA_B = 270.0f;
+  const float TOLERANCIA_ZERO_GRAUS = 8.0f;
+  const float ERRO_MAX_VEL_LINHA_GRAUS = 80.0f;
+  const int VELOCIDADE_DEFENSOR = 150;
+  const int VELOCIDADE_LINHA_MIN = 90;
+  const uint16_t DISTANCIA_MAX_BOLA_CAMERA_DEFENSOR = 60;
+  const unsigned long RETENCAO_LINHA_DEFENSOR_MS = 180;
+  const float PESO_LINHA_COM_LINHA_ATIVA = 1.25f;
+  const float PESO_LATERAL_COM_LINHA_ATIVA = 0.35f;
+  const float PESO_LATERAL_SEM_LINHA = 1.0f;
+  const float FAIXA_BOLA_DIREITA_MIN = 20.0f;
+  const float FAIXA_BOLA_DIREITA_MAX = 160.0f;
+  const float FAIXA_BOLA_ESQUERDA_MIN = 200.0f;
+  const float FAIXA_BOLA_ESQUERDA_MAX = 340.0f;
 
-  if (golVisivelDefensor) {
-    erroGolDefensor = calcularErroGolPorPapel((float)anguloGolDefensor);
-    defensorUltimoErroGolValido = erroGolDefensor;
-    defensorTemUltimoErroGolValido = true;
-    erroGolDefensorDisponivel = true;
-  } else if (defensorTemUltimoErroGolValido) {
-    // Se perdeu o gol, usa o ultimo erro valido para nao travar em valor extremo.
-    erroGolDefensor = defensorUltimoErroGolValido;
-    erroGolDefensorDisponivel = true;
-  }
+  static int ultimaDirecaoLinhaDefensor = 0;  // 1 -> 180 (tras), -1 -> 0 (frente)
+  static unsigned long ultimoComandoLinhaDefensorMs = 0;
 
-  // Fase 1: primeiro alinha no gol espelhado do defensor.
-  if (!defensorAlinhamentoInicialConcluido) {
-    erroAlinhamentoGraus = erroGolDefensor;
-    bool precisaAlinharInicial = erroGolDefensorDisponivel && (fabsf(erroAlinhamentoGraus) > TOLERANCIA_ALINHAMENTO_GRAUS);
-    if (precisaAlinharInicial) {
-      alinhandoAgora = true;
-      fugindoLinhaAgora = false;
-      int cmdPid = calcularSaidaPidBussolaDefensor(erroAlinhamentoGraus);
-      int cmdPidAssinado = -SINAL_GIRO_PID * cmdPid;
-      girarNoEixo(cmdPidAssinado);
-      return;
-    }
+  int16_t anguloGolCamera = -999;
+  bool golVisivelCamera = cameraTemGolSelecionadoValido(anguloGolCamera);
+  erroAlinhamentoGraus = golVisivelCamera ? calcularErroGolPorPapel((float)anguloGolCamera) : 0.0f;
 
-    alinhandoAgora = false;
-    resetPidBussolaDefensor();
-    defensorAlinhamentoInicialConcluido = true;
-  }
+  // Verifica distancia do gol selecionado para recuperacao.
+  bool usarAzul = golReferenciaAzulEfetiva();
+  uint16_t distGolSelecionado = usarAzul ? cameraBlueDist : cameraYellowDist;
+  const uint16_t DISTANCIA_MAX_RECUPERACAO_GOL_DEFENSOR = 46;
 
-  // Prioridade alta: antes da logica de linha, alinha com o gol se erro > 20 graus.
-  erroAlinhamentoGraus = erroGolDefensor;
-  bool precisaAlinharPrioritario = erroGolDefensorDisponivel &&
-                                   (fabsf(erroAlinhamentoGraus) > TOLERANCIA_ALINHAMENTO_PRIORITARIO_DEFENSOR);
-  if (precisaAlinharPrioritario) {
+  int cmdPidAssinado = 0;
+  bool precisaAlinhar = golVisivelCamera && (fabsf(erroAlinhamentoGraus) > TOLERANCIA_ALINHAMENTO_GRAUS);
+  if (precisaAlinhar) {
     alinhandoAgora = true;
-    fugindoLinhaAgora = false;
-    int cmdPid = calcularSaidaPidBussolaDefensor(erroAlinhamentoGraus);
-    int cmdPidAssinado = -SINAL_GIRO_PID * cmdPid;
+    int cmdPid = calcularSaidaPidBussola(erroAlinhamentoGraus);
+    cmdPidAssinado = -SINAL_GIRO_PID * cmdPid;
+  } else {
+    alinhandoAgora = false;
+    resetPidBussola();
+  }
+
+  bool temZonaA = linhaZonaAValida && (anguloLinhaZonaA >= 0.0f);
+  bool temZonaB = linhaZonaBValida && (anguloLinhaZonaB >= 0.0f);
+  bool bolaDireita = irDetectado && (anguloIr >= FAIXA_BOLA_DIREITA_MIN) && (anguloIr <= FAIXA_BOLA_DIREITA_MAX);
+  bool bolaEsquerda = irDetectado && (anguloIr >= FAIXA_BOLA_ESQUERDA_MIN) && (anguloIr <= FAIXA_BOLA_ESQUERDA_MAX);
+  bool bolaCameraSemIr = !irDetectado && cameraTemBolaValida() && (cameraBallDist < DISTANCIA_MAX_BOLA_CAMERA_DEFENSOR);
+  int velocidadeLateralIr = irDetectado ? calcularVelocidadeLateralDefensorPorIr(anguloIr) : 0;
+
+  float erroA = temZonaA ? normalizarErro180(anguloLinhaZonaA - REFERENCIA_ZONA_A) : 0.0f;
+  float erroB = temZonaB ? normalizarErro180(anguloLinhaZonaB - REFERENCIA_ZONA_B) : 0.0f;
+
+  int sinalA = temZonaA ? sinalErroDefensor(erroA, TOLERANCIA_ZERO_GRAUS) : 0;
+  int sinalB = temZonaB ? sinalErroDefensor(erroB, TOLERANCIA_ZERO_GRAUS) : 0;
+  int direcaoLinha = 0;
+
+  if (sinalA > 0 && sinalB < 0) {
+    direcaoLinha = 1;
+  } else if (sinalA < 0 && sinalB > 0) {
+    direcaoLinha = -1;
+  } else if (sinalA > 0 || sinalB > 0) {
+    direcaoLinha = 1;
+  } else if (sinalA < 0 || sinalB < 0) {
+    direcaoLinha = -1;
+  }
+
+  int velocidadeLinha = calcularVelocidadeLinhaDefensor(
+      erroA, erroB, temZonaA, temZonaB,
+      TOLERANCIA_ZERO_GRAUS, ERRO_MAX_VEL_LINHA_GRAUS,
+      VELOCIDADE_LINHA_MIN, VELOCIDADE_DEFENSOR);
+
+  if (direcaoLinha != 0) {
+    ultimaDirecaoLinhaDefensor = direcaoLinha;
+    ultimoComandoLinhaDefensorMs = millis();
+  } else {
+    bool manterLinhaRecente = (ultimaDirecaoLinhaDefensor != 0) &&
+                              ((millis() - ultimoComandoLinhaDefensorMs) <= RETENCAO_LINHA_DEFENSOR_MS) &&
+                              (temZonaA || temZonaB);
+    if (manterLinhaRecente) {
+      direcaoLinha = ultimaDirecaoLinhaDefensor;
+      if (velocidadeLinha == 0) {
+        velocidadeLinha = VELOCIDADE_LINHA_MIN;
+      }
+    }
+  }
+
+  // Recuperacao: se saiu da linha e gol esta longe, volta ao gol para reencontrar linha.
+  bool foraLinhaLongeDoGol = (!temZonaA && !temZonaB) && 
+                             golVisivelCamera && 
+                             (distGolSelecionado > DISTANCIA_MAX_RECUPERACAO_GOL_DEFENSOR);
+  if (foraLinhaLongeDoGol) {
+    float anguloGoal = normalizarAngulo360((float)anguloGolCamera);
+    seguirDirecaoComGiro(anguloGoal, VELOCIDADE_DEFENSOR, cmdPidAssinado);
+    return;
+  }
+
+  // Combina linha (frente/tras) com lateral (direita/esquerda) em um unico vetor.
+  float vxCmd = 0.0f;  // +x direita, -x esquerda
+  float vyCmd = 0.0f;  // +y frente (0 graus), -y tras (180 graus)
+  bool linhaAtivaNoVetor = (direcaoLinha != 0 && velocidadeLinha > 0);
+  float pesoLinha = linhaAtivaNoVetor ? PESO_LINHA_COM_LINHA_ATIVA : 1.0f;
+  float pesoLateral = linhaAtivaNoVetor ? PESO_LATERAL_COM_LINHA_ATIVA : PESO_LATERAL_SEM_LINHA;
+
+  if (linhaAtivaNoVetor) {
+    vyCmd += (direcaoLinha > 0) ? -((float)velocidadeLinha * pesoLinha)
+                                : ((float)velocidadeLinha * pesoLinha);
+  }
+
+  if (bolaDireita && velocidadeLateralIr > 0) {
+    vxCmd += (float)velocidadeLateralIr * pesoLateral;
+  }
+
+  if (bolaEsquerda && velocidadeLateralIr > 0) {
+    vxCmd -= (float)velocidadeLateralIr * pesoLateral;
+  }
+
+  float moduloVetor = sqrtf(vxCmd * vxCmd + vyCmd * vyCmd);
+  if (moduloVetor > 0.5f) {
+    float anguloVetor = atan2f(vxCmd, vyCmd) * 180.0f / PI;
+    anguloVetor = normalizarAngulo360(anguloVetor);
+
+    int velocidadeVetor = (int)moduloVetor;
+    velocidadeVetor = constrain(velocidadeVetor, 0, velocidade_maxima);
+
+    seguirDirecaoComGiro(anguloVetor, velocidadeVetor, cmdPidAssinado);
+    return;
+  }
+
+  if (bolaCameraSemIr) {
+    float anguloCameraMovimento = mapearAnguloBolaParaMovimento((float)cameraBallAngle);
+    seguirDirecaoComGiro(anguloCameraMovimento, VELOCIDADE_DEFENSOR, cmdPidAssinado);
+    return;
+  }
+
+  if (precisaAlinhar) {
     girarNoEixo(cmdPidAssinado);
     return;
   }
 
-  bool linhaValida = linhaDetectada && (anguloLinhaPe >= 0.0f);
-
-  // Fase 2: vai para tras ate validar que encontrou linha.
-  if (!defensorJaProcurouLinha) {
-    if (linhaValida) {
-      if (defensorLeiturasLinhaConsecutivas < DEFENSOR_MIN_LEITURAS_CONSECUTIVAS) {
-        defensorLeiturasLinhaConsecutivas++;
-      }
-
-      if (defensorLeiturasLinhaConsecutivas < DEFENSOR_MIN_LEITURAS_CONSECUTIVAS) {
-        alinhandoAgora = false;
-        fugindoLinhaAgora = false;
-        resetPidBussolaDefensor();
-        seguirDirecaoPorAngulo(180.0f, VELOCIDADE_FUGA_LINHA);
-        return;
-      }
-
-      defensorJaProcurouLinha = true;
-      defensorLeiturasLinhaConsecutivas = 0;
-    } else {
-      defensorLeiturasLinhaConsecutivas = 0;
-      alinhandoAgora = false;
-      fugindoLinhaAgora = false;
-      resetPidBussolaDefensor();
-      seguirDirecaoPorAngulo(180.0f, VELOCIDADE_FUGA_LINHA);
-      return;
-    }
-  }
-
-  // Fase 3 (padrao): prioridade = linha > ultrassonico, com giro leve pelo gol.
-  erroAlinhamentoGraus = erroGolDefensor;
-  alinhandoAgora = false;
-
-  if (linhaValida) {
-    // Fonte da bola no defensor:
-    // 1) IR (prioridade)
-    // 2) Camera apenas se distancia < 60
-    // 3) Sem bola valida: para.
-    bool bolaValida = false;
-    float angBola = -1.0f;
-    if (irDetectado && (anguloIr >= 0.0f)) {
-      bolaValida = true;
-      angBola = normalizarAngulo360(anguloIr);
-    } else {
-      bool cameraBolaValida = cameraTemBolaValida() && (cameraBallDist < 60);
-      if (cameraBolaValida && (cameraBallAngle != -999)) {
-        bolaValida = true;
-        angBola = normalizarAngulo360((float)cameraBallAngle);
-      }
-    }
-
-    // Base antiga (frente/tras) pela orientacao da linha.
-    float angDefensor = normalizarAngulo360(anguloLinhaPe);
-    float cmdDefensor = 180.0f;
-    int velocidadeDefensor = calcularVelocidadeDefensorPorLinha(angDefensor, 255);
-    if ((angDefensor >= 0.0f && angDefensor <= 90.0f) ||
-        (angDefensor >= 270.0f && angDefensor < 360.0f)) {
-      cmdDefensor = 0.0f;
-    } else {
-      cmdDefensor = 180.0f;
-    }
-
-    if (!bolaValida) {
-      alinhandoAgora = false;
-      fugindoLinhaAgora = false;
-      anguloFugaLinhaCmd = cmdDefensor;
-      resetPidBussolaDefensor();
-      pararMotores();
-      return;
-    }
-
-    bool bolaLateralValida = false;
-    float cmdBolaLateral = 0.0f;
-    if (bolaValida && (angBola >= 240.0f) && (angBola < 350.0f)) {
-      bolaLateralValida = true;
-      cmdBolaLateral = 260.0f;
-    } else if (bolaValida && (angBola > 10.0f) && (angBola < 120.0f)) {
-      bolaLateralValida = true;
-      cmdBolaLateral = 100.0f;
-    }
-
-    const float pesoLinha = 1.4f;
-    const float pesoBola = 2.4f;
-    float xLinha = sinf(cmdDefensor * PI / 180.0f);
-    float yLinha = cosf(cmdDefensor * PI / 180.0f);
-
-    float xComb = pesoLinha * xLinha;
-    float yComb = pesoLinha * yLinha;
-
-    if (bolaLateralValida) {
-      float xBola = sinf(cmdBolaLateral * PI / 180.0f);
-      float yBola = cosf(cmdBolaLateral * PI / 180.0f);
-      xComb += pesoBola * xBola;
-      yComb += pesoBola * yBola;
-    }
-
-    float cmdCombinado = atan2f(xComb, yComb) * 180.0f / PI;
-    cmdCombinado = normalizarAngulo360(cmdCombinado);
-
-    // No movimento combinado, aplica apenas 30% do giro de alinhamento com o gol.
-    int cmdGiroComGol = 0;
-    bool erroPequenoGol = !erroGolDefensorDisponivel ||
-                          (fabsf(erroAlinhamentoGraus) <= TOLERANCIA_ALINHAMENTO_GRAUS);
-    if (!erroPequenoGol) {
-      int cmdPid = calcularSaidaPidBussolaDefensor(erroAlinhamentoGraus);
-      int cmdPidAssinado = -SINAL_GIRO_PID * cmdPid;
-      cmdGiroComGol = (int)roundf((float)cmdPidAssinado * DEFENSOR_PESO_GIRO_GOL);
-      alinhandoAgora = true;
-    } else {
-      resetPidBussolaDefensor();
-    }
-
-    // Em movimento combinado com bola lateral, aplica duas faixas de velocidade frontal:
-    // 0..45 -> 140 | 45..90 -> 200 | acima de 90 -> velocidade maxima.
-    int velocidadeFinal = velocidadeDefensor;
-    if (bolaLateralValida) {
-      int velMaxCombinado = VELOCIDADE_FUGA_LINHA;
-      float erroFrontal = fabsf(normalizarErro180(angBola));
-      if (erroFrontal < DEFENSOR_JANELA_FRONTAL_1_GRAUS) {
-        velocidadeFinal = DEFENSOR_VEL_FAIXA_0_45;
-      } else if (erroFrontal < DEFENSOR_JANELA_FRONTAL_2_GRAUS) {
-        velocidadeFinal = DEFENSOR_VEL_FAIXA_45_90;
-      } else {
-        velocidadeFinal = velMaxCombinado;
-      }
-    }
-    fugindoLinhaAgora = true;
-    anguloFugaLinhaCmd = cmdCombinado;
-    seguirDirecaoComGiro(cmdCombinado, velocidadeFinal, cmdGiroComGol);
-  } else {
-    if (ultras_defensor()) {
-      return;
-    }
-    // Sem linha e sem acao de ultra: segue bola lateralmente (IR -> camera < 60).
-    bool bolaValidaSemLinha = false;
-    float angBolaSemLinha = -1.0f;
-    if (irDetectado && (anguloIr >= 0.0f)) {
-      bolaValidaSemLinha = true;
-      angBolaSemLinha = normalizarAngulo360(anguloIr);
-    } else {
-      bool cameraBolaValidaSemLinha = cameraTemBolaValida() && (cameraBallDist < 60);
-      if (cameraBolaValidaSemLinha && (cameraBallAngle != -999)) {
-        bolaValidaSemLinha = true;
-        angBolaSemLinha = normalizarAngulo360((float)cameraBallAngle);
-      }
-    }
-
-    if (bolaValidaSemLinha) {
-      float cmdLateralSemLinha = (angBolaSemLinha < 180.0f) ? 100.0f : 260.0f;
-      float erroFrontalSemLinha = fabsf(normalizarErro180(angBolaSemLinha));
-      int velocidadeSemLinha = VELOCIDADE_FUGA_LINHA;
-      if (erroFrontalSemLinha < DEFENSOR_JANELA_FRONTAL_1_GRAUS) {
-        velocidadeSemLinha = DEFENSOR_VEL_FAIXA_0_45;
-      } else if (erroFrontalSemLinha < DEFENSOR_JANELA_FRONTAL_2_GRAUS) {
-        velocidadeSemLinha = DEFENSOR_VEL_FAIXA_45_90;
-      }
-
-      alinhandoAgora = false;
-      fugindoLinhaAgora = true;
-      anguloFugaLinhaCmd = cmdLateralSemLinha;
-      resetPidBussolaDefensor();
-      seguirDirecaoPorAngulo(cmdLateralSemLinha, velocidadeSemLinha);
-      return;
-    }
-
-    // Sem linha, sem ultra e sem bola valida: para motores.
-    alinhandoAgora = false;
-    fugindoLinhaAgora = false;
-    resetPidBussolaDefensor();
-    pararMotores();
-  }
-}
-
-// Reseta a flag de busca de linha do defensor (chamado quando sai de INICIAR).
-void defensor_resetFlag() {
-  defensorJaProcurouLinha = false;
-  defensorLeiturasLinhaConsecutivas = 0;
-  defensorAlinhamentoInicialConcluido = false;
-  defensorTemUltimoErroGolValido = false;
-  defensorUltimoErroGolValido = 0.0f;
-  resetPidBussolaDefensor();
+  pararMotores();
 }
 
 // Laco principal: comunica, atualiza controle de movimento e redesenha interface.
@@ -2123,8 +2052,6 @@ void loop() {
     fugindoLinhaAgora = false;
     resetPidBussola();
     pararMotores();
-    // Reset da flag de busca de linha defensor quando sai do modo INICIAR
-    defensor_resetFlag();
   }
 
   // Redesenha o OLED com taxa limitada para evitar flicker excessivo.
