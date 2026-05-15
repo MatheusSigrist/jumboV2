@@ -40,7 +40,7 @@ const int MUX1_S1 = 47;
 const int MUX1_S2 = 48;
 const int MUX1_S3 = 45;
 
-const int MUX2_SIG = 12;
+const int MUX2_SIG = 8;
 const int MUX2_S0 = 4;
 const int MUX2_S1 = 5;
 const int MUX2_S2 = 6;
