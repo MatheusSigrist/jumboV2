@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<title>JumboV1 — Diagrama de Pacotes</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0d1117; font-family: Consolas, 'Courier New', monospace; color: #e6edf3; padding: 32px; }
+
+  h1 { color: #58a6ff; font-size: 20px; text-align: center; margin-bottom: 8px; }
+  .sep  { border: none; border-top: 1px solid #30363d; margin: 18px 0; }
+  .sep2 { border: none; border-top: 1px solid #21262d; margin: 10px 0; }
+
+  .section-title { color: #d29922; font-size: 13px; font-weight: bold; margin-bottom: 6px; }
+  .subtitle      { color: #8b949e; font-size: 12px; font-weight: bold; margin-bottom: 6px; }
+
+  /* ── FRAME GENÉRICO ── */
+  .frame { display: flex; gap: 0; margin-bottom: 4px; }
+  .frame-cell {
+    border: 2px solid #30363d;
+    border-radius: 4px;
+    padding: 6px 14px;
+    text-align: center;
+    font-size: 13px;
+    font-weight: bold;
+    margin-right: 4px;
+  }
+  .fc-start  { border-color: #58a6ff; color: #58a6ff; }
+  .fc-id     { border-color: #79c0ff; color: #79c0ff; }
+  .fc-pay    { border-color: #3fb950; color: #3fb950; flex: 1; }
+  .fc-end    { border-color: #58a6ff; color: #58a6ff; }
+  .frame-cell small { display: block; color: #8b949e; font-size: 10px; font-weight: normal; }
+
+  /* ── TABELAS ── */
+  table { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 6px; }
+  thead tr { background: #161b22; }
+  thead th { padding: 5px 8px; color: #6e7681; font-weight: normal; text-align: left; border: 1px solid #30363d; }
+  tbody tr:nth-child(odd)  { background: #0d1117; }
+  tbody tr:nth-child(even) { background: #161b22; }
+  tbody td { padding: 4px 8px; border: 1px solid #21262d; vertical-align: middle; }
+
+  .t-field   { color: #e6edf3; }
+  .t-cam     { color: #ffa657; }
+  .t-key     { color: #ff7b72; }
+  .t-int16   { color: #79c0ff; }
+  .t-uint16  { color: #3fb950; }
+  .t-bool    { color: #3fb950; }
+  .t-uint8   { color: #3fb950; }
+  .t-uint32  { color: #3fb950; }
+  .t-desc    { color: #8b949e; }
+  .t-scale   { color: #8b949e; }
+  .t-size    { color: #8b949e; }
+  .badge-cam { background:#2d2000; color:#ffa657; border:1px solid #ffa657; border-radius:3px; padding:0 5px; font-size:10px; }
+  .badge-key { background:#2d0000; color:#ff7b72; border:1px solid #ff7b72; border-radius:3px; padding:0 5px; font-size:10px; }
+
+  /* ── FLUXO ── */
+  .flow { display: flex; align-items: center; gap: 0; margin: 16px 0 8px; flex-wrap: wrap; }
+  .node {
+    border-radius: 8px;
+    padding: 10px 18px;
+    text-align: center;
+    font-size: 13px;
+    font-weight: bold;
+    min-width: 110px;
+  }
+  .n-olho    { border: 2px solid #d29922; color: #d29922; background: #161b22; }
+  .n-pe      { border: 2px solid #3fb950; color: #3fb950; background: #161b22; }
+  .n-cabeca  { border: 2px solid #58a6ff; color: #58a6ff; background: #161b22; }
+  .n-musculo { border: 2px solid #bc8cff; color: #bc8cff; background: #161b22; }
+  .n-remote  { border: 2px dashed #58a6ff; color: #58a6ff; background: #161b22; }
+  .node small { display:block; color:#8b949e; font-size:10px; font-weight:normal; margin-top:3px; }
+
+  .arrow-block { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 0 6px; gap: 2px; }
+  .arr-line { font-size: 11px; }
+  .arr-fwd  { color: #d29922; }
+  .arr-back { color: #58a6ff; }
+  .arr-esp  { color: #58a6ff; font-style: italic; }
+  .arr-mus  { color: #bc8cff; }
+
+  /* ── REGRA ── */
+  .rule-box {
+    border: 1px solid #ff7b72;
+    border-radius: 6px;
+    background: #161b22;
+    padding: 12px 18px;
+    margin: 14px 0;
+  }
+  .rule-box h3 { color: #ff7b72; font-size: 13px; margin-bottom: 6px; }
+  .rule-box p  { color: #8b949e; font-size: 12px; line-height: 1.7; }
+  .rule-box strong { color: #e6edf3; }
+
+  /* ── TIMING ── */
+  .timing { display: flex; gap: 12px; flex-wrap: wrap; margin: 10px 0; }
+  .timing-item {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 4px;
+    padding: 5px 12px;
+    font-size: 11px;
+    color: #8b949e;
+  }
+  .timing-item span { color: #58a6ff; font-weight: bold; }
+
+  /* ── LEGEND ── */
+  .legend { display:flex; gap:20px; flex-wrap:wrap; margin-top:10px; font-size:11px; color:#8b949e; }
+  .legend-item { display:flex; align-items:center; gap:6px; }
+  .dot { width:12px; height:12px; border-radius:3px; }
+</style>
+</head>
+<body>
+
+<h1>JUMBO V1 — Diagrama de Pacotes de Dados</h1>
+<hr class="sep">
+
+<!-- ══════════════════════════════════════════════════════ -->
+<div class="section-title">ENQUADRAMENTO BINÁRIO (todas as comunicações placa→placa)</div>
+<div class="frame">
+  <div class="frame-cell fc-start">0xAA<small>INÍCIO · 1 B</small></div>
+  <div class="frame-cell fc-id">ID<small>PLACA · 1 B</small></div>
+  <div class="frame-cell fc-pay">PAYLOAD (struct binária)<small>N bytes</small></div>
+  <div class="frame-cell fc-end">0x55<small>FIM · 1 B</small></div>
+</div>
+<p style="color:#8b949e;font-size:11px;margin-top:4px">IDs: &nbsp;<b style="color:#79c0ff">0x01</b> = OLHO &nbsp;&nbsp; <b style="color:#79c0ff">0x02</b> = PÉ &nbsp;&nbsp; <b style="color:#79c0ff">0x03</b> = CÂMERA</p>
+
+<hr class="sep">
+
+<!-- ══════════════════════════════════════════════════════ -->
+<div class="section-title">PacoteOlho &nbsp;<span style="color:#8b949e;font-weight:normal;font-size:12px">(Olho → Cabeça) — 27 bytes</span></div>
+<table>
+  <thead><tr><th>Campo</th><th>Tipo</th><th>Tam.</th><th>Escala</th><th>Descrição</th></tr></thead>
+  <tbody>
+    <tr><td class="t-field">uD</td><td class="t-int16">int16_t</td><td class="t-size">2 B</td><td class="t-scale">÷10 = cm</td><td class="t-desc">Ultrassônico Direito</td></tr>
+    <tr><td class="t-field">uE</td><td class="t-int16">int16_t</td><td class="t-size">2 B</td><td class="t-scale">÷10 = cm</td><td class="t-desc">Ultrassônico Esquerdo</td></tr>
+    <tr><td class="t-field">uF</td><td class="t-int16">int16_t</td><td class="t-size">2 B</td><td class="t-scale">÷10 = cm</td><td class="t-desc">Ultrassônico Frontal</td></tr>
+    <tr><td class="t-field">uT</td><td class="t-int16">int16_t</td><td class="t-size">2 B</td><td class="t-scale">÷10 = cm</td><td class="t-desc">Ultrassônico Traseiro</td></tr>
+    <tr><td class="t-field">angulo</td><td class="t-int16">int16_t</td><td class="t-size">2 B</td><td class="t-scale">÷10 = graus</td><td class="t-desc">Ângulo IR (direção da bola)</td></tr>
+    <tr><td class="t-field">intensidade</td><td class="t-int16">int16_t</td><td class="t-size">2 B</td><td class="t-scale">÷10 = u.a.</td><td class="t-desc">Intensidade do sinal IR</td></tr>
+    <tr><td class="t-cam">ballAngle <span class="badge-cam">câmera</span></td><td class="t-int16">int16_t</td><td class="t-size">2 B</td><td class="t-scale">÷10 = graus</td><td class="t-desc t-cam">Ângulo da bola pela câmera</td></tr>
+    <tr><td class="t-cam">ballDist <span class="badge-cam">câmera</span></td><td class="t-uint16">uint16_t</td><td class="t-size">2 B</td><td class="t-scale">pixels</td><td class="t-desc t-cam">Distância da bola pela câmera</td></tr>
+    <tr><td class="t-cam">blueAngle <span class="badge-cam">câmera</span></td><td class="t-int16">int16_t</td><td class="t-size">2 B</td><td class="t-scale">÷10 = graus</td><td class="t-desc t-cam">Ângulo do gol azul</td></tr>
+    <tr><td class="t-cam">blueDist <span class="badge-cam">câmera</span></td><td class="t-uint16">uint16_t</td><td class="t-size">2 B</td><td class="t-scale">pixels</td><td class="t-desc t-cam">Distância do gol azul</td></tr>
+    <tr><td class="t-cam">yellowAngle <span class="badge-cam">câmera</span></td><td class="t-int16">int16_t</td><td class="t-size">2 B</td><td class="t-scale">÷10 = graus</td><td class="t-desc t-cam">Ângulo do gol amarelo</td></tr>
+    <tr><td class="t-cam">yellowDist <span class="badge-cam">câmera</span></td><td class="t-uint16">uint16_t</td><td class="t-size">2 B</td><td class="t-scale">pixels</td><td class="t-desc t-cam">Distância do gol amarelo</td></tr>
+    <tr><td class="t-field">cameraOK</td><td class="t-uint8">uint8_t</td><td class="t-size">1 B</td><td class="t-scale">0 / 1</td><td class="t-desc">Câmera ativa? (timeout 3 s)</td></tr>
+  </tbody>
+</table>
+
+<hr class="sep2">
+
+<!-- ══════════════════════════════════════════════════════ -->
+<div class="section-title">PacotePe &nbsp;<span style="color:#8b949e;font-weight:normal;font-size:12px">(Pé → Cabeça, modo ATACANTE) — 2 bytes</span></div>
+<table>
+  <thead><tr><th>Campo</th><th>Tipo</th><th>Tam.</th><th>Escala</th><th>Descrição</th></tr></thead>
+  <tbody>
+    <tr><td class="t-field">angulo</td><td class="t-int16">int16_t</td><td class="t-size">2 B</td><td class="t-scale">÷10 = graus</td><td class="t-desc">Ângulo de <b style="color:#e6edf3">repulsão</b> da linha (modo atacante)</td></tr>
+  </tbody>
+</table>
+
+<hr class="sep2">
+
+<!-- ══════════════════════════════════════════════════════ -->
+<div class="section-title">PacotePeDefensor &nbsp;<span style="color:#8b949e;font-weight:normal;font-size:12px">(Pé → Cabeça, modo DEFENSOR/GOLEIRO) — 6 bytes</span></div>
+<table>
+  <thead><tr><th>Campo</th><th>Tipo</th><th>Tam.</th><th>Escala</th><th>Descrição</th></tr></thead>
+  <tbody>
+    <tr><td class="t-field">anguloZonaA</td><td class="t-int16">int16_t</td><td class="t-size">2 B</td><td class="t-scale">÷10 = graus</td><td class="t-desc">Ângulo da linha — zona 0°…180°</td></tr>
+    <tr><td class="t-field">anguloZonaB</td><td class="t-int16">int16_t</td><td class="t-size">2 B</td><td class="t-scale">÷10 = graus</td><td class="t-desc">Ângulo da linha — zona 180°…360°</td></tr>
+    <tr><td class="t-field">temLinhaZonaA</td><td class="t-uint8">uint8_t</td><td class="t-size">1 B</td><td class="t-scale">0 / 1</td><td class="t-desc">Linha detectada na zona A?</td></tr>
+    <tr><td class="t-field">temLinhaZonaB</td><td class="t-uint8">uint8_t</td><td class="t-size">1 B</td><td class="t-scale">0 / 1</td><td class="t-desc">Linha detectada na zona B?</td></tr>
+  </tbody>
+</table>
+
+<hr class="sep2">
+
+<!-- ══════════════════════════════════════════════════════ -->
+<div class="section-title">PacoteEstado &nbsp;<span style="color:#8b949e;font-weight:normal;font-size:12px">(Cabeça → Olho / Pé) — 3 bytes</span></div>
+<table>
+  <thead><tr><th>Campo</th><th>Tipo</th><th>Tam.</th><th>Valores</th><th>Descrição</th></tr></thead>
+  <tbody>
+    <tr><td class="t-field">sozinho</td><td class="t-bool">bool</td><td class="t-size">1 B</td><td class="t-scale">0 = par / 1 = solo</td><td class="t-desc">Outro robô visível via ESP-NOW?</td></tr>
+    <tr><td class="t-field" style="color:#58a6ff">atacante</td><td class="t-bool">bool</td><td class="t-size">1 B</td><td style="color:#58a6ff">0 = GOLEIRO · 1 = ATACANTE</td><td style="color:#58a6ff">Papel deste robô neste ciclo</td></tr>
+    <tr><td class="t-field">corGolAzul</td><td class="t-bool">bool</td><td class="t-size">1 B</td><td class="t-scale">0 = amarelo / 1 = azul</td><td class="t-desc">Gol do time</td></tr>
+  </tbody>
+</table>
+
+<hr class="sep2">
+
+<!-- ══════════════════════════════════════════════════════ -->
+<div class="section-title">EspNowMsg &nbsp;<span style="color:#8b949e;font-weight:normal;font-size:12px">(Cabeça ↔ Cabeça via ESP-NOW/Wi-Fi) — 23 bytes</span></div>
+<table>
+  <thead><tr><th>Campo</th><th>Tipo</th><th>Tam.</th><th>Valores</th><th>Descrição</th></tr></thead>
+  <tbody>
+    <tr><td class="t-field">seq</td><td class="t-uint32">uint32_t</td><td class="t-size">4 B</td><td class="t-scale">contador incremental</td><td class="t-desc">Número de sequência do frame</td></tr>
+    <tr><td class="t-field">tipo</td><td class="t-uint8">uint8_t</td><td class="t-size">1 B</td><td class="t-scale">1 = REQ / 2 = RESP</td><td class="t-desc">Tipo do frame</td></tr>
+    <tr><td class="t-field">uD</td><td class="t-int16">int16_t</td><td class="t-size">2 B</td><td class="t-scale">÷10 = cm</td><td class="t-desc">Ultra direito do robô remetente</td></tr>
+    <tr><td class="t-field">uE</td><td class="t-int16">int16_t</td><td class="t-size">2 B</td><td class="t-scale">÷10 = cm</td><td class="t-desc">Ultra esquerdo do robô remetente</td></tr>
+    <tr><td class="t-field">uF</td><td class="t-int16">int16_t</td><td class="t-size">2 B</td><td class="t-scale">÷10 = cm</td><td class="t-desc">Ultra frontal do robô remetente</td></tr>
+    <tr><td class="t-key">uT &nbsp;<span class="badge-key">chave do papel</span></td><td class="t-int16">int16_t</td><td class="t-size">2 B</td><td class="t-scale" style="color:#ff7b72">÷10 = cm</td><td class="t-desc" style="color:#ff7b72">Ultra traseiro — <b>menor uT = GOLEIRO</b></td></tr>
+    <tr><td class="t-field">text</td><td class="t-uint8">char[12]</td><td class="t-size">12 B</td><td class="t-scale">"ULTRA_REQ/RESP"</td><td class="t-desc">Compatibilidade textual</td></tr>
+  </tbody>
+</table>
+
+<hr class="sep">
+
+<!-- ══════════════════════════════════════════════════════ -->
+<div class="section-title">FLUXO DE COMUNICAÇÃO ENTRE PLACAS</div>
+
+<div class="flow">
+  <!-- OLHO -->
+  <div style="display:flex;flex-direction:column;gap:8px">
+    <div class="node n-olho">OLHO<small>IR + Ultras + Câmera</small></div>
+    <div class="node n-pe">PÉ<small>32 sensores de linha</small></div>
+  </div>
+
+  <!-- arrows left-->
+  <div style="display:flex;flex-direction:column;gap:8px;padding:0 8px">
+    <div class="arrow-block">
+      <div class="arr-line arr-fwd">──── PacoteOlho 27B ────▶</div>
+      <div class="arr-line arr-back">◀── PacoteEstado 3B ───</div>
+    </div>
+    <div class="arrow-block">
+      <div class="arr-line arr-fwd" style="color:#3fb950">── PacotePe/Def ──▶</div>
+      <div class="arr-line arr-back">◀── PacoteEstado 3B ─</div>
+    </div>
+  </div>
+
+  <!-- CABECA -->
+  <div class="node n-cabeca" style="padding:14px 22px">CABEÇA<small>Hub central</small><small>Bússola + ESP-NOW</small></div>
+
+  <!-- arrows middle -->
+  <div class="arrow-block" style="padding:0 10px">
+    <div class="arr-line arr-mus">── IR/BUS/CAM/LIN/ULT/ULR/ATC/ESN ──▶</div>
+    <div class="arr-line" style="color:#8b949e">◀────────── ATCFB / cfg:gol ───────────</div>
+  </div>
+
+  <!-- MUSCULO -->
+  <div class="node n-musculo">MÚSCULO<small>Motores + Display</small><small>Lógica de jogo</small></div>
+
+  <!-- arrows right -->
+  <div class="arrow-block" style="padding:0 10px">
+    <div class="arr-line arr-esp">···· EspNowMsg uD/E/F/T ····▶</div>
+    <div class="arr-line arr-esp">◀··· REQ / RESP ·············</div>
+  </div>
+
+  <!-- REMOTE -->
+  <div class="node n-remote">CABEÇA<small>outro robô</small><small>(ESP-NOW)</small></div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════ -->
+<div class="section-title" style="margin-top:14px">TEMPORIZAÇÕES ESP-NOW</div>
+<div class="timing">
+  <div class="timing-item">Envio periódico: <span>2 000 ms</span></div>
+  <div class="timing-item">Timeout de link: <span>6 000 ms</span></div>
+  <div class="timing-item">Status → Músculo: <span>500 ms</span></div>
+  <div class="timing-item">Retry init: <span>2 000 ms</span></div>
+  <div class="timing-item">Estado → Olho/Pé: <span>700 ms</span></div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════ -->
+<div class="rule-box">
+  <h3>⚙ REGRA DE PAPEL (futura): troca atacante / goleiro automática</h3>
+  <p>
+    <strong>Com 2 robôs online:</strong> comparar <strong>uT</strong> local vs remoto (via EspNowMsg).<br>
+    &nbsp;&nbsp;• Menor uT → <strong style="color:#ff7b72">GOLEIRO</strong> &nbsp;(robô mais perto da própria área)<br>
+    &nbsp;&nbsp;• Maior uT → <strong style="color:#3fb950">ATACANTE</strong> &nbsp;(robô mais avançado)<br><br>
+    <strong>Link perdido (timeout ESP-NOW &gt; 6 s):</strong> robô restante entra/permanece como <strong style="color:#3fb950">ATACANTE</strong> até nova troca válida.<br><br>
+    Filtros recomendados: <strong>delta mín. 15 cm</strong> · <strong>janela 4 amostras</strong> · <strong>cooldown 3 s</strong>
+  </p>
+</div>
+
+<!-- legenda -->
+<div class="legend">
+  <div class="legend-item"><div class="dot" style="background:#d29922"></div> dados de sensor</div>
+  <div class="legend-item"><div class="dot" style="background:#58a6ff;opacity:.6"></div> estado / config</div>
+  <div class="legend-item"><div class="dot" style="background:#bc8cff"></div> telemetria texto</div>
+  <div class="legend-item"><div class="dot" style="background:#ffa657"></div> dados de câmera</div>
+  <div class="legend-item"><div class="dot" style="background:#ff7b72"></div> campo-chave de papel</div>
+  <div class="legend-item" style="color:#6e7681">int16_t = ×10 para evitar float no serial &nbsp;·&nbsp; jumboV1/NEXUS — 2026-05-10</div>
+</div>
+
+</body>
+</html>

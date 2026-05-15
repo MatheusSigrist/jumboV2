@@ -1,0 +1,1086 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>JUMBO V1 - Logica Interativa e Didatica</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-0: #081018;
+      --bg-1: #0e1824;
+      --bg-2: #132233;
+      --fg: #e8f0fa;
+      --muted: #a3b5c8;
+      --line: #21374d;
+      --olho: #2ea9ff;
+      --pe: #46d27f;
+      --cabeca: #ffaf45;
+      --musculo: #ff6b5e;
+      --ok: #53f2b3;
+      --warn: #ffd166;
+      --bad: #ff6b6b;
+      --chip: #1a2d42;
+      --shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
+      --radius: 14px;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      font-family: "Space Grotesk", sans-serif;
+      color: var(--fg);
+      background:
+        radial-gradient(circle at 8% 12%, rgba(46,169,255,0.20), transparent 28%),
+        radial-gradient(circle at 88% 16%, rgba(255,175,69,0.18), transparent 30%),
+        radial-gradient(circle at 20% 92%, rgba(70,210,127,0.18), transparent 28%),
+        linear-gradient(140deg, #081018 0%, #101c2c 55%, #0b131c 100%);
+      min-height: 100vh;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 280px 1fr;
+      gap: 20px;
+      padding: 20px;
+      max-width: 1600px;
+      margin: 0 auto;
+    }
+
+    .side {
+      position: sticky;
+      top: 20px;
+      align-self: start;
+      background: linear-gradient(170deg, rgba(14,24,36,0.96), rgba(10,16,24,0.96));
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 16px;
+      backdrop-filter: blur(7px);
+      max-height: calc(100vh - 40px);
+      overflow: auto;
+    }
+
+    .logo {
+      margin: 0 0 2px;
+      font-size: 1.2rem;
+      letter-spacing: 0.02em;
+    }
+
+    .subtitle {
+      color: var(--muted);
+      font-size: 0.86rem;
+      margin: 0 0 12px;
+    }
+
+    .search {
+      width: 100%;
+      border: 1px solid #2f4a63;
+      background: #0f1c2b;
+      border-radius: 10px;
+      color: var(--fg);
+      padding: 10px;
+      font: inherit;
+      margin-bottom: 10px;
+    }
+
+    .side nav {
+      display: grid;
+      gap: 6px;
+      margin-top: 8px;
+    }
+
+    .side nav a {
+      text-decoration: none;
+      color: #d5e8ff;
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 10px;
+      padding: 8px 10px;
+      font-size: 0.92rem;
+      transition: .2s ease;
+    }
+
+    .side nav a:hover,
+    .side nav a.active {
+      background: #15273a;
+      border-color: #2b4560;
+      transform: translateX(3px);
+    }
+
+    .legend {
+      margin-top: 14px;
+      border-top: 1px solid var(--line);
+      padding-top: 10px;
+      display: grid;
+      gap: 7px;
+      font-size: 0.86rem;
+      color: var(--muted);
+    }
+
+    .dot {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      margin-right: 8px;
+      vertical-align: middle;
+    }
+
+    .main {
+      display: grid;
+      gap: 14px;
+    }
+
+    .hero {
+      border: 1px solid #2b445f;
+      border-radius: var(--radius);
+      background:
+        linear-gradient(125deg, rgba(18,33,48,0.96), rgba(12,18,30,0.96));
+      padding: 20px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      position: relative;
+      isolation: isolate;
+    }
+
+    .hero::before {
+      content: "";
+      position: absolute;
+      inset: -150px;
+      background: conic-gradient(from 40deg, rgba(46,169,255,0.16), rgba(255,107,94,0.16), rgba(70,210,127,0.18), rgba(46,169,255,0.16));
+      filter: blur(34px);
+      z-index: -1;
+      animation: swirl 16s linear infinite;
+    }
+
+    @keyframes swirl {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+
+    .hero h1 {
+      margin: 0;
+      font-size: clamp(1.4rem, 2.3vw, 2rem);
+    }
+
+    .hero p {
+      margin: 8px 0 14px;
+      color: #c8d8ea;
+      max-width: 900px;
+      line-height: 1.5;
+    }
+
+    .kpi {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .kpi article {
+      background: rgba(8,16,26,0.7);
+      border: 1px solid #29425d;
+      border-radius: 12px;
+      padding: 10px;
+    }
+
+    .kpi strong {
+      display: block;
+      font-size: 1.18rem;
+      margin-top: 2px;
+    }
+
+    .chip-row {
+      display: flex;
+      gap: 7px;
+      flex-wrap: wrap;
+      margin-top: 12px;
+    }
+
+    .chip {
+      background: var(--chip);
+      border: 1px solid #2b4560;
+      border-radius: 999px;
+      padding: 5px 10px;
+      color: #d6e8ff;
+      font-size: 0.82rem;
+    }
+
+    .tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      border-bottom: 1px solid #263f58;
+      padding-bottom: 8px;
+    }
+
+    .tab {
+      border: 1px solid #2b4560;
+      background: #101d2d;
+      color: #d8e9ff;
+      border-radius: 10px;
+      padding: 9px 13px;
+      font: inherit;
+      cursor: pointer;
+      transition: .2s ease;
+    }
+
+    .tab.active,
+    .tab:hover {
+      background: #19314a;
+      transform: translateY(-2px);
+    }
+
+    .panel {
+      display: none;
+      animation: reveal .35s ease;
+      border: 1px solid #243c56;
+      border-radius: var(--radius);
+      padding: 16px;
+      background: rgba(10,17,27,0.82);
+      box-shadow: var(--shadow);
+    }
+
+    .panel.active { display: block; }
+
+    @keyframes reveal {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .grid {
+      display: grid;
+      gap: 12px;
+    }
+
+    .grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+    .card {
+      border: 1px solid #2b4560;
+      border-radius: 12px;
+      padding: 12px;
+      background: #0f1b2a;
+      min-width: 0;
+    }
+
+    .card h3 {
+      margin: 0 0 8px;
+      font-size: 1rem;
+    }
+
+    .small { font-size: 0.9rem; color: #c6d8ea; line-height: 1.5; }
+
+    .board {
+      border-left: 4px solid currentColor;
+      padding-left: 10px;
+    }
+
+    details {
+      border: 1px solid #2d4660;
+      border-radius: 10px;
+      padding: 9px 12px;
+      background: #0d1826;
+    }
+
+    details summary {
+      cursor: pointer;
+      font-weight: 600;
+      color: #dcecff;
+    }
+
+    pre {
+      margin: 10px 0 0;
+      border: 1px solid #2b4560;
+      border-radius: 10px;
+      padding: 10px;
+      background: #07101a;
+      color: #d0f2ff;
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 0.82rem;
+      overflow: auto;
+    }
+
+    .pipeline {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 8px;
+    }
+
+    .node {
+      border: 1px solid #2f4a65;
+      background: #0f1b2a;
+      border-radius: 10px;
+      padding: 10px;
+      position: relative;
+      transition: .2s ease;
+    }
+
+    .node:hover { transform: translateY(-2px); border-color: #4d7397; }
+
+    .node::after {
+      content: "";
+      position: absolute;
+      right: -8px;
+      top: 50%;
+      width: 10px;
+      height: 2px;
+      background: #5e83a8;
+      transform: translateY(-50%);
+    }
+
+    .node:last-child::after { display: none; }
+
+    .msg-tools {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 8px;
+    }
+
+    select, button, .ghost {
+      border: 1px solid #2f4a64;
+      border-radius: 9px;
+      background: #101e2d;
+      color: #dcecff;
+      padding: 8px 10px;
+      font: inherit;
+      cursor: pointer;
+    }
+
+    .ghost { cursor: default; }
+
+    .priority-wrap {
+      display: grid;
+      grid-template-columns: 310px 1fr;
+      gap: 10px;
+    }
+
+    .priority-list {
+      display: grid;
+      gap: 8px;
+      max-height: 460px;
+      overflow: auto;
+      padding-right: 4px;
+    }
+
+    .prio {
+      text-align: left;
+      border: 1px solid #2f4a65;
+      border-radius: 10px;
+      background: #0f1b2b;
+      color: #d7eaff;
+      padding: 9px;
+      font: inherit;
+      cursor: pointer;
+      transition: .2s ease;
+    }
+
+    .prio:hover,
+    .prio.active { border-color: #67a6de; background: #15304b; transform: translateX(4px); }
+
+    .prio .rank {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 22px;
+      height: 22px;
+      margin-right: 8px;
+      border-radius: 50%;
+      font-size: 0.8rem;
+      background: #1f3f5e;
+      color: #dbedff;
+    }
+
+    .priority-detail {
+      border: 1px solid #2f4a65;
+      border-radius: 12px;
+      background: #0d1a2a;
+      padding: 12px;
+    }
+
+    .priority-detail h3 { margin-top: 0; }
+
+    .diagram {
+      border: 1px solid #2f4a65;
+      border-radius: 12px;
+      background: #0e1b2c;
+      padding: 12px;
+    }
+
+    .camera-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .camera-flow {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+      margin: 10px 0;
+    }
+
+    .frame-box {
+      border: 1px solid #2f4a65;
+      border-radius: 10px;
+      background: #0d1a2a;
+      padding: 8px 10px;
+      min-width: 90px;
+      text-align: center;
+      font-size: 0.86rem;
+    }
+
+    .frame-box strong { display: block; }
+
+    .arrow {
+      color: #88bce8;
+      font-weight: 700;
+    }
+
+    .timeline {
+      border-left: 2px solid #335170;
+      padding-left: 12px;
+      display: grid;
+      gap: 10px;
+      margin-top: 8px;
+    }
+
+    .timeline .item {
+      background: #0d1a2a;
+      border: 1px solid #2f4a65;
+      border-radius: 10px;
+      padding: 9px;
+    }
+
+    .warn {
+      color: #ffd487;
+      font-weight: 600;
+    }
+
+    .states {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 8px;
+    }
+
+    .state {
+      border: 1px solid #2f4a65;
+      border-radius: 10px;
+      padding: 9px;
+      background: #0f1c2e;
+      transition: .2s ease;
+    }
+
+    .state.active {
+      border-color: #7fc9ff;
+      background: #15324c;
+      box-shadow: 0 0 0 2px rgba(127,201,255,0.2) inset;
+    }
+
+    .checklist label {
+      display: block;
+      margin: 6px 0;
+      color: #d5e8ff;
+    }
+
+    .mono {
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 0.87rem;
+      color: #d0ecff;
+    }
+
+    .badge {
+      display: inline-block;
+      border-radius: 999px;
+      padding: 2px 8px;
+      font-size: 0.78rem;
+      border: 1px solid #2f4a65;
+      background: #12263b;
+      color: #d8e9ff;
+      margin-left: 8px;
+    }
+
+    .hidden { display: none !important; }
+
+    @media (max-width: 1120px) {
+      .layout { grid-template-columns: 1fr; }
+      .side {
+        position: static;
+        max-height: none;
+      }
+      .priority-wrap { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 860px) {
+      .kpi { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .grid.two, .grid.three, .pipeline, .states, .camera-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <aside class="side">
+      <h2 class="logo">JUMBO V1 Atlas</h2>
+      <p class="subtitle">Guia profundo, organizado e interativo</p>
+      <input id="globalSearch" class="search" type="search" placeholder="Filtrar cards, mensagens, termos..." />
+      <nav>
+        <a href="#visao" class="jump">Visao geral</a>
+        <a href="#placas" class="jump">Placas</a>
+        <a href="#camera" class="jump">Camera</a>
+        <a href="#comunicacao" class="jump">Comunicacao</a>
+        <a href="#logica" class="jump">Logica de jogo</a>
+        <a href="#debug" class="jump">Diagnostico</a>
+      </nav>
+      <div class="legend">
+        <div><span class="dot" style="background: var(--olho)"></span> OLHO (sensores IR/US/camera)</div>
+        <div><span class="dot" style="background: var(--pe)"></span> PE (linha 32 LDR)</div>
+        <div><span class="dot" style="background: var(--cabeca)"></span> CABECA (hub e estrategia)</div>
+        <div><span class="dot" style="background: var(--musculo)"></span> MUSCULO (movimento e decisao final)</div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <section id="visao" class="hero searchable">
+        <h1>Logica completa do robo de futebol: da leitura ao chute</h1>
+        <p>
+          Esta pagina organiza o firmware do NEXUS em camadas didaticas: sensores, protocolos, fusao de dados,
+          estrategia atacante/defensor e diagnostico. Clique nas abas para aprofundar, use busca para filtrar conteudo,
+          e explore prioridades passo a passo.
+        </p>
+
+        <div class="kpi">
+          <article class="searchable"><small>Placas cooperando</small><strong>4</strong></article>
+          <article class="searchable"><small>Mensagens texto Cabeca->Musculo</small><strong>15</strong></article>
+          <article class="searchable"><small>Sensores de linha no PE</small><strong>32</strong></article>
+          <article class="searchable"><small>Ciclo ESP-NOW</small><strong>2 s</strong></article>
+        </div>
+
+        <div class="chip-row">
+          <span class="chip searchable">Pacote binario: AA | ID | payload | 55</span>
+          <span class="chip searchable">Estado compartilhado: atacante + sozinho + cameraOK</span>
+          <span class="chip searchable">Fallback: sem parceiro => modo sozinho</span>
+        </div>
+      </section>
+
+      <div class="tabs" role="tablist">
+        <button class="tab active" data-panel="painel-placas">Placas</button>
+        <button class="tab" data-panel="painel-camera">Camera em Profundidade</button>
+        <button class="tab" data-panel="painel-com">Comunicacao</button>
+        <button class="tab" data-panel="painel-logica">Logica de Jogo</button>
+        <button class="tab" data-panel="painel-debug">Debug e Campo</button>
+      </div>
+
+      <section id="placas" class="panel active">
+        <div class="grid two">
+          <article class="card searchable" style="color: var(--olho)">
+            <h3 class="board">OLHO</h3>
+            <p class="small">12 TSOP + 4 ultrassonicos + camera serial. Faz fusao inicial e envia Pacote (27 bytes) para CABECA.</p>
+            <details>
+              <summary>Estruturas e pontos chave</summary>
+              <pre>struct Pacote {
+  uint16_t direcoesAtivas;
+  int16_t  anguloBola;
+  int16_t  anguloBolaRaw;
+  int16_t  distFrente, distDireita, distTras, distEsquerda;
+  bool     cameraOK;
+  int16_t  cameraBallAngle, cameraBallDist;
+  int16_t  cameraBlueAngle, cameraBlueDist;
+  int16_t  cameraYellowAngle, cameraYellowDist;
+};</pre>
+              <p class="small">Filtro de angulo da bola: janela de 5 amostras, voto por proximidade (faixa 45 graus).</p>
+            </details>
+          </article>
+
+          <article class="card searchable" style="color: var(--pe)">
+            <h3 class="board">PE</h3>
+            <p class="small">Le 32 LDR em 2 MUX CD74HC4067. Calcula angulo da linha para atacante ou zonas A/B para defensor.</p>
+            <details>
+              <summary>Estruturas e pontos chave</summary>
+              <pre>struct Pacote { int16_t angulo; };
+
+struct PacoteDefensor {
+  int16_t anguloA; bool ativaA;
+  int16_t anguloB; bool ativaB;
+};</pre>
+              <p class="small">Limiar de linha: 3850. Modo atacante usa repulsao; modo defensor segmenta por zonas do campo.</p>
+            </details>
+          </article>
+
+          <article class="card searchable" style="color: var(--cabeca)">
+            <h3 class="board">CABECA</h3>
+            <p class="small">Hub de serial, bussola QMC5883P, botoes, kicker e ESP-NOW. Publica mensagens textuais para MUSCULO.</p>
+            <details>
+              <summary>Estruturas e pontos chave</summary>
+              <pre>struct PacoteEstado {
+  bool atacante;
+  bool sozinho;
+  bool cameraOK;
+};
+
+struct EspNowMsg {
+  uint32_t seq;
+  uint8_t  tipo;
+  int16_t  uD, uE, uF, uT;
+  char text[12];
+};</pre>
+              <p class="small">Estado sozinho = sem parceiro ou parceiro sem atualizacao recente (timeout 6 s).</p>
+            </details>
+          </article>
+
+          <article class="card searchable" style="color: var(--musculo)">
+            <h3 class="board">MUSCULO</h3>
+            <p class="small">Recebe estado consolidado, executa maquina de decisao, controla 4 motores omni e OLED.</p>
+            <details>
+              <summary>Motores e controle</summary>
+              <pre>PASSO_RAMPA_PWM = 16
+velocidade_maxima = 220
+PID giro: Kp=0.8 Ki=0.01 Kd=0.5
+output giro: 30..180</pre>
+              <p class="small">Tem modos atacante e defensor, cada um com prioridades claras para resposta em campo.</p>
+            </details>
+          </article>
+        </div>
+
+        <div class="diagram" style="margin-top: 12px;">
+          <h3>Pipeline de decisao (visao didatica)</h3>
+          <div class="pipeline">
+            <div class="node searchable"><strong>1. Sensores</strong><br><span class="small">IR, LDR, US, camera</span></div>
+            <div class="node searchable"><strong>2. Pre-processo</strong><br><span class="small">filtros e centroides</span></div>
+            <div class="node searchable"><strong>3. Estrategia</strong><br><span class="small">atacante/defensor + parceiro</span></div>
+            <div class="node searchable"><strong>4. Atuacao</strong><br><span class="small">motores + kicker + OLED</span></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="camera" class="panel">
+        <div class="camera-grid">
+          <article class="card searchable">
+            <h3>Pipeline da camera (didatico e profundo)</h3>
+            <p class="small">
+              A camera OpenMV envia frame serial com delimitadores fixos e payload em big-endian.
+              Esse fluxo nasceu dos pedidos dos chats para deixar a visao mais robusta e facil de depurar.
+            </p>
+            <div class="camera-flow">
+              <div class="frame-box"><strong>0xAA</strong>inicio</div>
+              <span class="arrow">→</span>
+              <div class="frame-box"><strong>0x03</strong>ID camera</div>
+              <span class="arrow">→</span>
+              <div class="frame-box"><strong>12 bytes</strong>payload</div>
+              <span class="arrow">→</span>
+              <div class="frame-box"><strong>0x55</strong>fim</div>
+            </div>
+            <details open>
+              <summary>Payload de 12 bytes (ordem real no codigo)</summary>
+              <pre>ballAngle   int16 (x10 graus)
+ballDist    uint16
+blueAngle   int16 (x10 graus)
+blueDist    uint16
+yellowAngle int16 (x10 graus)
+yellowDist  uint16</pre>
+            </details>
+            <p class="small">Timeout de camera no OLHO: 3000 ms. Se estourar, cameraOK = false.</p>
+          </article>
+
+          <article class="card searchable">
+            <h3>Como a camera entra na tomada de decisao</h3>
+            <ol class="small">
+              <li>Atacante prioriza linha e IR.</li>
+              <li>Quando IR falha, camera vira fallback para seguir bola.</li>
+              <li>Alinhamento com gol usa angulo de gol da camera + PID de giro.</li>
+              <li>Defensor usa camera para recuperar posicao perto do gol.</li>
+            </ol>
+            <p class="small">
+              <span class="warn">Regra critica:</span> camera ajuda estrategia, mas nunca passa por cima da seguranca da linha.
+            </p>
+            <details>
+              <summary>Dicas praticas de calibracao da visao</summary>
+              <ul class="small">
+                <li>Conferir estabilidade de iluminacao antes de ajustar thresholds.</li>
+                <li>Validar ballAngle em frente do robo (proximo de 0 graus).</li>
+                <li>Simular perda de frame e confirmar cameraOK false em ate 3 s.</li>
+                <li>Testar camera junto com IR para evitar conflito de prioridade.</li>
+              </ul>
+            </details>
+          </article>
+        </div>
+
+        <div class="card searchable" style="margin-top: 12px;">
+          <h3>Consolidado dos chats e decisoes de engenharia</h3>
+          <p class="small">
+            Esta secao junta os pedidos feitos na conversa inteira: pacote de dados, ilustracao,
+            logica completa, modo interativo, camera detalhada e estrategia de troca de papel.
+          </p>
+          <div class="timeline">
+            <div class="item small"><strong>Pacotes:</strong> padrao binario AA|ID|payload|55 entre placas para reduzir overhead.</div>
+            <div class="item small"><strong>Documentacao visual:</strong> versao SVG/HTML para facilitar entendimento fora do preview do VS Code.</div>
+            <div class="item small"><strong>Logica completa:</strong> atacante e defensor com prioridades explicitas e fallback.</div>
+            <div class="item small"><strong>Cooperacao:</strong> ESP-NOW com timeout de 6 s e estado sozinho.</div>
+            <div class="item small"><strong>Troca de papel futura:</strong> menor uT traseiro tende a goleiro; link perdido mantém atacante.</div>
+          </div>
+        </div>
+      </section>
+
+      <section id="comunicacao" class="panel">
+        <div class="card searchable">
+          <h3>Explorador de mensagens Cabeca -> Musculo</h3>
+          <div class="msg-tools">
+            <label class="ghost">Tipo</label>
+            <select id="msgSelect"></select>
+            <button id="copyMsg" type="button">Copiar chave</button>
+            <span id="copyInfo" class="badge">pronto</span>
+          </div>
+          <div id="msgDetail" class="small"></div>
+        </div>
+
+        <div class="grid two" style="margin-top: 12px;">
+          <article class="card searchable">
+            <h3>Protocolo binario entre placas</h3>
+            <p class="small">
+              Formato: <span class="mono">0xAA | ID | payload(struct) | 0x55</span>.
+              IDs observados: <span class="mono">0x01 OLHO</span>, <span class="mono">0x02 PE</span>, <span class="mono">0x03 CAMERA</span>.
+            </p>
+            <p class="small">Essa moldura evita leituras quebradas de serial e simplifica sincronismo em ruido de campo.</p>
+          </article>
+
+          <article class="card searchable">
+            <h3>ESP-NOW entre robos</h3>
+            <p class="small">
+              Envio periodico: 2 s. Timeout de confianca: 6 s. Quando falha, o robo ativa modo sozinho.
+              Estrutura inclui distancias ultrassonicas e texto curto para sinalizacao tatica.
+            </p>
+            <p class="small">MAC parceiro padrao no codigo: <span class="mono">AC:A7:04:2B:9B:60</span>.</p>
+          </article>
+        </div>
+
+        <div class="card searchable" style="margin-top: 12px;">
+          <h3>Alem do ESP-NOW (proximos passos discutidos)</h3>
+          <div class="grid three">
+            <div class="card">
+              <h3>UDP local</h3>
+              <p class="small">Canal secundario para heartbeat e papel quando o primario oscila.</p>
+            </div>
+            <div class="card">
+              <h3>ESP-MESH</h3>
+              <p class="small">Escalavel para mais robos, com custo maior de complexidade de rede.</p>
+            </div>
+            <div class="card">
+              <h3>Fallback hibrido</h3>
+              <p class="small">ESP-NOW para tempo real + canal auxiliar para re-sincronizacao de estado.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="logica" class="panel">
+        <div class="grid two">
+          <article class="card searchable">
+            <h3>Prioridades do Atacante</h3>
+            <div class="priority-wrap">
+              <div class="priority-list" id="atkList"></div>
+              <div class="priority-detail" id="atkDetail"></div>
+            </div>
+          </article>
+
+          <article class="card searchable">
+            <h3>Prioridades do Defensor</h3>
+            <div class="priority-wrap">
+              <div class="priority-list" id="defList"></div>
+              <div class="priority-detail" id="defDetail"></div>
+            </div>
+          </article>
+        </div>
+
+        <div class="diagram searchable" style="margin-top: 12px;">
+          <h3>Maquina de estados do robo</h3>
+          <p class="small">Clique para simular transicoes principais de operacao em campo.</p>
+          <div class="msg-tools">
+            <button class="state-btn" data-target="st-menu">MENU</button>
+            <button class="state-btn" data-target="st-cal">CALIBRACAO</button>
+            <button class="state-btn" data-target="st-go">INICIAR</button>
+          </div>
+          <div class="states">
+            <div class="state" id="st-menu"><strong>MENU</strong><br><span class="small">ajustes, papeis, opcoes</span></div>
+            <div class="state" id="st-cal"><strong>CALIBRACAO</strong><br><span class="small">bussola e validacao</span></div>
+            <div class="state active" id="st-go"><strong>INICIAR</strong><br><span class="small">controle dinamico de jogo</span></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="debug" class="panel">
+        <div class="grid two">
+          <article class="card searchable">
+            <h3>Checklist rapido para campo</h3>
+            <div class="checklist" id="fieldChecklist">
+              <label><input type="checkbox"> Bussola calibrada e heading estavel</label>
+              <label><input type="checkbox"> Camera com pacote valido (cameraOK)</label>
+              <label><input type="checkbox"> Linha detectada em teste de borda</label>
+              <label><input type="checkbox"> ESP-NOW com parceiro recente (&lt; 6 s)</label>
+              <label><input type="checkbox"> Kicker habilitado e pulso validado</label>
+            </div>
+            <button id="resetChecklist">Reset checklist</button>
+          </article>
+
+          <article class="card searchable">
+            <h3>Mapa mental de falhas comuns</h3>
+            <details open>
+              <summary>Robo gira sem parar</summary>
+              <p class="small">Verificar erro de heading, ganho Kp alto e headingRef zerado errado no inicio.</p>
+            </details>
+            <details>
+              <summary>Perde bola perto da frente</summary>
+              <p class="small">Checar limiar IR e conflito com mapeamento angular para faixa frontal.</p>
+            </details>
+            <details>
+              <summary>Defensor recua em hora errada</summary>
+              <p class="small">Conferir sensores de zona A/B e normalizacao de anguloB (inversao 540-angB).</p>
+            </details>
+            <details>
+              <summary>Modo sozinho nunca ativa</summary>
+              <p class="small">Inspecionar timestamp de ultimo pacote ESP-NOW e logica de timeout de 6000 ms.</p>
+            </details>
+          </article>
+        </div>
+
+        <div class="card searchable" style="margin-top: 12px;">
+          <h3>Sequencia de diagnostico recomendada</h3>
+          <ol class="small">
+            <li>Valide comunicacao serial frame a frame (AA...55).</li>
+            <li>Teste sensores isolados em cada placa antes de integrar.</li>
+            <li>Confirme mensagens textuais da CABECA chegando no MUSCULO.</li>
+            <li>Valide prioridade da linha (seguranca) antes da bola.</li>
+            <li>Somente depois ajuste PID e velocidade maxima para agressividade.</li>
+          </ol>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const tabs = [...document.querySelectorAll('.tab')];
+    const panels = [...document.querySelectorAll('.panel')];
+    tabs.forEach(btn => {
+      btn.addEventListener('click', () => {
+        tabs.forEach(t => t.classList.remove('active'));
+        panels.forEach(p => p.classList.remove('active'));
+        btn.classList.add('active');
+        const sectionId = mapPanel[btn.dataset.panel] || btn.dataset.panel;
+        document.getElementById(sectionId).classList.add('active');
+      });
+    });
+
+    const mapPanel = {
+      'painel-placas': 'placas',
+      'painel-camera': 'camera',
+      'painel-com': 'comunicacao',
+      'painel-logica': 'logica',
+      'painel-debug': 'debug'
+    };
+
+    function openPanelByAnchor(hash) {
+      const id = hash.replace('#', '');
+      const panelKey = Object.entries(mapPanel).find(([, sectionId]) => sectionId === id)?.[0];
+      if (!panelKey) return;
+      tabs.forEach(t => {
+        const on = t.dataset.panel === panelKey;
+        t.classList.toggle('active', on);
+      });
+      panels.forEach(p => p.classList.toggle('active', p.id === id));
+    }
+
+    document.querySelectorAll('.jump').forEach(link => {
+      link.addEventListener('click', (ev) => {
+        const hash = link.getAttribute('href');
+        if (hash && hash !== '#visao') {
+          openPanelByAnchor(hash);
+        }
+        document.querySelectorAll('.jump').forEach(a => a.classList.remove('active'));
+        link.classList.add('active');
+      });
+    });
+
+    const messages = [
+      { key: 'IR:', title: 'Direcoes IR', info: 'Mascara de 12 sensores TSOP ativos para direcao da bola.' },
+      { key: 'BUS:', title: 'Heading Bussola', info: 'Cabeca envia heading atual para estabilidade de giro no Musculo.' },
+      { key: 'CAM:', title: 'Estado Camera', info: 'Sinaliza cameraOK e confianca da visao.' },
+      { key: 'LIN:', title: 'Linha atacante', info: 'Angulo de fuga para atacante sair da borda.' },
+      { key: 'LINA:', title: 'Linha zona A', info: 'Defensor usa para zona frontal/lateral A.' },
+      { key: 'LINB:', title: 'Linha zona B', info: 'Defensor usa para zona oposta B.' },
+      { key: 'ULT:', title: 'Ultrassonico tras', info: 'Distancia traseira para navegacao e seguranca.' },
+      { key: 'ULR:', title: 'Ultrassonico lado', info: 'Distancias laterais para ajuste vetorial.' },
+      { key: 'ATC:', title: 'Papel atacante', info: 'Define se o Musculo executa rotina atacante ou defensor.' },
+      { key: 'ESN:', title: 'Estado ESP-NOW', info: 'Conectividade com parceiro para logica sozinho/cooperativo.' },
+      { key: 'BTN:', title: 'Botoes', info: 'Estado dos botoes fisicos para menus e comandos.' },
+      { key: 'STS:', title: 'Status geral', info: 'Heartbeat operacional para monitoramento de sistema.' },
+      { key: 'KIK:', title: 'Kicker', info: 'Habilita/dispara chute conforme regras e intervalos.' },
+      { key: 'CFG:GOL:', title: 'Config gol', info: 'Configura lado/alvo estrategico.' },
+      { key: 'GOL:', title: 'Info gol', info: 'Dados consolidados de direcao/alinhamento com gol.' }
+    ];
+
+    const msgSelect = document.getElementById('msgSelect');
+    const msgDetail = document.getElementById('msgDetail');
+    const copyBtn = document.getElementById('copyMsg');
+    const copyInfo = document.getElementById('copyInfo');
+
+    messages.forEach((m, i) => {
+      const opt = document.createElement('option');
+      opt.value = i;
+      opt.textContent = `${m.key} - ${m.title}`;
+      msgSelect.appendChild(opt);
+    });
+
+    function renderMessage() {
+      const m = messages[Number(msgSelect.value) || 0];
+      msgDetail.innerHTML = `
+        <p><strong>Chave:</strong> <span class="mono">${m.key}</span></p>
+        <p><strong>Uso:</strong> ${m.title}</p>
+        <p><strong>Explicacao didatica:</strong> ${m.info}</p>
+      `;
+    }
+
+    msgSelect.addEventListener('change', renderMessage);
+    renderMessage();
+
+    copyBtn.addEventListener('click', async () => {
+      const m = messages[Number(msgSelect.value) || 0];
+      try {
+        await navigator.clipboard.writeText(m.key);
+        copyInfo.textContent = 'copiado';
+      } catch {
+        copyInfo.textContent = 'sem acesso ao clipboard';
+      }
+      setTimeout(() => copyInfo.textContent = 'pronto', 1500);
+    });
+
+    const attackerPriorities = [
+      {
+        name: 'Linha detectada',
+        why: 'Seguranca maxima: evitar sair do campo antes de qualquer outra tarefa.',
+        action: 'Usa angulo de repulsao do PE e executa fuga imediata.'
+      },
+      {
+        name: 'Erro grande de gol (>40)',
+        why: 'Sem orientacao correta, perseguir bola pode piorar posicionamento.',
+        action: 'Gira no eixo para alinhar heading com referencia.'
+      },
+      {
+        name: 'IR frontal (340..20)',
+        why: 'Bola quase centralizada, momento ideal para avancar com controle de giro.',
+        action: 'moverFrenteComGiro com PID de heading.'
+      },
+      {
+        name: 'IR ativo fora da frente',
+        why: 'Bola detectada por sensor local, resposta mais rapida que camera.',
+        action: 'Mapeia angulo IR em direcao de movimento omni com rampa.'
+      },
+      {
+        name: 'Camera ve bola (sem IR)',
+        why: 'Fallback de visao para recuperar alvo quando IR nao pega.',
+        action: 'Segue cameraBallAngle ate reacender IR.'
+      },
+      {
+        name: 'Precisa alinhamento fino',
+        why: 'Antes de finalizar jogada, corrige heading residual.',
+        action: 'Giro de refinamento para reduzir erro angular.'
+      },
+      {
+        name: 'Sem alvo confiavel',
+        why: 'Evita movimento inutil e ruido de decisao.',
+        action: 'Para motores e aguarda novo evento.'
+      }
+    ];
+
+    const defenderPriorities = [
+      {
+        name: 'Linha em zona A/B',
+        why: 'Defensor deve respeitar geometria da area para nao abandonar posicao.',
+        action: 'Combina vetores de linha com pesos diferentes por contexto.'
+      },
+      {
+        name: 'IR lateral para pressao',
+        why: 'Ajuste lateral rapido ajuda bloquear bola sem se desalinhar da meta.',
+        action: 'Aplica componente lateral com ganho moderado.'
+      },
+      {
+        name: 'Longe do gol (dist > 46)',
+        why: 'Recupera base defensiva antes de acao agressiva.',
+        action: 'Move em direcao ao gol ate zona segura.'
+      },
+      {
+        name: 'Bola sem linha ativa',
+        why: 'Com area segura, pode disputar bola mantendo cobertura.',
+        action: 'Aproxima com prioridade em estabilidade lateral.'
+      },
+      {
+        name: 'Sem eventos',
+        why: 'Mantem energia e evita drift mecanico.',
+        action: 'Estado neutro e monitoramento continuo.'
+      }
+    ];
+
+    function mountPriority(listId, detailId, data) {
+      const list = document.getElementById(listId);
+      const detail = document.getElementById(detailId);
+      data.forEach((item, idx) => {
+        const btn = document.createElement('button');
+        btn.className = 'prio' + (idx === 0 ? ' active' : '');
+        btn.innerHTML = `<span class="rank">${idx + 1}</span>${item.name}`;
+        btn.addEventListener('click', () => {
+          [...list.children].forEach(c => c.classList.remove('active'));
+          btn.classList.add('active');
+          detail.innerHTML = `
+            <h3>${item.name}</h3>
+            <p class="small"><strong>Por que vem aqui:</strong> ${item.why}</p>
+            <p class="small"><strong>Acao:</strong> ${item.action}</p>
+          `;
+        });
+        list.appendChild(btn);
+      });
+      detail.innerHTML = `
+        <h3>${data[0].name}</h3>
+        <p class="small"><strong>Por que vem aqui:</strong> ${data[0].why}</p>
+        <p class="small"><strong>Acao:</strong> ${data[0].action}</p>
+      `;
+    }
+
+    mountPriority('atkList', 'atkDetail', attackerPriorities);
+    mountPriority('defList', 'defDetail', defenderPriorities);
+
+    document.querySelectorAll('.state-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const target = btn.dataset.target;
+        document.querySelectorAll('.state').forEach(st => {
+          st.classList.toggle('active', st.id === target);
+        });
+      });
+    });
+
+    document.getElementById('resetChecklist').addEventListener('click', () => {
+      document.querySelectorAll('#fieldChecklist input[type="checkbox"]').forEach(c => c.checked = false);
+    });
+
+    const search = document.getElementById('globalSearch');
+    const searchable = [...document.querySelectorAll('.searchable')];
+    search.addEventListener('input', () => {
+      const q = search.value.trim().toLowerCase();
+      if (!q) {
+        searchable.forEach(el => el.classList.remove('hidden'));
+        return;
+      }
+      searchable.forEach(el => {
+        const text = el.textContent.toLowerCase();
+        el.classList.toggle('hidden', !text.includes(q));
+      });
+    });
+
+    openPanelByAnchor('#placas');
+  </script>
+</body>
+</html>

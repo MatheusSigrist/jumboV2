@@ -419,6 +419,48 @@ float normalizarAngulo360(float ang) {
   return ang;
 }
 
+// Converte o angulo de gol para o referencial do defensor (inversao de 180 graus).
+// Aplica duas etapas:
+// 1) inverter para tras (+180)
+// 2) espelhar o angulo resultante
+// Ex.: 30 -> 150, 200 -> 340.
+float converterAnguloGolParaDefensor(float anguloGolGraus) {
+  float invertido = normalizarAngulo360(anguloGolGraus + 180.0f);
+  return normalizarAngulo360(360.0f - invertido);
+}
+
+// Calcula o erro angular atual do robo em relacao a referencia salva da bussola.
+float calcularErroAngularCampo() {
+  // A correção do campo vem do mesmo alinhamento usado pelo gol invertido.
+  return erroAlinhamentoGraus;
+}
+
+// Corrige um angulo relativo ao robo para o referencial do campo.
+float corrigirAnguloParaCampo(float anguloLocalGraus, float erroAngularGraus) {
+  return normalizarAngulo360(anguloLocalGraus + erroAngularGraus);
+}
+
+// Regras fixas de deslocamento lateral baseadas no angulo da bola corrigido no campo.
+// Direita real (20..120)  -> comando 90 + erroAngular
+// Esquerda real (240..340)-> comando 270 - erroAngular
+bool calcularComandoLateralPorBolaCorrigida(float anguloBolaCorrigido,
+                                            float erroAngular,
+                                            float &anguloComando) {
+  float ang = normalizarAngulo360(anguloBolaCorrigido);
+
+  if (ang >= 20.0f && ang <= 120.0f) {
+    anguloComando = normalizarAngulo360(90.0f - erroAngular);
+    return true;
+  }
+
+  if (ang >= 240.0f && ang <= 340.0f) {
+    anguloComando = normalizarAngulo360(270.0f + erroAngular);
+    return true;
+  }
+
+  return false;
+}
+
 // Aceita apenas payload numerico simples para evitar toFloat() cair silenciosamente em 0.
 bool payloadNumericoValido(const String &texto) {
   if (texto.length() == 0) {
@@ -474,6 +516,7 @@ bool golReferenciaAzulEfetiva() {
 // No defensor, espelha o alinhamento para usar o gol de tras como referencia:
 // 180 -> 0, 170 -> -10, 10 -> -170, etc.
 float calcularErroGolEspelhadoDefensor(float anguloGolGraus) {
+  // Aqui o angulo ja deve chegar no referencial do defensor.
   return normalizarErro180(anguloGolGraus - 180.0f);
 }
 
@@ -489,6 +532,15 @@ bool cameraTemGolSelecionadoValido(int16_t &anguloGol) {
   bool usarAzul = golReferenciaAzulEfetiva();
   uint16_t distGol = usarAzul ? cameraBlueDist : cameraYellowDist;
   anguloGol = usarAzul ? cameraBlueAngle : cameraYellowAngle;
+
+  // No defensor, o angulo lido passa a ser o angulo invertido (+180 mod 360).
+  if (!papelAtacante && anguloGol != -999) {
+    float convertido = converterAnguloGolParaDefensor((float)anguloGol);
+    anguloGol = (int16_t)roundf(convertido);
+    if (anguloGol >= 360) {
+      anguloGol = 0;
+    }
+  }
 
   // Considera valido apenas quando houver pacote recente, angulo valido e distancia positiva.
   // Isso evita falso positivo de angulo 0 sem deteccao real, que no defensor vira erro -180.
@@ -531,38 +583,6 @@ int calcularVelocidadeIrPorAngulo(float anguloBolaGraus) {
   }
 
   return velocidade_maxima;
-}
-
-// Controle proporcional da velocidade lateral do defensor pelo angulo do IR.
-// Direita: 20..160 (130 -> 255). Esquerda: 200..340 (255 -> 130).
-// Zonas mortas: 0..20 e 340..360 (parado para lateral).
-int calcularVelocidadeLateralDefensorPorIr(float anguloBolaGraus) {
-  const float ANG_DIREITA_MIN = 20.0f;
-  const float ANG_DIREITA_MAX = 160.0f;
-  const float ANG_ESQUERDA_MIN = 200.0f;
-  const float ANG_ESQUERDA_MAX = 340.0f;
-  const int VEL_MIN = 130;
-  const int VEL_MAX = 255;
-
-  float ang = normalizarAngulo360(anguloBolaGraus);
-
-  if ((ang >= 0.0f && ang <= ANG_DIREITA_MIN) || (ang >= ANG_ESQUERDA_MAX && ang <= 360.0f)) {
-    return 0;
-  }
-
-  if (ang > ANG_DIREITA_MIN && ang <= ANG_DIREITA_MAX) {
-    float ganho = (float)(VEL_MAX - VEL_MIN) / (ANG_DIREITA_MAX - ANG_DIREITA_MIN);
-    int vel = (int)(VEL_MIN + ganho * (ang - ANG_DIREITA_MIN));
-    return constrain(vel, VEL_MIN, VEL_MAX);
-  }
-
-  if (ang >= ANG_ESQUERDA_MIN && ang < ANG_ESQUERDA_MAX) {
-    float ganho = (float)(VEL_MAX - VEL_MIN) / (ANG_ESQUERDA_MAX - ANG_ESQUERDA_MIN);
-    int vel = (int)(VEL_MIN + ganho * (ANG_ESQUERDA_MAX - ang));
-    return constrain(vel, VEL_MIN, VEL_MAX);
-  }
-
-  return 0;
 }
 
 // Detecta a faixa frontal do IR em torno de 0°, tratando a transicao 360° -> 0°.
@@ -1749,6 +1769,7 @@ void atacante() {
 
   int cmdPidAssinado = 0;
   bool cameraBolaVisivel = cameraTemBolaValida();
+  float erroAngularCampo = calcularErroAngularCampo();
 
   // So gira para alinhar quando o gol estiver visivel na camera e fora da tolerancia.
   bool precisaAlinhar = golVisivelCamera && (fabsf(erroAlinhamentoGraus) > TOLERANCIA_ALINHAMENTO_GRAUS);
@@ -1796,17 +1817,19 @@ void atacante() {
   } else if (erroGrande) {
     girarNoEixo(cmdPidAssinado);
   } else if (irDetectado) {
-    if (irNaFaixaFrontal(anguloIr)) {
+    float anguloIrCorrigido = corrigirAnguloParaCampo(anguloIr, erroAngularCampo);
+
+    if (irNaFaixaFrontal(anguloIrCorrigido)) {
       // Na faixa frontal aplica PWM direto e mantem correcao de alinhamento do gol.
       moverFrenteComGiro(VELOCIDADE_IR_FRONTAL_PWM, cmdPidAssinado);
     } else {
-      float anguloIrAlvo = mapearAnguloBolaParaMovimento(anguloIr);
+      float anguloIrAlvo = mapearAnguloBolaParaMovimento(anguloIrCorrigido);
       float anguloIrComRampa = obterAnguloIrSuavizado(anguloIrAlvo);
-      int velocidadeIr = calcularVelocidadeIrPorAngulo(anguloIr);
+      int velocidadeIr = calcularVelocidadeIrPorAngulo(anguloIrCorrigido);
       seguirDirecaoPorAngulo(anguloIrComRampa, velocidadeIr);
     }
   } else if (cameraBolaVisivel) {
-    float anguloCameraVetorial = normalizarAngulo360((float)cameraBallAngle);
+    float anguloCameraVetorial = corrigirAnguloParaCampo((float)cameraBallAngle, erroAngularCampo);
     float anguloCameraComRampa = obterAnguloIrSuavizado(anguloCameraVetorial);
     seguirDirecaoComGiro(anguloCameraComRampa, velocidade_maxima, cmdPidAssinado);
   } else if (precisaAlinhar) {
@@ -1817,201 +1840,98 @@ void atacante() {
   }
 }
 
-bool ultrassonico_defensor() {
-  // Placeholder para a nova logica de ultrassonico do defensor.
-  return false;
-}
-
-int sinalErroDefensor(float erro, float toleranciaZero) {
-  if (erro > toleranciaZero) {
-    return 1;
-  }
-  if (erro < -toleranciaZero) {
-    return -1;
-  }
-  return 0;
-}
-
-int calcularGiroDefensor(float erroA, float erroB, float toleranciaIgual, int giroMaximo) {
-  float deltaMag = fabsf(erroA) - fabsf(erroB);
-  if (fabsf(deltaMag) <= toleranciaIgual) {
-    return 0;
-  }
-
-  float ganho = 2.0f;
-  int cmdGiro = (int)(fabsf(deltaMag) * ganho);
-  if (cmdGiro < 35) {
-    cmdGiro = 35;
-  }
-  if (cmdGiro > giroMaximo) {
-    cmdGiro = giroMaximo;
-  }
-
-  return (deltaMag >= 0.0f) ? cmdGiro : -cmdGiro;
-}
-
-// Velocidade proporcional para frente/tras no defensor conforme intensidade do erro da linha.
-int calcularVelocidadeLinhaDefensor(float erroA, float erroB, bool temZonaA, bool temZonaB,
-                                    float toleranciaZero, float erroMaxRef,
-                                    int velocidadeMinima, int velocidadeMaxima) {
-  float intensidade = 0.0f;
-
-  if (temZonaA) {
-    float magA = fabsf(erroA) - toleranciaZero;
-    if (magA > intensidade) intensidade = magA;
-  }
-  if (temZonaB) {
-    float magB = fabsf(erroB) - toleranciaZero;
-    if (magB > intensidade) intensidade = magB;
-  }
-
-  if (intensidade <= 0.0f) {
-    return 0;
-  }
-
-  if (intensidade > erroMaxRef) {
-    intensidade = erroMaxRef;
-  }
-
-  float t = intensidade / erroMaxRef;
-  int vel = (int)(velocidadeMinima + t * (float)(velocidadeMaxima - velocidadeMinima));
-  return constrain(vel, velocidadeMinima, velocidadeMaxima);
+// Calcula o vetor de atracao da linha usando media circular vetorial dos dois pontos.
+// Evita problemas de wraparound no calculo do ponto medio entre zonas A e B.
+float calcularVetorAtracaoLinha(float anguloA, float anguloB) {
+  float aRad = anguloA * PI / 180.0f;
+  float bRad = anguloB * PI / 180.0f;
+  float mx = cosf(aRad) + cosf(bRad);
+  float my = sinf(aRad) + sinf(bRad);
+  return normalizarAngulo360(atan2f(my, mx) * 180.0f / PI);
 }
 
 void defensor() {
+  const int VELOCIDADE_ALINHAMENTO_LINHA = 200;
+  const int VELOCIDADE_SEGUIR_BOLA = 180;
   const float REFERENCIA_ZONA_A = 90.0f;
   const float REFERENCIA_ZONA_B = 270.0f;
-  const float TOLERANCIA_ZERO_GRAUS = 8.0f;
-  const float ERRO_MAX_VEL_LINHA_GRAUS = 80.0f;
-  const int VELOCIDADE_DEFENSOR = 150;
-  const int VELOCIDADE_LINHA_MIN = 90;
-  const uint16_t DISTANCIA_MAX_BOLA_CAMERA_DEFENSOR = 60;
-  const unsigned long RETENCAO_LINHA_DEFENSOR_MS = 180;
-  const float PESO_LINHA_COM_LINHA_ATIVA = 1.25f;
-  const float PESO_LATERAL_COM_LINHA_ATIVA = 0.35f;
-  const float PESO_LATERAL_SEM_LINHA = 1.0f;
-  const float FAIXA_BOLA_DIREITA_MIN = 20.0f;
-  const float FAIXA_BOLA_DIREITA_MAX = 160.0f;
-  const float FAIXA_BOLA_ESQUERDA_MIN = 200.0f;
-  const float FAIXA_BOLA_ESQUERDA_MAX = 340.0f;
+  const float TOLERANCIA_ALINHADO_LINHA_GRAUS = 10.0f;
 
-  static int ultimaDirecaoLinhaDefensor = 0;  // 1 -> 180 (tras), -1 -> 0 (frente)
-  static unsigned long ultimoComandoLinhaDefensorMs = 0;
+  bool ultrasRecentes = ultrasValidos && ((millis() - ultimoRxUltraMs) <= TIMEOUT_ULTRA_MS);
 
-  int16_t anguloGolCamera = -999;
-  bool golVisivelCamera = cameraTemGolSelecionadoValido(anguloGolCamera);
-  erroAlinhamentoGraus = golVisivelCamera ? calcularErroGolPorPapel((float)anguloGolCamera) : 0.0f;
+  // Prioridade maxima: desvio por ultras laterais com comando lateral cravado.
+  if (ultrasRecentes) {
+    if (ultraTcm < 25.0f) {
+      alinhandoAgora = false;
+      fugindoLinhaAgora = false;
+      seguirDirecaoPorAngulo(0.0f, VELOCIDADE_ALINHAMENTO_LINHA);
+      return;
+    }
 
-  // Verifica distancia do gol selecionado para recuperacao.
-  bool usarAzul = golReferenciaAzulEfetiva();
-  uint16_t distGolSelecionado = usarAzul ? cameraBlueDist : cameraYellowDist;
-  const uint16_t DISTANCIA_MAX_RECUPERACAO_GOL_DEFENSOR = 46;
+    if ((ultraEcm < 50.0f) && (ultraDcm > 80.0f)) {
+      alinhandoAgora = false;
+      fugindoLinhaAgora = false;
+      seguirDirecaoPorAngulo(90.0f, VELOCIDADE_ALINHAMENTO_LINHA);
+      return;
+    }
 
-  int cmdPidAssinado = 0;
-  bool precisaAlinhar = golVisivelCamera && (fabsf(erroAlinhamentoGraus) > TOLERANCIA_ALINHAMENTO_GRAUS);
-  if (precisaAlinhar) {
-    alinhandoAgora = true;
-    int cmdPid = calcularSaidaPidBussola(erroAlinhamentoGraus);
-    cmdPidAssinado = -SINAL_GIRO_PID * cmdPid;
-  } else {
-    alinhandoAgora = false;
-    resetPidBussola();
+    if ((ultraDcm < 50.0f) && (ultraEcm > 80.0f)) {
+      alinhandoAgora = false;
+      fugindoLinhaAgora = false;
+      seguirDirecaoPorAngulo(270.0f, VELOCIDADE_ALINHAMENTO_LINHA);
+      return;
+    }
   }
 
   bool temZonaA = linhaZonaAValida && (anguloLinhaZonaA >= 0.0f);
   bool temZonaB = linhaZonaBValida && (anguloLinhaZonaB >= 0.0f);
-  bool bolaDireita = irDetectado && (anguloIr >= FAIXA_BOLA_DIREITA_MIN) && (anguloIr <= FAIXA_BOLA_DIREITA_MAX);
-  bool bolaEsquerda = irDetectado && (anguloIr >= FAIXA_BOLA_ESQUERDA_MIN) && (anguloIr <= FAIXA_BOLA_ESQUERDA_MAX);
-  bool bolaCameraSemIr = !irDetectado && cameraTemBolaValida() && (cameraBallDist < DISTANCIA_MAX_BOLA_CAMERA_DEFENSOR);
-  int velocidadeLateralIr = irDetectado ? calcularVelocidadeLateralDefensorPorIr(anguloIr) : 0;
+  bool linhaCompletaValida = temZonaA && temZonaB;
 
-  float erroA = temZonaA ? normalizarErro180(anguloLinhaZonaA - REFERENCIA_ZONA_A) : 0.0f;
-  float erroB = temZonaB ? normalizarErro180(anguloLinhaZonaB - REFERENCIA_ZONA_B) : 0.0f;
-
-  int sinalA = temZonaA ? sinalErroDefensor(erroA, TOLERANCIA_ZERO_GRAUS) : 0;
-  int sinalB = temZonaB ? sinalErroDefensor(erroB, TOLERANCIA_ZERO_GRAUS) : 0;
-  int direcaoLinha = 0;
-
-  if (sinalA > 0 && sinalB < 0) {
-    direcaoLinha = 1;
-  } else if (sinalA < 0 && sinalB > 0) {
-    direcaoLinha = -1;
-  } else if (sinalA > 0 || sinalB > 0) {
-    direcaoLinha = 1;
-  } else if (sinalA < 0 || sinalB < 0) {
-    direcaoLinha = -1;
+  // Define alinhamento usando as referencias naturais da linha no defensor.
+  bool alinhadoNaLinha = false;
+  if (linhaCompletaValida) {
+    float erroA = normalizarErro180(anguloLinhaZonaA - REFERENCIA_ZONA_A);
+    float erroB = normalizarErro180(anguloLinhaZonaB - REFERENCIA_ZONA_B);
+    alinhadoNaLinha = (fabsf(erroA) <= TOLERANCIA_ALINHADO_LINHA_GRAUS) &&
+                      (fabsf(erroB) <= TOLERANCIA_ALINHADO_LINHA_GRAUS);
   }
 
-  int velocidadeLinha = calcularVelocidadeLinhaDefensor(
-      erroA, erroB, temZonaA, temZonaB,
-      TOLERANCIA_ZERO_GRAUS, ERRO_MAX_VEL_LINHA_GRAUS,
-      VELOCIDADE_LINHA_MIN, VELOCIDADE_DEFENSOR);
+  // Prioridade 1: se houver linha e estiver desalinhado, corrige primeiro.
+  if (linhaCompletaValida && !alinhadoNaLinha) {
+    alinhandoAgora = true;
+    fugindoLinhaAgora = false;
+    float anguloAtracao = calcularVetorAtracaoLinha(anguloLinhaZonaA, anguloLinhaZonaB);
+    seguirDirecaoPorAngulo(anguloAtracao, VELOCIDADE_ALINHAMENTO_LINHA);
+    return;
+  }
 
-  if (direcaoLinha != 0) {
-    ultimaDirecaoLinhaDefensor = direcaoLinha;
-    ultimoComandoLinhaDefensorMs = millis();
-  } else {
-    bool manterLinhaRecente = (ultimaDirecaoLinhaDefensor != 0) &&
-                              ((millis() - ultimoComandoLinhaDefensorMs) <= RETENCAO_LINHA_DEFENSOR_MS) &&
-                              (temZonaA || temZonaB);
-    if (manterLinhaRecente) {
-      direcaoLinha = ultimaDirecaoLinhaDefensor;
-      if (velocidadeLinha == 0) {
-        velocidadeLinha = VELOCIDADE_LINHA_MIN;
-      }
+  // Depois de alinhado, segue a bola no referencial do campo.
+  alinhandoAgora = false;
+  fugindoLinhaAgora = false;
+
+  float erroAngularCampo = calcularErroAngularCampo();
+
+  if (irDetectado) {
+    float anguloIrCorrigido = corrigirAnguloParaCampo(anguloIr, erroAngularCampo);
+
+    float anguloComando = 0.0f;
+    if (calcularComandoLateralPorBolaCorrigida(anguloIrCorrigido, erroAngularCampo, anguloComando)) {
+      seguirDirecaoPorAngulo(anguloComando, VELOCIDADE_ALINHAMENTO_LINHA);
+    } else {
+      pararMotores();
     }
-  }
-
-  // Recuperacao: se saiu da linha e gol esta longe, volta ao gol para reencontrar linha.
-  bool foraLinhaLongeDoGol = (!temZonaA && !temZonaB) && 
-                             golVisivelCamera && 
-                             (distGolSelecionado > DISTANCIA_MAX_RECUPERACAO_GOL_DEFENSOR);
-  if (foraLinhaLongeDoGol) {
-    float anguloGoal = normalizarAngulo360((float)anguloGolCamera);
-    seguirDirecaoComGiro(anguloGoal, VELOCIDADE_DEFENSOR, cmdPidAssinado);
     return;
   }
 
-  // Combina linha (frente/tras) com lateral (direita/esquerda) em um unico vetor.
-  float vxCmd = 0.0f;  // +x direita, -x esquerda
-  float vyCmd = 0.0f;  // +y frente (0 graus), -y tras (180 graus)
-  bool linhaAtivaNoVetor = (direcaoLinha != 0 && velocidadeLinha > 0);
-  float pesoLinha = linhaAtivaNoVetor ? PESO_LINHA_COM_LINHA_ATIVA : 1.0f;
-  float pesoLateral = linhaAtivaNoVetor ? PESO_LATERAL_COM_LINHA_ATIVA : PESO_LATERAL_SEM_LINHA;
+  if (cameraTemBolaValida()) {
+    float anguloCameraCorrigido = corrigirAnguloParaCampo((float)cameraBallAngle, erroAngularCampo);
 
-  if (linhaAtivaNoVetor) {
-    vyCmd += (direcaoLinha > 0) ? -((float)velocidadeLinha * pesoLinha)
-                                : ((float)velocidadeLinha * pesoLinha);
-  }
-
-  if (bolaDireita && velocidadeLateralIr > 0) {
-    vxCmd += (float)velocidadeLateralIr * pesoLateral;
-  }
-
-  if (bolaEsquerda && velocidadeLateralIr > 0) {
-    vxCmd -= (float)velocidadeLateralIr * pesoLateral;
-  }
-
-  float moduloVetor = sqrtf(vxCmd * vxCmd + vyCmd * vyCmd);
-  if (moduloVetor > 0.5f) {
-    float anguloVetor = atan2f(vxCmd, vyCmd) * 180.0f / PI;
-    anguloVetor = normalizarAngulo360(anguloVetor);
-
-    int velocidadeVetor = (int)moduloVetor;
-    velocidadeVetor = constrain(velocidadeVetor, 0, velocidade_maxima);
-
-    seguirDirecaoComGiro(anguloVetor, velocidadeVetor, cmdPidAssinado);
-    return;
-  }
-
-  if (bolaCameraSemIr) {
-    float anguloCameraMovimento = mapearAnguloBolaParaMovimento((float)cameraBallAngle);
-    seguirDirecaoComGiro(anguloCameraMovimento, VELOCIDADE_DEFENSOR, cmdPidAssinado);
-    return;
-  }
-
-  if (precisaAlinhar) {
-    girarNoEixo(cmdPidAssinado);
+    float anguloComando = 0.0f;
+    if (calcularComandoLateralPorBolaCorrigida(anguloCameraCorrigido, erroAngularCampo, anguloComando)) {
+      seguirDirecaoPorAngulo(anguloComando, VELOCIDADE_SEGUIR_BOLA);
+    } else {
+      pararMotores();
+    }
     return;
   }
 

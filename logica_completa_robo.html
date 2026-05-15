@@ -1,0 +1,845 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<title>JumboV1 — Lógica Completa do Robô</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:#0d1117; font-family:Consolas,'Courier New',monospace; color:#e6edf3; padding:28px 36px; }
+
+h1  { color:#58a6ff; font-size:22px; text-align:center; margin-bottom:6px; letter-spacing:1px; }
+h2  { color:#d29922; font-size:15px; margin:22px 0 8px; border-left:3px solid #d29922; padding-left:10px; }
+h3  { color:#79c0ff; font-size:13px; margin:14px 0 5px; }
+h4  { color:#8b949e; font-size:12px; margin:10px 0 4px; font-weight:bold; }
+p   { color:#8b949e; font-size:12px; line-height:1.75; margin-bottom:6px; }
+b   { color:#e6edf3; }
+code { background:#161b22; border:1px solid #30363d; border-radius:3px; padding:1px 5px; font-size:11px; color:#79c0ff; }
+.mono { font-family:Consolas,'Courier New',monospace; }
+
+hr  { border:none; border-top:1px solid #21262d; margin:18px 0; }
+hr.thick { border-color:#30363d; margin:26px 0; }
+
+/* ── BOARD CARDS ── */
+.board-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin:14px 0; }
+.board-card { border:2px solid #30363d; border-radius:8px; padding:12px; background:#0d1117; }
+.bc-olho    { border-color:#d29922; }
+.bc-pe      { border-color:#3fb950; }
+.bc-cabeca  { border-color:#58a6ff; }
+.bc-musculo { border-color:#bc8cff; }
+.board-title { font-size:13px; font-weight:bold; margin-bottom:5px; }
+.bt-olho    { color:#d29922; }
+.bt-pe      { color:#3fb950; }
+.bt-cabeca  { color:#58a6ff; }
+.bt-musculo { color:#bc8cff; }
+.board-card p { font-size:11px; }
+
+/* ── TABLES ── */
+table { width:100%; border-collapse:collapse; font-size:12px; margin-bottom:8px; }
+thead tr { background:#161b22; }
+thead th { padding:5px 8px; color:#6e7681; font-weight:normal; border:1px solid #30363d; text-align:left; }
+tbody tr:nth-child(odd)  { background:#0d1117; }
+tbody tr:nth-child(even) { background:#161b22; }
+tbody td { padding:4px 8px; border:1px solid #21262d; vertical-align:top; font-size:12px; }
+
+.tc-key   { color:#ff7b72; }
+.tc-cam   { color:#ffa657; }
+.tc-val   { color:#79c0ff; }
+.tc-good  { color:#3fb950; }
+.tc-desc  { color:#8b949e; }
+.tc-head  { color:#d29922; }
+.tc-mus   { color:#bc8cff; }
+
+/* ── BADGES ── */
+.badge { border-radius:3px; padding:1px 6px; font-size:10px; margin-left:4px; }
+.b-olho    { background:#2d2000; color:#d29922; border:1px solid #d29922; }
+.b-pe      { background:#0a2d0a; color:#3fb950; border:1px solid #3fb950; }
+.b-cabeca  { background:#0d1f38; color:#58a6ff; border:1px solid #58a6ff; }
+.b-musculo { background:#1e0d38; color:#bc8cff; border:1px solid #bc8cff; }
+.b-cam     { background:#2d2000; color:#ffa657; border:1px solid #ffa657; }
+.b-esp     { background:#1a0d2d; color:#d2a6ff; border:1px solid #d2a6ff; }
+.b-warn    { background:#2d0000; color:#ff7b72; border:1px solid #ff7b72; }
+
+/* ── CODE BLOCKS ── */
+.codeblock {
+  background:#161b22; border:1px solid #30363d; border-radius:5px;
+  padding:10px 14px; margin:8px 0; font-size:11px; color:#e6edf3;
+  line-height:1.7; overflow-x:auto; white-space:pre;
+}
+.cmt  { color:#6e7681; }
+.kw   { color:#ff7b72; }
+.fn   { color:#d2a6ff; }
+.num  { color:#ffa657; }
+.str  { color:#a5d6ff; }
+.type { color:#79c0ff; }
+
+/* ── FLOW ── */
+.flow-row { display:flex; align-items:center; gap:6px; margin:10px 0; flex-wrap:wrap; }
+.fnode {
+  border-radius:6px; padding:8px 14px; text-align:center;
+  font-size:12px; font-weight:bold; min-width:90px;
+}
+.fn-olho    { border:2px solid #d29922; color:#d29922; background:#161b22; }
+.fn-pe      { border:2px solid #3fb950; color:#3fb950; background:#161b22; }
+.fn-cabeca  { border:2px solid #58a6ff; color:#58a6ff; background:#161b22; }
+.fn-musculo { border:2px solid #bc8cff; color:#bc8cff; background:#161b22; }
+.fn-cam     { border:2px dashed #ffa657; color:#ffa657; background:#161b22; }
+.fn-remote  { border:2px dashed #58a6ff; color:#58a6ff; background:#161b22; font-size:11px; }
+.fnode small { display:block; color:#8b949e; font-size:10px; font-weight:normal; margin-top:2px; }
+.arr { font-size:12px; color:#8b949e; padding:0 4px; white-space:nowrap; }
+.arr-y  { color:#d29922; }
+.arr-g  { color:#3fb950; }
+.arr-b  { color:#58a6ff; }
+.arr-m  { color:#bc8cff; }
+.arr-o  { color:#ffa657; }
+.arr-e  { color:#d2a6ff; font-style:italic; }
+
+/* ── LOGIC STEPS ── */
+.step-list { list-style:none; margin:6px 0 10px 0; }
+.step-list li { display:flex; gap:10px; margin-bottom:5px; align-items:flex-start; }
+.step-num { background:#161b22; border:1px solid #30363d; border-radius:4px;
+  color:#58a6ff; font-size:11px; font-weight:bold; min-width:24px; text-align:center;
+  padding:2px 0; flex-shrink:0; }
+.step-txt { color:#8b949e; font-size:12px; line-height:1.6; }
+.step-txt b { color:#e6edf3; }
+.step-txt code { font-size:11px; }
+
+/* ── PRIORITY LIST ── */
+.prio-list { list-style:none; margin:6px 0; }
+.prio-list li { display:flex; gap:8px; margin-bottom:4px; align-items:flex-start; }
+.prio-badge { min-width:26px; text-align:center; font-size:10px; font-weight:bold;
+  border-radius:3px; padding:2px 4px; flex-shrink:0; }
+.pb-red    { background:#2d0000; color:#ff7b72; border:1px solid #ff7b72; }
+.pb-orange { background:#2d1800; color:#ffa657; border:1px solid #ffa657; }
+.pb-blue   { background:#0d1f38; color:#79c0ff; border:1px solid #79c0ff; }
+.pb-green  { background:#0a2d0a; color:#3fb950; border:1px solid #3fb950; }
+.pb-grey   { background:#21262d; color:#8b949e; border:1px solid #30363d; }
+.prio-txt  { color:#8b949e; font-size:12px; line-height:1.6; }
+.prio-txt b { color:#e6edf3; }
+
+/* ── RULE BOX ── */
+.rule-box { border:1px solid #ff7b72; border-radius:6px; background:#161b22; padding:12px 16px; margin:12px 0; }
+.rule-box h3 { color:#ff7b72; margin-bottom:6px; }
+.rule-box p  { font-size:12px; }
+
+/* ── INFO BOX ── */
+.info-box { border:1px solid #30363d; border-radius:6px; background:#161b22; padding:10px 14px; margin:10px 0; }
+.info-box.blue  { border-color:#58a6ff; }
+.info-box.green { border-color:#3fb950; }
+.info-box.gold  { border-color:#d29922; }
+.info-box.cam   { border-color:#ffa657; }
+.info-box p { font-size:12px; }
+
+/* ── TIMING ROW ── */
+.timing { display:flex; gap:10px; flex-wrap:wrap; margin:8px 0; }
+.titem  { background:#161b22; border:1px solid #30363d; border-radius:4px;
+  padding:4px 10px; font-size:11px; color:#8b949e; }
+.titem span { color:#58a6ff; font-weight:bold; }
+
+/* ── 2-COL ── */
+.two-col { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin:10px 0; }
+.two-col-3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:14px; margin:10px 0; }
+
+/* ── PID BOX ── */
+.pid-box { background:#161b22; border:1px solid #30363d; border-radius:5px; padding:10px 14px; }
+.pid-eq  { color:#ffa657; font-size:13px; margin:6px 0; font-style:italic; }
+.pid-params { display:flex; gap:14px; flex-wrap:wrap; margin-top:6px; }
+.pid-param  { font-size:11px; color:#8b949e; }
+.pid-param span { color:#79c0ff; font-weight:bold; }
+
+/* misc */
+.sep-title { color:#6e7681; font-size:11px; margin:20px 0 6px; letter-spacing:2px; text-transform:uppercase; }
+.note { background:#161b22; border-left:3px solid #d29922; padding:6px 10px; font-size:11px; color:#8b949e; margin:8px 0; border-radius:0 4px 4px 0; }
+</style>
+</head>
+<body>
+
+<h1>JUMBO V1 — Lógica Completa do Robô</h1>
+<p style="text-align:center;color:#6e7681;font-size:11px;margin-bottom:4px">NEXUS variant · ESP32 Arduino · PlatformIO · 2026-05-10</p>
+<hr class="thick">
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<h2>1. ARQUITETURA — 4 PLACAS + ESP-NOW</h2>
+
+<div class="board-grid">
+  <div class="board-card bc-olho">
+    <div class="board-title bt-olho">OLHO</div>
+    <p>Sensores de percepção.<br>
+    12 TSOPs IR · 4 ultrassonicos HC-SR04 · Câmera OpenMV (UART)</p>
+    <p style="margin-top:6px;color:#6e7681">Serial1 ↔ Cabeça @ 115200</p>
+  </div>
+  <div class="board-card bc-pe">
+    <div class="board-title bt-pe">PÉ</div>
+    <p>Sensores de linha.<br>
+    32 LDRs via 2× MUX CD74HC4067 (16ch cada)</p>
+    <p style="margin-top:6px;color:#6e7681">Serial1 ↔ Cabeça @ 115200</p>
+  </div>
+  <div class="board-card bc-cabeca">
+    <div class="board-title bt-cabeca">CABEÇA</div>
+    <p>Hub central.<br>
+    Bússola QMC5883P · 3 botões · chave kicker · ESP-NOW</p>
+    <p style="margin-top:6px;color:#6e7681">3× HardwareSerial + Wi-Fi</p>
+  </div>
+  <div class="board-card bc-musculo">
+    <div class="board-title bt-musculo">MÚSCULO</div>
+    <p>Atuação e lógica de jogo.<br>
+    4 motores omnidirec. · kicker solenoide · OLED 128×64</p>
+    <p style="margin-top:6px;color:#6e7681">Serial1 ↔ Cabeça @ 115200</p>
+  </div>
+</div>
+
+<h3>Fluxo de dados entre as placas</h3>
+<div class="flow-row">
+  <div class="fnode fn-cam">CÂMERA<small>OpenMV</small></div>
+  <div class="arr arr-o">── [0xAA][0x03][12B][0x55] ──▶</div>
+  <div class="fnode fn-olho">OLHO<small>IR·Ultra·Cam</small></div>
+  <div class="arr arr-y">── PacoteOlho 27B ──▶</div>
+  <div class="fnode fn-cabeca" style="padding:12px 20px">CABEÇA<small>Hub·Bússola·ESP-NOW</small></div>
+  <div class="arr arr-m">── telemetria ASCII ──▶</div>
+  <div class="fnode fn-musculo">MÚSCULO<small>Motores·Lógica</small></div>
+</div>
+<div class="flow-row" style="margin-top:2px">
+  <div style="width:150px"></div>
+  <div class="arr arr-b" style="padding-left:12px">◀── PacoteEstado 3B ───────</div>
+  <div style="flex:1"></div>
+  <div class="arr" style="color:#8b949e">◀── ATCFB / cfg:gol:N ─────</div>
+</div>
+<div class="flow-row" style="margin-top:6px">
+  <div class="fnode fn-pe">PÉ<small>32 LDRs linha</small></div>
+  <div class="arr arr-g">── PacotePe/Def ──▶ CABEÇA ◀──▶</div>
+  <div class="fnode fn-remote">CABEÇA<small>outro robô</small></div>
+  <div class="arr arr-e">(ESP-NOW · EspNowMsg 23B)</div>
+</div>
+
+<hr class="thick">
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<h2>2. PLACA OLHO — Percepção de Bola e Ambiente</h2>
+
+<!-- IR SEEKER -->
+<h3>2.1 IR Seeker — 12 sensores TSOP</h3>
+<div class="two-col">
+<div>
+<table>
+  <thead><tr><th>Parâmetro</th><th>Valor</th></tr></thead>
+  <tbody>
+    <tr><td>Nº sensores</td><td class="tc-val">12 TSOPs</td></tr>
+    <tr><td>Distribuição</td><td class="tc-val">0° → 330° (passo 30°)</td></tr>
+    <tr><td>Janela de contagem</td><td class="tc-val">15 ms</td></tr>
+    <tr><td>Limiar de pulsos</td><td class="tc-val">≥ 8 pulsos → bola detectada</td></tr>
+    <tr><td>Amostras p/ votação</td><td class="tc-val">5 amostras</td></tr>
+    <tr><td>Tolerância de voto</td><td class="tc-val">45°</td></tr>
+  </tbody>
+</table>
+</div>
+<div>
+<p>Os pinos dos 12 TSOPs são lidos digitalmente. Em uma janela de <b>15 ms</b>, conta-se quantas transições HIGH→LOW ocorrem por sensor. Se um sensor detecta <b>≥ 8 pulsos</b>, considera que vê o sinal IR da bola.</p>
+<p>A direção da bola é calculada por <b>média vetorial</b>: cada sensor ativo contribui com um vetor unitário na sua direção angular, ponderado pelo número de pulsos. O ângulo final é <code>atan2(Σy, Σx)</code>.</p>
+</div>
+</div>
+
+<h4>Pipeline de filtragem do ângulo IR</h4>
+<ul class="step-list">
+  <li><div class="step-num">1</div><div class="step-txt"><b>contarPulsosSensores()</b> — janela de 15 ms, conta pulsos por sensor.</div></li>
+  <li><div class="step-num">2</div><div class="step-txt"><b>calculaAnguloBola()</b> — média vetorial ponderada por pulsos.</div></li>
+  <li><div class="step-num">3</div><div class="step-txt"><b>filtrarAnguloBola()</b> — repete 5 vezes, aplica <b>votação por grupo</b>: para cada amostra conta quantas outras estão a ≤ 45°, elege o grupo maior e retorna a média vetorial desse grupo. Elimina ruído e leituras espúrias.</div></li>
+</ul>
+
+<div class="note">Ângulo = −1 quando intensidade total = 0 (bola não detectada). O Músculo descarta leituras exatamente em 30° como artefato de sensor (<code>eh30Graus = fabsf(novoAngulo − 30.0) ≤ 1.0</code>).</div>
+
+<!-- ULTRASSONICOS -->
+<h3>2.2 Ultrassonicos — 4× HC-SR04</h3>
+<table>
+  <thead><tr><th>Sensor</th><th>Trigger</th><th>Echo</th><th>Posição</th><th>Uso principal</th></tr></thead>
+  <tbody>
+    <tr><td><b>hcF</b></td><td>4</td><td>5</td><td>Frontal</td><td class="tc-desc">Distância à frente</td></tr>
+    <tr><td><b>hcD</b></td><td>10</td><td>9</td><td>Direito</td><td class="tc-desc">Distância lateral direita</td></tr>
+    <tr><td><b>hcE</b></td><td>37</td><td>36</td><td>Esquerdo</td><td class="tc-desc">Distância lateral esquerda</td></tr>
+    <tr><td class="tc-key"><b>hcT</b></td><td>21</td><td>47</td><td>Traseiro</td><td class="tc-key"><b>Chave de papel: uT menor = goleiro</b></td></tr>
+  </tbody>
+</table>
+<p>Valores em <b>float cm</b>. São multiplicados por 10 antes de embalar no pacote (<code>int16_t</code>) para preservar 1 casa decimal sem usar ponto flutuante no protocolo binário.</p>
+
+<!-- CÂMERA -->
+<h3>2.3 Câmera OpenMV — Protocolo de recepção</h3>
+<div class="info-box cam">
+<p>A câmera envia espontaneamente frames binários a <b>115200 baud</b> (Serial2 → pinos RX=8, TX=3).</p>
+</div>
+
+<h4>Estrutura do frame da câmera (15 bytes)</h4>
+<div class="flow-row">
+  <div class="fnode" style="border:2px solid #58a6ff;color:#58a6ff;background:#161b22;min-width:60px">0xAA<small>1B início</small></div>
+  <div class="arr">→</div>
+  <div class="fnode" style="border:2px solid #79c0ff;color:#79c0ff;background:#161b22;min-width:60px">0x03<small>ID câmera</small></div>
+  <div class="arr">→</div>
+  <div class="fnode fn-cam" style="min-width:280px">PAYLOAD — 12 bytes big-endian<small>ballAngle(2) ballDist(2) blueAngle(2) blueDist(2) yellowAngle(2) yellowDist(2)</small></div>
+  <div class="arr">→</div>
+  <div class="fnode" style="border:2px solid #58a6ff;color:#58a6ff;background:#161b22;min-width:60px">0x55<small>1B fim</small></div>
+</div>
+
+<table>
+  <thead><tr><th>Campo</th><th>Bytes</th><th>Endian</th><th>Unidade</th><th>Significado</th></tr></thead>
+  <tbody>
+    <tr><td class="tc-cam">ballAngle</td><td>2</td><td>big</td><td>int16 ÷10 = °</td><td class="tc-desc">Ângulo da bola laranja</td></tr>
+    <tr><td class="tc-cam">ballDist</td><td>2</td><td>big</td><td>uint16 pixels</td><td class="tc-desc">Distância da bola (tamanho do blob)</td></tr>
+    <tr><td class="tc-cam">blueAngle</td><td>2</td><td>big</td><td>int16 ÷10 = °</td><td class="tc-desc">Ângulo do gol azul</td></tr>
+    <tr><td class="tc-cam">blueDist</td><td>2</td><td>big</td><td>uint16 pixels</td><td class="tc-desc">Distância do gol azul</td></tr>
+    <tr><td class="tc-cam">yellowAngle</td><td>2</td><td>big</td><td>int16 ÷10 = °</td><td class="tc-desc">Ângulo do gol amarelo</td></tr>
+    <tr><td class="tc-cam">yellowDist</td><td>2</td><td>big</td><td>uint16 pixels</td><td class="tc-desc">Distância do gol amarelo</td></tr>
+  </tbody>
+</table>
+
+<p><b>cameraOK</b> = 1 se último pacote recebido há menos de <b>3 000 ms</b>. Ângulo −999 indica "objeto não detectado neste frame".</p>
+
+<!-- ENVIO PACOTE OLHO -->
+<h3>2.4 Pacote enviado para a Cabeça — 27 bytes</h3>
+<div class="codeblock"><span class="kw">struct</span> <span class="type">Pacote</span> {           <span class="cmt">// framing: 0xAA | 0x01 | struct | 0x55</span>
+  <span class="type">int16_t</span> uD, uE, uF, uT;  <span class="cmt">// ultras ×10 (÷10 = cm)</span>
+  <span class="type">int16_t</span> angulo;           <span class="cmt">// ângulo IR ×10 (÷10 = graus)</span>
+  <span class="type">int16_t</span> intensidade;      <span class="cmt">// soma de pulsos IR ×10</span>
+  <span class="type">int16_t</span> ballAngle;        <span class="cmt">// câmera: bola  (÷10 = graus)</span>
+  <span class="type">uint16_t</span> ballDist;        <span class="cmt">// câmera: bola  pixels</span>
+  <span class="type">int16_t</span> blueAngle;        <span class="cmt">// câmera: gol azul</span>
+  <span class="type">uint16_t</span> blueDist;
+  <span class="type">int16_t</span> yellowAngle;      <span class="cmt">// câmera: gol amarelo</span>
+  <span class="type">uint16_t</span> yellowDist;
+  <span class="type">uint8_t</span> cameraOK;         <span class="cmt">// 0/1 — timeout 3 s</span>
+};                           <span class="cmt">// Total: 27 bytes</span></div>
+
+<p>Loop do Olho (delay 50 ms): <code>ProcessarPingCabeca → contarPulsosSensores → L_Ultra → LeituraSerial → LeituraCamera → enviarDados</code></p>
+
+<hr class="thick">
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<h2>3. PLACA PÉ — Detecção de Linha com 32 LDRs</h2>
+
+<h3>3.1 Hardware — Multiplexadores CD74HC4067</h3>
+<div class="two-col">
+<table>
+  <thead><tr><th>MUX</th><th>S0</th><th>S1</th><th>S2</th><th>S3</th><th>SIG</th><th>Sensores</th></tr></thead>
+  <tbody>
+    <tr><td><b>MUX1</b></td><td>21</td><td>47</td><td>48</td><td>45</td><td>3</td><td>0–15</td></tr>
+    <tr><td><b>MUX2</b></td><td>4</td><td>5</td><td>6</td><td>7</td><td>12</td><td>16–31</td></tr>
+  </tbody>
+</table>
+<div class="info-box green">
+<p>Cada canal é selecionado pelos 4 bits de endereço (S3…S0). O sinal analógico lido via <code>analogRead(SIG)</code> é comparado com o limiar <b>LIMIAR_LINHA = 3850</b> (de 4095 = 12-bit ADC). Acima do limiar = linha branca detectada.</p>
+</div>
+</div>
+
+<h4>Tabela angular dos sensores (distribuição uniforme)</h4>
+<p>No <code>setup()</code>, cada sensor <i>i</i> recebe coordenadas:</p>
+<div class="codeblock">sensorX[i] = <span class="fn">cos</span>(<span class="num">2π</span>/32 × i)
+sensorY[i] = <span class="fn">sin</span>(<span class="num">2π</span>/32 × i)   <span class="cmt">// i = 0..31, passo 11.25°</span></div>
+
+<h3>3.2 Modos de operação — Atacante vs. Defensor</h3>
+<div class="two-col">
+<div>
+<div class="board-card bc-pe" style="margin:0">
+<div class="board-title bt-pe">Modo ATACANTE — calcularAngulo(repulsao=true)</div>
+<p style="margin-top:6px">Calcula o centroide dos sensores ativos (ADC > 3850) e <b>inverte o vetor</b> (repulsão). O robô foge da linha na direção oposta ao centroide da linha detectada.</p>
+<p style="margin-top:6px">Envia <code>struct Pacote</code> — <b>2 bytes</b> — com ângulo em décimos de grau.</p>
+</div>
+</div>
+<div>
+<div class="board-card bc-pe" style="margin:0;border-color:#79c0ff">
+<div class="board-title" style="color:#79c0ff">Modo DEFENSOR — detectarLinhaDefensorPorZonas()</div>
+<p style="margin-top:6px">Divide os 32 sensores em <b>Zona A</b> (0-15, frontal) e <b>Zona B</b> (16-31, traseira). Calcula o centroide de cada zona separadamente (sem repulsão).</p>
+<p style="margin-top:6px">Zona B tem ângulo espelhado: <code>angB = 540° − angB</code> para referenciar corretamente 180°…360°.</p>
+<p style="margin-top:6px">Envia <code>struct PacoteDefensor</code> — <b>6 bytes</b> — com anguloZonaA, anguloZonaB, temLinhaZonaA, temLinhaZonaB.</p>
+</div>
+</div>
+</div>
+
+<h4>Cálculo do ângulo por centroide ponderado</h4>
+<div class="codeblock"><span class="kw">for</span>(i : sensores ativos onde ldr[i] >= LIMIAR_LINHA):
+  centroX += ldr[i] * sensorX[i]
+  centroY += ldr[i] * sensorY[i]
+  soma    += ldr[i]
+
+centroX /= soma ; centroY /= soma
+<span class="cmt">// repulsao=true: inverte vetor</span>
+angulo = <span class="fn">atan2</span>(centroY, centroX) × 180/π  → normaliza [0, 360)</div>
+
+<p>O loop do Pé (delay 2 ms) envia <code>Pacote</code> se <code>atacante == true</code>, senão envia <code>PacoteDefensor</code>.</p>
+
+<hr class="thick">
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<h2>4. PLACA CABEÇA — Hub Central</h2>
+
+<h3>4.1 Bússola Magnética — QMC5883P</h3>
+<div class="two-col">
+<table>
+  <thead><tr><th>Parâmetro</th><th>Valor</th></tr></thead>
+  <tbody>
+    <tr><td>Endereço I2C</td><td class="tc-val">0x2C</td></tr>
+    <tr><td>Frequência I2C</td><td class="tc-val">100 kHz</td></tr>
+    <tr><td>Intervalo de leitura</td><td class="tc-val">50 ms</td></tr>
+    <tr><td>xOffset</td><td class="tc-val">682.5000</td></tr>
+    <tr><td>yOffset</td><td class="tc-val">143.5000</td></tr>
+    <tr><td>xScale</td><td class="tc-val">1.005451</td></tr>
+    <tr><td>yScale</td><td class="tc-val">0.994608</td></tr>
+  </tbody>
+</table>
+<div>
+<h4>Cálculo do heading</h4>
+<div class="codeblock">xCorr = (xRaw − xOffset) × xScale
+yCorr = (yRaw − yOffset) × yScale
+ang   = <span class="fn">atan2</span>(−yCorr, xCorr) × 180/π
+<span class="kw">if</span>(ang < 0) ang += 360  <span class="cmt">// normaliza [0, 360)</span></div>
+<p>Registradores de configuração: <code>0x29←0x06</code>, <code>0x0B←0x08</code>, <code>0x0A←0xC3</code> (100 Hz ODR, 2G range, OSR=512).</p>
+<p>Publicado para o Músculo via <code>BUS:&lt;graus&gt;</code> a cada <b>120 ms</b>.</p>
+</div>
+</div>
+
+<h3>4.2 Botões e Kicker</h3>
+<table>
+  <thead><tr><th>Pino</th><th>Função</th><th>Comportamento</th></tr></thead>
+  <tbody>
+    <tr><td class="tc-val">3</td><td>BOTÃO 1</td><td class="tc-desc">Envio <code>BTN:1</code> ao Músculo (debounce 180 ms)</td></tr>
+    <tr><td class="tc-val">37</td><td>BOTÃO 2</td><td class="tc-desc">Envio <code>BTN:2</code> ao Músculo</td></tr>
+    <tr><td class="tc-val">46</td><td>BOTÃO 3</td><td class="tc-desc">Envio <code>BTN:3</code> ao Músculo</td></tr>
+    <tr><td class="tc-key">45</td><td>KICKER (chave)</td><td class="tc-key">LOW = chave acionada → <code>KIK:0</code> ao Músculo → dispara kicker</td></tr>
+  </tbody>
+</table>
+
+<h3>4.3 Recepção e reencaminhamento de pacotes</h3>
+<p>A Cabeça lê os pacotes binários do Olho e do Pé e converte para mensagens texto que envia ao Músculo:</p>
+<table>
+  <thead><tr><th>Fonte</th><th>Pacote binário</th><th>Mensagem texto → Músculo</th><th>Intervalo</th></tr></thead>
+  <tbody>
+    <tr><td class="b-olho badge">OLHO</td><td>PacoteOlho (27B)</td><td class="tc-good"><code>IR:&lt;angulo&gt;</code></td><td>120 ms</td></tr>
+    <tr><td class="b-olho badge">OLHO</td><td>PacoteOlho</td><td class="tc-good"><code>ULT:D,E,F,T</code></td><td>120 ms</td></tr>
+    <tr><td class="b-olho badge">OLHO</td><td>PacoteOlho (câmera)</td><td class="tc-good"><code>CAM:bA,bD,blA,blD,yA,yD,cOK</code></td><td>120 ms</td></tr>
+    <tr><td class="b-pe badge">PÉ</td><td>PacotePe (2B)</td><td class="tc-good"><code>LIN:&lt;angulo&gt;</code></td><td>20 ms</td></tr>
+    <tr><td class="b-pe badge">PÉ</td><td>PacoteDefensor (6B)</td><td class="tc-good"><code>LINA:&lt;angA&gt;</code> + <code>LINB:&lt;angB&gt;</code></td><td>20 ms</td></tr>
+    <tr><td class="b-cabeca badge">CABEÇA</td><td>QMC5883P</td><td class="tc-good"><code>BUS:&lt;graus&gt;</code></td><td>120 ms</td></tr>
+    <tr><td class="b-esp badge">ESP-NOW</td><td>EspNowMsg</td><td class="tc-good"><code>ULR:D,E,F,T</code></td><td>ao receber</td></tr>
+    <tr><td class="b-esp badge">ESP-NOW</td><td>status link</td><td class="tc-good"><code>ESN:0/1</code></td><td>500 ms</td></tr>
+  </tbody>
+</table>
+
+<h3>4.4 Envio de estado para Olho e Pé — PacoteEstado (3 bytes)</h3>
+<div class="codeblock"><span class="kw">struct</span> <span class="type">PacoteEstado</span> {   <span class="cmt">// framing 0xAA | ID | struct | 0x55 — enviado a cada 700 ms</span>
+  <span class="type">bool</span> sozinho;      <span class="cmt">// ESP-NOW timeout > 6 s → true</span>
+  <span class="type">bool</span> atacante;     <span class="cmt">// papel deste ciclo</span>
+  <span class="type">bool</span> corGolAzul;   <span class="cmt">// configurado pelo menu do Músculo</span>
+};</div>
+<p>Após mudança de papel, <code>enviarEstadoParaPeSemDelay()</code> dispara <b>3 envios imediatos</b> para garantir recepção do Pé.</p>
+
+<h3>4.5 Comandos recebidos do Músculo</h3>
+<table>
+  <thead><tr><th>Mensagem</th><th>Ação na Cabeça</th></tr></thead>
+  <tbody>
+    <tr><td><code>oi</code></td><td class="tc-desc">Handshake — responde <code>oi</code>, marca <code>comunicacaoMusculoOK = true</code></td></tr>
+    <tr><td><code>cfg:gol:0</code> / <code>cfg:gol:1</code></td><td class="tc-desc">Define cor do gol (0=amarelo, 1=azul) — confirma com <code>CFG:GOL:OK</code></td></tr>
+    <tr><td><code>atcfb:0</code> / <code>atcfb:1</code></td><td class="tc-desc">Feedback do Músculo quando detecta mudança de papel — Cabeça re-sincroniza o Pé imediatamente sem aguardar 700 ms</td></tr>
+  </tbody>
+</table>
+
+<hr class="thick">
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<h2>5. ESP-NOW — Comunicação entre Robôs</h2>
+
+<div class="two-col">
+<div>
+<h3>5.1 Struct EspNowMsg (23 bytes)</h3>
+<div class="codeblock"><span class="kw">struct</span> <span class="type">EspNowMsg</span> {
+  <span class="type">uint32_t</span> seq;      <span class="cmt">// contador sequencial</span>
+  <span class="type">uint8_t</span>  tipo;     <span class="cmt">// 1=REQ, 2=RESP</span>
+  <span class="type">int16_t</span>  uD, uE, uF; <span class="cmt">// ultras locais ×10</span>
+  <span class="type">int16_t</span>  <span class="tc-key">uT</span>;       <span class="cmt">// TRASEIRO ×10 ← chave de papel</span>
+  <span class="type">char</span>     text[12];  <span class="cmt">// "ULTRA_REQ" ou "ULTRA_RESP"</span>
+};</div>
+
+<h3>5.2 MAC alvo (hardcoded)</h3>
+<div class="codeblock">#define ESPNOW_TARGET_MAC_STR <span class="str">"AC:A7:04:2B:9B:60"</span>
+<span class="cmt">// MAC da Cabeça do CRONOS (outro robô)</span></div>
+</div>
+<div>
+<h3>5.3 Temporizações</h3>
+<div class="timing" style="flex-direction:column;gap:6px">
+  <div class="titem">Envio periódico (REQ): <span>2 000 ms</span></div>
+  <div class="titem">Timeout link (sem RX + sem ACK): <span>6 000 ms</span></div>
+  <div class="titem">Status → Músculo (<code>ESN:0/1</code>): <span>500 ms</span></div>
+  <div class="titem">Retry inicialização (se falhar no boot): <span>2 000 ms</span></div>
+</div>
+
+<h3>5.4 Lógica de link health</h3>
+<div class="codeblock">semRx  = (millis() - espnowUltimoRxMs)  > 6000
+semAck = (millis() - espnowUltimoAckMs) > 6000
+<span class="kw">if</span>(semRx && semAck) espnowComOK = false
+
+estado.sozinho = !espnowComOK || !espnowRecente</div>
+</div>
+</div>
+
+<h3>5.5 Troca automática de papel por ultrassônico traseiro</h3>
+<div class="rule-box">
+<h3>⚙ REGRA DE PAPEL (lógica futura — já estruturada no código)</h3>
+<p style="margin-top:8px">
+<b>Com 2 robôs online (espnowComOK = true):</b><br>
+&nbsp;&nbsp;• Cada robô envia seu <code>uT</code> (ultrassônico traseiro ×10) via <code>EspNowMsg</code>.<br>
+&nbsp;&nbsp;• Cabeça recebe o <code>uT</code> remoto em <code>ultimoUltraRemotoTX10</code>.<br>
+&nbsp;&nbsp;• <b>Menor uT</b> → está mais perto da própria área → <b style="color:#ff7b72">GOLEIRO</b><br>
+&nbsp;&nbsp;• <b>Maior uT</b> → está mais avançado → <b style="color:#3fb950">ATACANTE</b><br><br>
+<b>Link perdido (timeout > 6 s):</b> robô restante permanece/vira <b style="color:#3fb950">ATACANTE</b>.<br><br>
+<b>Filtros recomendados para implementação:</b> delta mín. 15 cm · janela 4 amostras consecutivas · cooldown 3 s entre trocas.<br><br>
+<b>Variável de papel na Cabeça:</b> <code>bool atacanteCfg = true</code> (linha 282 de cabeca.cpp). Alterar aqui propaga para Olho, Pé e Músculo via PacoteEstado + mensagem ATC:.
+</p>
+</div>
+
+<hr class="thick">
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<h2>6. PLACA MÚSCULO — Controle de Movimento e Lógica de Jogo</h2>
+
+<h3>6.1 Cinemática Omnidirecional (4 rodas Mecanum/Omni)</h3>
+<div class="pid-box">
+<p style="color:#8b949e;font-size:12px;margin-bottom:4px">Ângulos físicos das rodas no referencial do robô:</p>
+<div class="pid-eq">θ₁ = 45°  &nbsp;θ₂ = 135°  &nbsp;θ₃ = 225°  &nbsp;θ₄ = 315°</div>
+<p style="color:#8b949e;font-size:12px;margin:6px 0 4px">Velocidade de translação em <code>anguloGraus</code> e <code>velocidade</code>:</p>
+<div class="pid-eq">vx = V·sin(θ)  &nbsp;&nbsp;vy = V·cos(θ)</div>
+<div class="pid-eq">v_i = vx·cos(θᵢ) + vy·sin(θᵢ) &nbsp;&nbsp;&nbsp;&nbsp;i ∈ {1,2,3,4}</div>
+<p style="color:#8b949e;font-size:12px;margin-top:6px">Se max(|v_i|) > velocidade_máxima, normaliza todos por esse máximo (preserva direção).</p>
+<p style="color:#8b949e;font-size:12px">Para giro sobre o eixo: <b>todos os motores com o mesmo comando</b> (<code>girarNoEixo(vel)</code> → <code>Motor_i(−vel)</code>).</p>
+<p style="color:#8b949e;font-size:12px">Para translação + giro simultâneo (<code>seguirDirecaoComGiro</code>): soma termo de giro ponderado (<code>GANHO_GIRO_MISTO = 0.7</code>) a todos os vetores de roda antes de normalizar.</p>
+</div>
+
+<h4>Configuração de PWM</h4>
+<div class="timing">
+  <div class="titem">Frequência: <span>20 000 Hz</span></div>
+  <div class="titem">Resolução: <span>8 bits (0–255)</span></div>
+  <div class="titem">Velocidade máxima: <span>220</span></div>
+  <div class="titem">Rampa máx por ciclo: <span>16 unidades</span></div>
+</div>
+
+<table>
+  <thead><tr><th>Motor</th><th>IN1</th><th>IN2</th><th>PWM</th><th>Canal ledc</th></tr></thead>
+  <tbody>
+    <tr><td>Motor 1 (conj. A)</td><td>5</td><td>6</td><td>4</td><td>CH0</td></tr>
+    <tr><td>Motor 2 (conj. A)</td><td>3</td><td>46</td><td>7</td><td>CH1</td></tr>
+    <tr><td>Motor 3 (conj. B)</td><td>13</td><td>14</td><td>47</td><td>CH3</td></tr>
+    <tr><td>Motor 4 (conj. B)</td><td>11</td><td>12</td><td>10</td><td>CH2</td></tr>
+  </tbody>
+</table>
+
+<h3>6.2 PID de Alinhamento com o Gol (bússola/câmera)</h3>
+<div class="pid-box">
+<div class="pid-eq">u = Kp·e + Ki·∫e·dt + Kd·(de/dt)</div>
+<div class="pid-params">
+  <div class="pid-param">Kp = <span>0.8</span></div>
+  <div class="pid-param">Ki = <span>0.01</span></div>
+  <div class="pid-param">Kd = <span>0.5</span></div>
+  <div class="pid-param">Integral max = <span>±120</span></div>
+  <div class="pid-param">Saída min = <span>30</span></div>
+  <div class="pid-param">Saída max = <span>180</span></div>
+</div>
+<p style="color:#8b949e;font-size:12px;margin-top:8px">
+O erro é o ângulo do gol visto pela câmera (°). Se <code>|erro| > TOLERANCIA_ALINHAMENTO_GRAUS (10°)</code> → aciona PID. Se <code>|erro| > 40°</code> → para tudo e gira no eixo. O sinal de giro da saída do PID é invertido pelo <code>SINAL_GIRO_PID = −1</code> definido no topo do arquivo.
+</p>
+</div>
+
+<h3>6.3 Kicker Solenoide</h3>
+<table>
+  <thead><tr><th>Parâmetro</th><th>Valor</th></tr></thead>
+  <tbody>
+    <tr><td>Pino</td><td class="tc-val">21</td></tr>
+    <tr><td>Duração do pulso</td><td class="tc-val">100 ms</td></tr>
+    <tr><td>Intervalo mínimo entre chutes</td><td class="tc-val">1 000 ms</td></tr>
+    <tr><td>Gatilho</td><td class="tc-desc"><code>KIK:0</code> da Cabeça (chave pino 45 em LOW), estado INICIAR, comunicação OK</td></tr>
+  </tbody>
+</table>
+
+<hr>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<h2>7. LÓGICA DE JOGO — Modo ATACANTE</h2>
+
+<h3>7.1 Prioridades de decisão (função <code>atacante()</code>)</h3>
+<ul class="prio-list">
+  <li>
+    <div class="prio-badge pb-red">P1</div>
+    <div class="prio-txt"><b>Fuga da linha</b> — se <code>linhaDetectada && anguloLinhaPe ≥ 0</code> (ou retenção de 250 ms): <code>seguirDirecaoPorAngulo(anguloFuga, 255)</code>. O Pé já envia o ângulo em modo repulsão.</div>
+  </li>
+  <li>
+    <div class="prio-badge pb-red">P2</div>
+    <div class="prio-txt"><b>Giro total quando erro de gol grande</b> — se <code>|erroGol| > 40°</code>: <code>girarNoEixo(cmdPid)</code>. Para tudo para corrigir orientação.</div>
+  </li>
+  <li>
+    <div class="prio-badge pb-orange">P3</div>
+    <div class="prio-txt"><b>IR frontal + giro suave</b> — se IR detectado e <code>anguloIR ∈ [340°, 360°] ∪ [0°, 20°]</code>: <code>moverFrenteComGiro(200, cmdPid)</code>. PWM frontal fixo em 200 com correção de heading simultânea.</div>
+  </li>
+  <li>
+    <div class="prio-badge pb-orange">P4</div>
+    <div class="prio-txt"><b>IR lateral</b> — se IR detectado: mapeia ângulo da bola para ângulo de movimento (<i>ex: 45°→100°, 315°→260°, 90°→135°...</i>), aplica rampa de 50-100 ms para suavizar transições, move com <code>seguirDirecaoPorAngulo</code>. Velocidade reduzida (140) nas faixas 15°-45° e 315°-345°.</div>
+  </li>
+  <li>
+    <div class="prio-badge pb-blue">P5</div>
+    <div class="prio-txt"><b>Câmera substitui IR</b> — se <b>IR não detectado por ≥ 1 s</b> e câmera vê bola: <code>seguirDirecaoComGiro(angleCamBola, velocidade_max, cmdPid)</code>. Ignora linha neste estado.</div>
+  </li>
+  <li>
+    <div class="prio-badge pb-blue">P6</div>
+    <div class="prio-txt"><b>Só giro de alinhamento</b> — se gol visível mas IR e câmera-bola ausentes: <code>girarNoEixo(cmdPid)</code>.</div>
+  </li>
+  <li>
+    <div class="prio-badge pb-grey">P7</div>
+    <div class="prio-txt"><b>Para</b> — nenhuma condição anterior satisfeita.</div>
+  </li>
+</ul>
+
+<h3>7.2 Mapeamento angular IR → movimento (atacante)</h3>
+<table>
+  <thead><tr><th>Faixa IR (bola)</th><th>Ângulo de movimento</th><th>Velocidade</th></tr></thead>
+  <tbody>
+    <tr><td>[340°, 360°] ∪ [0°, 20°]</td><td class="tc-good">frontal (0°)</td><td>200 (fixo)</td></tr>
+    <tr><td>[15°, 45°)</td><td class="tc-val">100°</td><td class="tc-cam">140 (reduzido)</td></tr>
+    <tr><td>[315°, 345°)</td><td class="tc-val">260°</td><td class="tc-cam">140 (reduzido)</td></tr>
+    <tr><td>[45°, 90°)</td><td class="tc-val">135°</td><td>220</td></tr>
+    <tr><td>[90°, 135°)</td><td class="tc-val">180°</td><td>220</td></tr>
+    <tr><td>[135°, 180°)</td><td class="tc-val">225°</td><td>220</td></tr>
+    <tr><td>[180°, 225°)</td><td class="tc-val">135°</td><td>220</td></tr>
+    <tr><td>[225°, 270°)</td><td class="tc-val">180°</td><td>220</td></tr>
+    <tr><td>[270°, 315°)</td><td class="tc-val">225°</td><td>220</td></tr>
+  </tbody>
+</table>
+
+<h3>7.3 Suavização de ângulo IR (obterAnguloIrSuavizado)</h3>
+<p>Quando o ângulo alvo muda, inicia uma <b>rampa linear</b> de <b>50–100 ms</b> (proporcional ao delta angular) para evitar salto abrupto de direção. Ao final, quantiza em passos de <b>5°</b> para estabilidade.</p>
+
+<hr>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<h2>8. LÓGICA DE JOGO — Modo DEFENSOR / GOLEIRO</h2>
+
+<h3>8.1 Objetivo do defensor</h3>
+<p>Manter-se sobre a linha da área do seu gol, centralizado entre as Zonas A e B, enquanto rastreia lateralmente a bola com o IR.</p>
+
+<h3>8.2 Referências de zona</h3>
+<table>
+  <thead><tr><th>Zona</th><th>Sensores Pé</th><th>Referência alvo</th><th>Interpretação</th></tr></thead>
+  <tbody>
+    <tr><td><b>Zona A</b></td><td>0–15 (frontal)</td><td class="tc-val">90°</td><td class="tc-desc">Linha à direita do centroide → move para trás; à esquerda → para frente</td></tr>
+    <tr><td><b>Zona B</b></td><td>16–31 (traseira)</td><td class="tc-val">270°</td><td class="tc-desc">Mesma lógica, espelhada (540° − angB)</td></tr>
+  </tbody>
+</table>
+
+<h3>8.3 Prioridades de decisão (função <code>defensor()</code>)</h3>
+<ul class="prio-list">
+  <li>
+    <div class="prio-badge pb-red">P1</div>
+    <div class="prio-txt"><b>Recuperação ao gol</b> — se fora da linha E gol detectado pela câmera a <code>dist > 46 px</code>: move na direção do gol para reencontrar a linha.</div>
+  </li>
+  <li>
+    <div class="prio-badge pb-orange">P2</div>
+    <div class="prio-txt"><b>Vetor combinado linha + lateral IR</b> — calcula <code>vyCmd</code> (frente/trás pela linha) e <code>vxCmd</code> (lateral pelo IR). Combina em vetor único <code>atan2(vx, vy)</code> com pesos: linha ativa pesa 1.25×, lateral reduz para 0.35×.</div>
+  </li>
+  <li>
+    <div class="prio-badge pb-blue">P3</div>
+    <div class="prio-txt"><b>Câmera sem IR</b> — se câmera detecta bola a <code>< 60 px</code> e IR não detectado: move na direção da bola pela câmera.</div>
+  </li>
+  <li>
+    <div class="prio-badge pb-blue">P4</div>
+    <div class="prio-txt"><b>Só giro de alinhamento</b> — gira para frente a área.</div>
+  </li>
+  <li>
+    <div class="prio-badge pb-grey">P5</div>
+    <div class="prio-txt"><b>Para</b>.</div>
+  </li>
+</ul>
+
+<h3>8.4 Lógica de direção frente/trás pela linha</h3>
+<div class="codeblock">erroA = normalize(anguloZonaA − 90°)   <span class="cmt">// erro da zona frontal</span>
+erroB = normalize(anguloZonaB − 270°)  <span class="cmt">// erro da zona traseira</span>
+
+<span class="cmt">// sinal > 0 → move para trás (direcaoLinha = +1 → vyCmd -= vel)</span>
+<span class="kw">if</span>(erroA > 0 && erroB < 0) → direcaoLinha = +1 (frente)
+<span class="kw">if</span>(erroA < 0 && erroB > 0) → direcaoLinha = -1 (trás)
+<span class="kw">if</span>(erroA > 0 || erroB > 0) → +1 ; <span class="kw">if</span>(erroA < 0 || erroB < 0) → -1
+
+velocidadeLinha = proporcional à intensidade do erro (min: 90, max: 150)</div>
+
+<h3>8.5 Velocidade lateral por IR (defensor)</h3>
+<p>Proporcional ao ângulo IR da bola:</p>
+<table>
+  <thead><tr><th>Faixa bola (IR)</th><th>Direção</th><th>Velocidade</th></tr></thead>
+  <tbody>
+    <tr><td>[20°, 160°]</td><td class="tc-good">direita (vxCmd +)</td><td class="tc-val">130 → 255 (proporcional)</td></tr>
+    <tr><td>[200°, 340°]</td><td class="tc-good">esquerda (vxCmd −)</td><td class="tc-val">255 → 130 (proporcional)</td></tr>
+    <tr><td>[0°, 20°] ∪ [340°, 360°]</td><td class="tc-desc">zona morta</td><td>0</td></tr>
+  </tbody>
+</table>
+
+<hr class="thick">
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<h2>9. MENU E INTERFACE — Display OLED SSD1306 128×64</h2>
+
+<h3>9.1 Máquina de estados da interface</h3>
+<div class="flow-row">
+  <div class="fnode fn-cabeca" style="min-width:80px">MENU<small>itemSelecionado</small></div>
+  <div class="arr arr-b">→ BTN3 "CALIBRAÇÃO" →</div>
+  <div class="fnode fn-olho" style="min-width:100px">CALIBRAÇÃO<small>7 submenus</small></div>
+  <div class="arr arr-g">← BTN "VOLTA"</div>
+  <div></div>
+</div>
+<div class="flow-row" style="margin-top:6px">
+  <div class="fnode fn-cabeca" style="min-width:80px">MENU</div>
+  <div class="arr arr-m">→ BTN3 "INICIAR" →</div>
+  <div class="fnode fn-musculo" style="min-width:80px">INICIAR<small>Lógica de jogo</small></div>
+  <div class="arr arr-m">→ BTN3 "VOLTA" →</div>
+  <div class="fnode fn-cabeca" style="min-width:80px">MENU</div>
+</div>
+
+<h3>9.2 Submenus de calibração</h3>
+<table>
+  <thead><tr><th>Submenu</th><th>Função</th></tr></thead>
+  <tbody>
+    <tr><td><b>GOL</b></td><td class="tc-desc">Seleciona cor do gol (AMARELO / AZUL). Envia <code>CFG:GOL:N</code> para a Cabeça. Salva na EEPROM do Olho.</td></tr>
+    <tr><td><b>BÚSSOLA</b></td><td class="tc-desc">Mostra heading atual em tempo real. BTN3 salva referência de 0° na EEPROM do Músculo.</td></tr>
+    <tr><td><b>IR</b></td><td class="tc-desc">Mostra ângulo IR recebido da Cabeça. "SEM BOLA" se não detectado.</td></tr>
+    <tr><td><b>ULTRA</b></td><td class="tc-desc">Mostra D, E, F, T em cm dos ultrassonicos locais.</td></tr>
+    <tr><td><b>CAM</b></td><td class="tc-desc">Mostra B(ballAngle/ballDist), A(blueAngle/blueDist), M(yellowAngle/yellowDist) em fonte ×2.</td></tr>
+    <tr><td><b>LINHA CTR</b></td><td class="tc-desc">Mostra ângulo da linha (atacante: único ângulo; defensor: Zona A e Zona B separados). Papel vem da Cabeça automaticamente.</td></tr>
+  </tbody>
+</table>
+
+<h3>9.3 Botões</h3>
+<div class="timing">
+  <div class="titem">BTN1 → <span>Sobe / Anterior</span></div>
+  <div class="titem">BTN2 → <span>Desce / Próximo</span></div>
+  <div class="titem">BTN3 → <span>Confirma / Seleciona</span></div>
+  <div class="titem">OLED refresh: <span>120 ms</span></div>
+</div>
+
+<hr class="thick">
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<h2>10. PROTOCOLO DE COMUNICAÇÃO — Resumo Técnico</h2>
+
+<h3>10.1 Protocolo binário (placa → Cabeça)</h3>
+<div class="flow-row">
+  <div class="fnode" style="border:2px solid #58a6ff;color:#58a6ff;background:#161b22;min-width:70px">0xAA<small>INÍCIO</small></div>
+  <div class="arr">→</div>
+  <div class="fnode" style="border:2px solid #79c0ff;color:#79c0ff;background:#161b22;min-width:70px">ID<small>0x01/02/03</small></div>
+  <div class="arr">→</div>
+  <div class="fnode" style="border:2px solid #3fb950;color:#3fb950;background:#161b22;flex:1;min-width:200px">STRUCT payload (N bytes)<small>memcpy direto — sem serialização manual</small></div>
+  <div class="arr">→</div>
+  <div class="fnode" style="border:2px solid #58a6ff;color:#58a6ff;background:#161b22;min-width:70px">0x55<small>FIM</small></div>
+</div>
+<p style="margin-top:8px">Motivação: zero overhead de parsing, velocidade máxima, sem ambiguidade de delimitador dentro do payload (structs nunca contêm 0xAA/0x55 por coincidência pois dados são int16 e o protocolo não usa escaping — risco aceitável por ser intra-placa).</p>
+
+<h3>10.2 Protocolo de texto ASCII (Cabeça → Músculo)</h3>
+<p>Linhas terminadas em <code>\n</code>, tamanho máximo do buffer = 32 chars. Músculo mantém buffer e despacha ao receber <code>\n</code> ou <code>\r</code>.</p>
+<table>
+  <thead><tr><th>Prefixo</th><th>Direção</th><th>Formato</th><th>Descrição</th></tr></thead>
+  <tbody>
+    <tr><td><code>oi</code></td><td>↔ bidirecional</td><td><code>oi</code></td><td class="tc-desc">Heartbeat — Músculo envia a cada 1 s, Cabeça responde</td></tr>
+    <tr><td><code>IR:</code></td><td>Cabeça→Músculo</td><td><code>IR:&lt;float&gt;</code></td><td class="tc-desc">Ângulo IR em graus (-1 = sem bola)</td></tr>
+    <tr><td><code>BUS:</code></td><td>Cabeça→Músculo</td><td><code>BUS:&lt;float&gt;</code></td><td class="tc-desc">Heading da bússola em graus</td></tr>
+    <tr><td><code>CAM:</code></td><td>Cabeça→Músculo</td><td><code>CAM:bA,bD,blA,blD,yA,yD,cOK</code></td><td class="tc-desc">7 campos câmera</td></tr>
+    <tr><td><code>LIN:</code></td><td>Cabeça→Músculo</td><td><code>LIN:&lt;float&gt;</code></td><td class="tc-desc">Ângulo linha atacante (-1 = sem linha)</td></tr>
+    <tr><td><code>LINA:</code> / <code>LINB:</code></td><td>Cabeça→Músculo</td><td><code>LINA:&lt;f&gt;</code></td><td class="tc-desc">Ângulos linha defensor por zona</td></tr>
+    <tr><td><code>ULT:</code></td><td>Cabeça→Músculo</td><td><code>ULT:D,E,F,T</code></td><td class="tc-desc">Ultras locais em cm</td></tr>
+    <tr><td><code>ULR:</code></td><td>Cabeça→Músculo</td><td><code>ULR:D,E,F,T</code></td><td class="tc-desc">Ultras remotos (outro robô via ESP-NOW)</td></tr>
+    <tr><td><code>ATC:</code></td><td>Cabeça→Músculo</td><td><code>ATC:0</code> / <code>ATC:1</code></td><td class="tc-desc">Papel: 0=defensor, 1=atacante</td></tr>
+    <tr><td><code>ESN:</code></td><td>Cabeça→Músculo</td><td><code>ESN:0</code> / <code>ESN:1</code></td><td class="tc-desc">ESP-NOW link OK?</td></tr>
+    <tr><td><code>KIK:</code></td><td>Cabeça→Músculo</td><td><code>KIK:0</code> / <code>KIK:1</code></td><td class="tc-desc">0 = chave acionada → kicker dispara</td></tr>
+    <tr><td><code>BTN:</code></td><td>Cabeça→Músculo</td><td><code>BTN:1/2/3</code></td><td class="tc-desc">Evento de botão físico</td></tr>
+    <tr><td><code>STS:</code></td><td>Cabeça→Músculo</td><td><code>STS:olhoOK,peOK</code></td><td class="tc-desc">Status das placas secundárias</td></tr>
+    <tr><td><code>CFG:GOL:</code></td><td>Músculo→Cabeça</td><td><code>CFG:GOL:0/1</code></td><td class="tc-desc">Cor do gol (0=amarelo, 1=azul)</td></tr>
+    <tr><td><code>ATCFB:</code></td><td>Músculo→Cabeça</td><td><code>ATCFB:0/1</code></td><td class="tc-desc">Feedback de mudança de papel</td></tr>
+  </tbody>
+</table>
+
+<h3>10.3 Handshake e timeout</h3>
+<div class="timing">
+  <div class="titem">Músculo envia "oi": <span>1 000 ms</span></div>
+  <div class="titem">Timeout comunicação: <span>3 000 ms</span></div>
+  <div class="titem">Timeout bússola: <span>800 ms</span></div>
+  <div class="titem">Timeout linha: <span>150 ms</span></div>
+  <div class="titem">Timeout ultra: <span>1 000 ms</span></div>
+  <div class="titem">Timeout câmera (Músculo): <span>1 000 ms</span></div>
+  <div class="titem">Timeout câmera (Olho): <span>3 000 ms</span></div>
+</div>
+
+<hr class="thick">
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<h2>11. EEPROM — Persistência entre reinicializações</h2>
+<table>
+  <thead><tr><th>Placa</th><th>Endereço</th><th>Dado</th><th>Tamanho</th></tr></thead>
+  <tbody>
+    <tr><td><span class="b-olho badge">OLHO</span></td><td>0x00</td><td>corGolAzul (uint8: 0/1)</td><td>1 byte</td></tr>
+    <tr><td><span class="b-musculo badge">MÚSCULO</span></td><td>0x00</td><td>headingBussolaSalvo (int)</td><td>4 bytes</td></tr>
+  </tbody>
+</table>
+<p>Ambas as placas utilizam <code>EEPROM.begin(N)</code> e <code>EEPROM.commit()</code> do Arduino ESP32.</p>
+
+<hr class="thick">
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<h2>12. FLUXO COMPLETO DO LOOP — Visão Geral</h2>
+
+<div class="two-col-3">
+<div>
+<h4>OLHO (delay 50 ms)</h4>
+<ul class="step-list">
+  <li><div class="step-num">1</div><div class="step-txt">ProcessarPingCabeca</div></li>
+  <li><div class="step-num">2</div><div class="step-txt">contarPulsosSensores (IR 15 ms)</div></li>
+  <li><div class="step-num">3</div><div class="step-txt">calculaAnguloBola</div></li>
+  <li><div class="step-num">4</div><div class="step-txt">L_Ultra (4× HC-SR04)</div></li>
+  <li><div class="step-num">5</div><div class="step-txt">LeituraSerial (PacoteEstado)</div></li>
+  <li><div class="step-num">6</div><div class="step-txt">LeituraCamera (Serial2)</div></li>
+  <li><div class="step-num">7</div><div class="step-txt">enviarDados → Serial1</div></li>
+</ul>
+</div>
+<div>
+<h4>PÉ (delay 2 ms)</h4>
+<ul class="step-list">
+  <li><div class="step-num">1</div><div class="step-txt">ProcessarPingCabeca</div></li>
+  <li><div class="step-num">2</div><div class="step-txt">LeituraSerial (PacoteEstado)</div></li>
+  <li><div class="step-num">3</div><div class="step-txt">Lê 32 LDRs via MUX1 + MUX2</div></li>
+  <li><div class="step-num">4</div><div class="step-txt">se atacante: calcularAngulo(repulsao=true) → Pacote 2B</div></li>
+  <li><div class="step-num">5</div><div class="step-txt">se defensor: detectarLinhaDefensorPorZonas() → PacoteDefensor 6B</div></li>
+  <li><div class="step-num">6</div><div class="step-txt">enviarDados → Serial1</div></li>
+</ul>
+</div>
+<div>
+<h4>MÚSCULO (~5 ms)</h4>
+<ul class="step-list">
+  <li><div class="step-num">1</div><div class="step-txt">Heartbeat "oi" (1 s)</div></li>
+  <li><div class="step-num">2</div><div class="step-txt">lerSerialCabeca → processarMensagemCabeca</div></li>
+  <li><div class="step-num">3</div><div class="step-txt">atualizarValidadeBussola/Linha/Camera</div></li>
+  <li><div class="step-num">4</div><div class="step-txt">enviarCorGolParaCabeca (se pendente)</div></li>
+  <li><div class="step-num">5</div><div class="step-txt">atualizarKicker</div></li>
+  <li><div class="step-num">6</div><div class="step-txt">se INICIAR + comOK: <b>atacante()</b> ou <b>defensor()</b></div></li>
+  <li><div class="step-num">7</div><div class="step-txt">OLED refresh (120 ms)</div></li>
+</ul>
+</div>
+</div>
+
+<h4>CABEÇA (sem delay fixo)</h4>
+<div class="flow-row" style="flex-wrap:wrap;gap:4px">
+  <div class="fnode fn-cabeca" style="min-width:0;padding:5px 10px;font-size:11px">Botões<small>debounce 180ms</small></div>
+  <div class="arr">→</div>
+  <div class="fnode fn-cabeca" style="min-width:0;padding:5px 10px;font-size:11px">Bússola<small>50ms</small></div>
+  <div class="arr">→</div>
+  <div class="fnode fn-cabeca" style="min-width:0;padding:5px 10px;font-size:11px">PacoteOlho<small>lê Serial1</small></div>
+  <div class="arr">→</div>
+  <div class="fnode fn-cabeca" style="min-width:0;padding:5px 10px;font-size:11px">PacotePe<small>lê Serial2</small></div>
+  <div class="arr">→</div>
+  <div class="fnode fn-cabeca" style="min-width:0;padding:5px 10px;font-size:11px">ESP-NOW<small>send/recv</small></div>
+  <div class="arr">→</div>
+  <div class="fnode fn-cabeca" style="min-width:0;padding:5px 10px;font-size:11px">Msg Músculo<small>Serial0</small></div>
+  <div class="arr">→</div>
+  <div class="fnode fn-cabeca" style="min-width:0;padding:5px 10px;font-size:11px">PacoteEstado<small>→ Olho+Pé 700ms</small></div>
+</div>
+
+<hr class="thick">
+<p style="text-align:center;color:#6e7681;font-size:11px;margin-top:8px">
+jumboV1/NEXUS — Documento técnico completo — 2026-05-10
+</p>
+</body>
+</html>
