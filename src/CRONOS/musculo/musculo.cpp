@@ -1897,7 +1897,7 @@ float calcularVetorAtracaoLinha(float anguloA, float anguloB) {
 void defensor() {
   const float REFERENCIA_ZONA_A = 90.0f;
   const float REFERENCIA_ZONA_B = 270.0f;
-  const float TOLERANCIA_GIRO_LINHA_GRAUS = 3.0f;
+  const float TOLERANCIA_GIRO_LINHA_GRAUS = 10.0f;
 
   bool temZonaA = linhaZonaAValida && (anguloLinhaZonaA >= 0.0f);
   bool temZonaB = linhaZonaBValida && (anguloLinhaZonaB >= 0.0f);
@@ -1907,7 +1907,7 @@ void defensor() {
 
   if (!temZonaA && !temZonaB) {
     erroAlinhamentoGraus = 0.0f;
-    resetPidBussola();
+    resetPidLinhaGoleiro();
     pararMotores();
     return;
   }
@@ -1930,18 +1930,33 @@ void defensor() {
   float erroAngularLinha = (quantidadeErros > 0) ? (somaErro / (float)quantidadeErros) : 0.0f;
   erroAlinhamentoGraus = erroAngularLinha;
 
-  if (fabsf(erroAngularLinha) <= TOLERANCIA_GIRO_LINHA_GRAUS) {
-    resetPidBussola();
+  // Regra principal do defensor:
+  // PRECISA ALINHAR? se sim, alinha. se nao, segue a bola.
+  bool precisaAlinhar = (fabsf(erroAngularLinha) >= TOLERANCIA_GIRO_LINHA_GRAUS);
+  if (!precisaAlinhar) {
+    alinhandoAgora = false;
+    resetPidLinhaGoleiro();
+    if (irDetectado) {
+      if (anguloIr > 20.0f && anguloIr < 120.0f) {
+        seguirDirecaoPorAngulo(90.0f, map(anguloIr, 20.0f, 120.0f, 80, 200));
+        return;
+      } else if (anguloIr > 240.0f && anguloIr < 360.0f) {
+        seguirDirecaoPorAngulo(270.0f, map(anguloIr, 240.0f, 360.0f, 80, 200));
+        return;
+      }
+    }
     pararMotores();
     return;
   }
 
   int cmdPid = calcularSaidaPidLinhaGoleiro(erroAngularLinha);
-  if(abs(erroAngularLinha) > 20.0f) {
+  if (fabsf(erroAngularLinha) > 20.0f) {
     cmdPid *= 2; // Aumenta agressividade se o erro for muito grande
   }
+  alinhandoAgora = true;
   int cmdGiro = SINAL_GIRO_PID * cmdPid;
   girarNoEixo(cmdGiro);
+
 }
 
 // Laco principal: comunica, atualiza controle de movimento e redesenha interface.
