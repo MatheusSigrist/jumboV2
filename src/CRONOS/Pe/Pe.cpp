@@ -17,7 +17,7 @@
 #define TX_CABECA 18
 
 #define NUM_SENSORES 32
-#define LIMIAR_LINHA 3850
+#define LIMIAR_LINHA 2700
 #define INTERVALO_DEBUG_MS 250
 #define BAUD_PE_CABECA 115200
 #define DEBUG_LINHA 0
@@ -246,10 +246,6 @@ PacoteDefensor detectarLinhaDefensorPorZonas() {
   // Ex.: 360 -> 180, 350 -> 190, 180 -> 360.
   if (pacote.anguloZonaB >= 0) {
     float angB = pacote.anguloZonaB / 10.0f;
-    angB = 540.0f - angB;
-    if (angB > 360.0f) {
-      angB -= 360.0f;
-    }
     pacote.anguloZonaB = (int16_t)round(angB * 10.0f);
   }
 

@@ -5,7 +5,7 @@
 #include <math.h>
 
 #define NUM_SENSORES 32
-#define LIMIAR_LINHA 3600
+#define LIMIAR_LINHA 1000
 #define INTERVALO_DEBUG_MS 200
 
 const int MUX1_SIG = 3;

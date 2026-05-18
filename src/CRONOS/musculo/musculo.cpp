@@ -154,7 +154,13 @@ const int PID_BUS_SAIDA_MIN = 30;
 const int PID_BUS_SAIDA_MAX = 180;
 const float GANHO_GIRO_MISTO = 0.7f;
 
-
+// PID dedicado ao giro do goleiro usando apenas a linha (zonas A e B) como referencia.
+const float PID_LINHA_GOL_KP = 0.9f;
+const float PID_LINHA_GOL_KI = 0.00f;
+const float PID_LINHA_GOL_KD = 0.55f;
+const float PID_LINHA_GOL_INTEGRAL_MAX = 90.0f;
+const int PID_LINHA_GOL_SAIDA_MIN = 30;
+const int PID_LINHA_GOL_SAIDA_MAX = 220;
 
 // Velocidade dedicada para ataque frontal quando a bola estiver entre 330° e 30°.
 const int VELOCIDADE_IR_FRONTAL_PWM = 200;
@@ -181,6 +187,9 @@ const unsigned long RETENCAO_FUGA_LINHA_MS = 250;
 float pidBusIntegral = 0.0f;
 float pidBusErroAnterior = 0.0f;
 unsigned long pidBusUltimoMs = 0;
+float pidLinhaGolIntegral = 0.0f;
+float pidLinhaGolErroAnterior = 0.0f;
+unsigned long pidLinhaGolUltimoMs = 0;
 unsigned long inicioCameraSemIrMs = 0;
 
 // Estado da rampa angular para evitar saltos bruscos entre faixas do IR.
@@ -712,6 +721,41 @@ int calcularSaidaPidBussola(float erroGraus) {
   if (saida > VELOCIDADE_GIRO_ALINHAMENTO) saida = VELOCIDADE_GIRO_ALINHAMENTO;
 
   // O sinal da saida preserva o sentido do erro angular.
+  return (u >= 0.0f) ? saida : -saida;
+}
+
+// Zera os estados internos do PID do goleiro por linha.
+void resetPidLinhaGoleiro() {
+  pidLinhaGolIntegral = 0.0f;
+  pidLinhaGolErroAnterior = 0.0f;
+  pidLinhaGolUltimoMs = 0;
+}
+
+// PID do giro do goleiro usando somente erro angular da linha (zonas A e B).
+int calcularSaidaPidLinhaGoleiro(float erroGraus) {
+  unsigned long agora = millis();
+  float dt = 0.02f;
+
+  if (pidLinhaGolUltimoMs != 0) {
+    dt = (agora - pidLinhaGolUltimoMs) / 1000.0f;
+    if (dt < 0.005f) dt = 0.005f;
+    if (dt > 0.2f) dt = 0.2f;
+  }
+  pidLinhaGolUltimoMs = agora;
+
+  pidLinhaGolIntegral += erroGraus * dt;
+  if (pidLinhaGolIntegral > PID_LINHA_GOL_INTEGRAL_MAX) pidLinhaGolIntegral = PID_LINHA_GOL_INTEGRAL_MAX;
+  if (pidLinhaGolIntegral < -PID_LINHA_GOL_INTEGRAL_MAX) pidLinhaGolIntegral = -PID_LINHA_GOL_INTEGRAL_MAX;
+
+  float derivada = (erroGraus - pidLinhaGolErroAnterior) / dt;
+  pidLinhaGolErroAnterior = erroGraus;
+
+  float u = PID_LINHA_GOL_KP * erroGraus + PID_LINHA_GOL_KI * pidLinhaGolIntegral + PID_LINHA_GOL_KD * derivada;
+  int saida = (int)fabsf(u);
+  if (saida < PID_LINHA_GOL_SAIDA_MIN) saida = PID_LINHA_GOL_SAIDA_MIN;
+  if (saida > PID_LINHA_GOL_SAIDA_MAX) saida = PID_LINHA_GOL_SAIDA_MAX;
+  if (saida > VELOCIDADE_GIRO_ALINHAMENTO) saida = VELOCIDADE_GIRO_ALINHAMENTO;
+
   return (u >= 0.0f) ? saida : -saida;
 }
 
@@ -1851,91 +1895,53 @@ float calcularVetorAtracaoLinha(float anguloA, float anguloB) {
 }
 
 void defensor() {
-  const int VELOCIDADE_ALINHAMENTO_LINHA = 200;
-  const int VELOCIDADE_SEGUIR_BOLA = 180;
   const float REFERENCIA_ZONA_A = 90.0f;
   const float REFERENCIA_ZONA_B = 270.0f;
-  const float TOLERANCIA_ALINHADO_LINHA_GRAUS = 10.0f;
-
-  bool ultrasRecentes = ultrasValidos && ((millis() - ultimoRxUltraMs) <= TIMEOUT_ULTRA_MS);
-
-  // Prioridade maxima: desvio por ultras laterais com comando lateral cravado.
-  if (ultrasRecentes) {
-    if (ultraTcm < 25.0f) {
-      alinhandoAgora = false;
-      fugindoLinhaAgora = false;
-      seguirDirecaoPorAngulo(0.0f, VELOCIDADE_ALINHAMENTO_LINHA);
-      return;
-    }
-
-    if ((ultraEcm < 50.0f) && (ultraDcm > 80.0f)) {
-      alinhandoAgora = false;
-      fugindoLinhaAgora = false;
-      seguirDirecaoPorAngulo(90.0f, VELOCIDADE_ALINHAMENTO_LINHA);
-      return;
-    }
-
-    if ((ultraDcm < 50.0f) && (ultraEcm > 80.0f)) {
-      alinhandoAgora = false;
-      fugindoLinhaAgora = false;
-      seguirDirecaoPorAngulo(270.0f, VELOCIDADE_ALINHAMENTO_LINHA);
-      return;
-    }
-  }
+  const float TOLERANCIA_GIRO_LINHA_GRAUS = 3.0f;
 
   bool temZonaA = linhaZonaAValida && (anguloLinhaZonaA >= 0.0f);
   bool temZonaB = linhaZonaBValida && (anguloLinhaZonaB >= 0.0f);
-  bool linhaCompletaValida = temZonaA && temZonaB;
 
-  // Define alinhamento usando as referencias naturais da linha no defensor.
-  bool alinhadoNaLinha = false;
-  if (linhaCompletaValida) {
-    float erroA = normalizarErro180(anguloLinhaZonaA - REFERENCIA_ZONA_A);
-    float erroB = normalizarErro180(anguloLinhaZonaB - REFERENCIA_ZONA_B);
-    alinhadoNaLinha = (fabsf(erroA) <= TOLERANCIA_ALINHADO_LINHA_GRAUS) &&
-                      (fabsf(erroB) <= TOLERANCIA_ALINHADO_LINHA_GRAUS);
-  }
-
-  // Prioridade 1: se houver linha e estiver desalinhado, corrige primeiro.
-  if (linhaCompletaValida && !alinhadoNaLinha) {
-    alinhandoAgora = true;
-    fugindoLinhaAgora = false;
-    float anguloAtracao = calcularVetorAtracaoLinha(anguloLinhaZonaA, anguloLinhaZonaB);
-    seguirDirecaoPorAngulo(anguloAtracao, VELOCIDADE_ALINHAMENTO_LINHA);
-    return;
-  }
-
-  // Depois de alinhado, segue a bola no referencial do campo.
   alinhandoAgora = false;
   fugindoLinhaAgora = false;
 
-  float erroAngularCampo = calcularErroAngularCampo();
-
-  if (irDetectado) {
-    float anguloIrCorrigido = corrigirAnguloParaCampo(anguloIr, erroAngularCampo);
-
-    float anguloComando = 0.0f;
-    if (calcularComandoLateralPorBolaCorrigida(anguloIrCorrigido, erroAngularCampo, anguloComando)) {
-      seguirDirecaoPorAngulo(anguloComando, VELOCIDADE_ALINHAMENTO_LINHA);
-    } else {
-      pararMotores();
-    }
+  if (!temZonaA && !temZonaB) {
+    erroAlinhamentoGraus = 0.0f;
+    resetPidBussola();
+    pararMotores();
     return;
   }
 
-  if (cameraTemBolaValida()) {
-    float anguloCameraCorrigido = corrigirAnguloParaCampo((float)cameraBallAngle, erroAngularCampo);
+  float somaErro = 0.0f;
+  int quantidadeErros = 0;
 
-    float anguloComando = 0.0f;
-    if (calcularComandoLateralPorBolaCorrigida(anguloCameraCorrigido, erroAngularCampo, anguloComando)) {
-      seguirDirecaoPorAngulo(anguloComando, VELOCIDADE_SEGUIR_BOLA);
-    } else {
-      pararMotores();
-    }
+  if (temZonaA) {
+    float erroA = normalizarErro180(anguloLinhaZonaA - REFERENCIA_ZONA_A);
+    somaErro += erroA;
+    quantidadeErros++;
+  }
+
+  if (temZonaB) {
+    float erroB = normalizarErro180(anguloLinhaZonaB - REFERENCIA_ZONA_B);
+    somaErro += erroB;
+    quantidadeErros++;
+  }
+
+  float erroAngularLinha = (quantidadeErros > 0) ? (somaErro / (float)quantidadeErros) : 0.0f;
+  erroAlinhamentoGraus = erroAngularLinha;
+
+  if (fabsf(erroAngularLinha) <= TOLERANCIA_GIRO_LINHA_GRAUS) {
+    resetPidBussola();
+    pararMotores();
     return;
   }
 
-  pararMotores();
+  int cmdPid = calcularSaidaPidLinhaGoleiro(erroAngularLinha);
+  if(abs(erroAngularLinha) > 20.0f) {
+    cmdPid *= 2; // Aumenta agressividade se o erro for muito grande
+  }
+  int cmdGiro = SINAL_GIRO_PID * cmdPid;
+  girarNoEixo(cmdGiro);
 }
 
 // Laco principal: comunica, atualiza controle de movimento e redesenha interface.
