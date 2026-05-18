@@ -126,7 +126,7 @@ int itemSubMenu = 0;
 const unsigned long INTERVALO_OI_MS = 1000;
 const unsigned long TIMEOUT_COM_MS = 3000;
 const unsigned long TIMEOUT_BUSSOLA_MS = 800;
-const unsigned long TIMEOUT_LINHA_MS = 150;
+const unsigned long TIMEOUT_LINHA_MS = 300;
 const unsigned long TIMEOUT_ULTRA_MS = 1000;
 const unsigned long TIMEOUT_CAMERA_MS = 1000;
 // Velocidade Maxima do robô - Vamos alterar aqui!
@@ -159,7 +159,7 @@ const float PID_LINHA_GOL_KP = 0.9f;
 const float PID_LINHA_GOL_KI = 0.00f;
 const float PID_LINHA_GOL_KD = 0.55f;
 const float PID_LINHA_GOL_INTEGRAL_MAX = 90.0f;
-const int PID_LINHA_GOL_SAIDA_MIN = 30;
+const int PID_LINHA_GOL_SAIDA_MIN = 40;
 const int PID_LINHA_GOL_SAIDA_MAX = 220;
 
 // Velocidade dedicada para ataque frontal quando a bola estiver entre 330° e 30°.
@@ -182,6 +182,7 @@ unsigned long ultimoEnvioCorGolMs = 0;
 const unsigned long INTERVALO_ENVIO_COR_GOL_MS = 500;
 const unsigned long TEMPO_CAMERA_SEM_IR_PARA_IGNORAR_LINHA_MS = 1000;
 const unsigned long RETENCAO_FUGA_LINHA_MS = 250;
+const unsigned long RETENCAO_ZONA_LINHA_DEFENSOR_MS = 300;
 
 // Estado interno do PID entre iteracoes do loop.
 float pidBusIntegral = 0.0f;
@@ -458,12 +459,12 @@ bool calcularComandoLateralPorBolaCorrigida(float anguloBolaCorrigido,
   float ang = normalizarAngulo360(anguloBolaCorrigido);
 
   if (ang >= 20.0f && ang <= 120.0f) {
-    anguloComando = normalizarAngulo360(90.0f - erroAngular);
+    anguloComando = normalizarAngulo360(120.0f - erroAngular);
     return true;
   }
 
   if (ang >= 240.0f && ang <= 340.0f) {
-    anguloComando = normalizarAngulo360(270.0f + erroAngular);
+    anguloComando = normalizarAngulo360(340.0f + erroAngular);
     return true;
   }
 
@@ -770,6 +771,10 @@ float anguloLinhaZonaB = -1.0f;
 bool linhaZonaAValida = false;
 bool linhaZonaBValida = false;
 unsigned long ultimoRxLinhaMs = 0;
+float ultimoAnguloLinhaZonaAValido = -1.0f;
+float ultimoAnguloLinhaZonaBValido = -1.0f;
+unsigned long ultimoRxLinhaZonaAMs = 0;
+unsigned long ultimoRxLinhaZonaBMs = 0;
 float ultimoAnguloLinhaValido = -1.0f;
 unsigned long ultimoComandoLinhaMs = 0;
 const int VELOCIDADE_FUGA_LINHA = 255;
@@ -1170,16 +1175,37 @@ void desenharOperacao() {
     display.println("SEM GOL");
   }
   display.print("LINHA ANG: ");
-  if (linhaDetectada) {
-    display.print(anguloLinhaPe, 1);
-    display.println(" deg");
+  if (papelAtacante) {
+    if (linhaDetectada) {
+      display.print(anguloLinhaPe, 1);
+      display.println(" deg");
 
-    // Quando houver linha, mostra tambem o angulo efetivo de fuga aplicado.
-    display.print("FUGA CMD: ");
-    display.print(anguloFugaLinhaCmd, 1);
-    display.println(" deg");
+      // Quando houver linha, mostra tambem o angulo efetivo de fuga aplicado.
+      display.print("FUGA CMD: ");
+      display.print(anguloFugaLinhaCmd, 1);
+      display.println(" deg");
+    } else {
+      display.println("SEM LINHA");
+    }
   } else {
-    display.println("SEM LINHA");
+    bool temZonaA = linhaZonaAValida && (anguloLinhaZonaA >= 0.0f);
+    bool temZonaB = linhaZonaBValida && (anguloLinhaZonaB >= 0.0f);
+    if (temZonaA || temZonaB) {
+      display.print("A:");
+      if (temZonaA) {
+        display.print(anguloLinhaZonaA, 0);
+      } else {
+        display.print("--");
+      }
+      display.print(" B:");
+      if (temZonaB) {
+        display.println(anguloLinhaZonaB, 0);
+      } else {
+        display.println("--");
+      }
+    } else {
+      display.println("SEM LINHA");
+    }
   }
   if (golVisivelOperacao) {
     display.print("ERRO: ");
@@ -1550,6 +1576,10 @@ void processarMensagemCabeca(String msg) {
     linhaZonaAValida = (novoAngA >= 0.0f);
     anguloLinhaZonaA = linhaZonaAValida ? novoAngA : -1.0f;
     ultimoRxLinhaMs = millis();
+    if (linhaZonaAValida) {
+      ultimoAnguloLinhaZonaAValido = anguloLinhaZonaA;
+      ultimoRxLinhaZonaAMs = ultimoRxLinhaMs;
+    }
     comunicacaoCabecaOK = true;
     ultimoRxCabeca = millis();
     return;
@@ -1563,6 +1593,10 @@ void processarMensagemCabeca(String msg) {
     linhaZonaBValida = (novoAngB >= 0.0f);
     anguloLinhaZonaB = linhaZonaBValida ? novoAngB : -1.0f;
     ultimoRxLinhaMs = millis();
+    if (linhaZonaBValida) {
+      ultimoAnguloLinhaZonaBValido = anguloLinhaZonaB;
+      ultimoRxLinhaZonaBMs = ultimoRxLinhaMs;
+    }
     comunicacaoCabecaOK = true;
     ultimoRxCabeca = millis();
     return;
@@ -1897,10 +1931,29 @@ float calcularVetorAtracaoLinha(float anguloA, float anguloB) {
 void defensor() {
   const float REFERENCIA_ZONA_A = 90.0f;
   const float REFERENCIA_ZONA_B = 270.0f;
-  const float TOLERANCIA_GIRO_LINHA_GRAUS = 10.0f;
+  const float TOLERANCIA_GIRO_LINHA_GRAUS = 5.0f;
+  const int VELOCIDADE_LATERAL_MIN_PWM = 120;
 
-  bool temZonaA = linhaZonaAValida && (anguloLinhaZonaA >= 0.0f);
-  bool temZonaB = linhaZonaBValida && (anguloLinhaZonaB >= 0.0f);
+  bool temZonaAAtual = linhaZonaAValida && (anguloLinhaZonaA >= 0.0f);
+  bool temZonaBAtual = linhaZonaBValida && (anguloLinhaZonaB >= 0.0f);
+  float anguloZonaAUsado = temZonaAAtual ? anguloLinhaZonaA : -1.0f;
+  float anguloZonaBUsado = temZonaBAtual ? anguloLinhaZonaB : -1.0f;
+
+  unsigned long agora = millis();
+  bool temZonaARetida = (!temZonaAAtual) && (ultimoAnguloLinhaZonaAValido >= 0.0f) &&
+                        ((agora - ultimoRxLinhaZonaAMs) <= RETENCAO_ZONA_LINHA_DEFENSOR_MS);
+  bool temZonaBRetida = (!temZonaBAtual) && (ultimoAnguloLinhaZonaBValido >= 0.0f) &&
+                        ((agora - ultimoRxLinhaZonaBMs) <= RETENCAO_ZONA_LINHA_DEFENSOR_MS);
+
+  if (temZonaARetida) {
+    anguloZonaAUsado = ultimoAnguloLinhaZonaAValido;
+  }
+  if (temZonaBRetida) {
+    anguloZonaBUsado = ultimoAnguloLinhaZonaBValido;
+  }
+
+  bool temZonaA = temZonaAAtual || temZonaARetida;
+  bool temZonaB = temZonaBAtual || temZonaBRetida;
 
   alinhandoAgora = false;
   fugindoLinhaAgora = false;
@@ -1916,13 +1969,13 @@ void defensor() {
   int quantidadeErros = 0;
 
   if (temZonaA) {
-    float erroA = normalizarErro180(anguloLinhaZonaA - REFERENCIA_ZONA_A);
+    float erroA = normalizarErro180(anguloZonaAUsado - REFERENCIA_ZONA_A);
     somaErro += erroA;
     quantidadeErros++;
   }
 
   if (temZonaB) {
-    float erroB = normalizarErro180(anguloLinhaZonaB - REFERENCIA_ZONA_B);
+    float erroB = normalizarErro180(anguloZonaBUsado - REFERENCIA_ZONA_B);
     somaErro += erroB;
     quantidadeErros++;
   }
@@ -1930,32 +1983,45 @@ void defensor() {
   float erroAngularLinha = (quantidadeErros > 0) ? (somaErro / (float)quantidadeErros) : 0.0f;
   erroAlinhamentoGraus = erroAngularLinha;
 
-  // Regra principal do defensor:
-  // PRECISA ALINHAR? se sim, alinha. se nao, segue a bola.
-  bool precisaAlinhar = (fabsf(erroAngularLinha) >= TOLERANCIA_GIRO_LINHA_GRAUS);
-  if (!precisaAlinhar) {
-    alinhandoAgora = false;
-    resetPidLinhaGoleiro();
-    if (irDetectado) {
-      if (anguloIr > 20.0f && anguloIr < 120.0f) {
-        seguirDirecaoPorAngulo(90.0f, map(anguloIr, 20.0f, 120.0f, 80, 200));
-        return;
-      } else if (anguloIr > 240.0f && anguloIr < 360.0f) {
-        seguirDirecaoPorAngulo(270.0f, map(anguloIr, 240.0f, 360.0f, 80, 200));
-        return;
-      }
+  // Giro do goleiro e calculado continuamente, independente do movimento lateral.
+  int cmdPid = calcularSaidaPidLinhaGoleiro(erroAngularLinha);
+  if (fabsf(erroAngularLinha) < TOLERANCIA_GIRO_LINHA_GRAUS) {
+    cmdPid = 0;
+  }
+  cmdPid = constrain(cmdPid, -180, 180);
+  int cmdGiro = SINAL_GIRO_PID * cmdPid;
+  alinhandoAgora = (fabsf(erroAngularLinha) >= TOLERANCIA_GIRO_LINHA_GRAUS);
+
+  // Movimento lateral da bola nunca bloqueia a correcao angular da linha.
+  float direcaoLateral = 0.0f;
+  int velocidadeLateral = 0;
+  bool moverLateral = false;
+
+  if (irDetectado) {
+    float anguloBola = normalizarAngulo360(anguloIr);
+
+    // Bola entre 25 e 90: desliza para direita (mais perto de 90 = mais rapido).
+    if (anguloBola >= 25.0f && anguloBola <= 90.0f) {
+      long velMapeada = map((long)roundf(anguloBola), 25, 90, VELOCIDADE_LATERAL_MIN_PWM, velocidade_maxima);
+      velocidadeLateral = constrain((int)velMapeada, VELOCIDADE_LATERAL_MIN_PWM, velocidade_maxima);
+      direcaoLateral = 90.0f;
+      moverLateral = true;
     }
-    pararMotores();
-    return;
+    // Bola entre 270 e 335: desliza para esquerda (mais perto de 270 = mais rapido).
+    else if (anguloBola >= 270.0f && anguloBola <= 335.0f) {
+      long velMapeada = map((long)roundf(anguloBola), 335, 270, VELOCIDADE_LATERAL_MIN_PWM, velocidade_maxima);
+      velocidadeLateral = constrain((int)velMapeada, VELOCIDADE_LATERAL_MIN_PWM, velocidade_maxima);
+      direcaoLateral = 270.0f;
+      moverLateral = true;
+    }
+    // Bola entre 335 e 25: para lateralmente e apenas mantem alinhamento angular.
   }
 
-  int cmdPid = calcularSaidaPidLinhaGoleiro(erroAngularLinha);
-  if (fabsf(erroAngularLinha) > 20.0f) {
-    cmdPid *= 2; // Aumenta agressividade se o erro for muito grande
+  if (moverLateral) {
+    seguirDirecaoComGiro(direcaoLateral, velocidadeLateral, cmdGiro);
+  } else {
+    seguirDirecaoComGiro(0.0f, 0, cmdGiro);
   }
-  alinhandoAgora = true;
-  int cmdGiro = SINAL_GIRO_PID * cmdPid;
-  girarNoEixo(cmdGiro);
 
 }
 
