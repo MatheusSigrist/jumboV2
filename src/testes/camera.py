@@ -22,7 +22,13 @@ cy = 110
 R2 = R * R
 
 DEBUG = True
-center = [172, 110]
+
+# centro de cada robô, descomentar conforme robô:
+# cronos
+# center = [174, 129]
+
+# nexus
+# center = [172, 113]
 
 # =========================================================
 # FILTRO ANTI-RUIDO DA BOLA

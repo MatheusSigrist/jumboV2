@@ -129,7 +129,7 @@ const unsigned long TIMEOUT_BUSSOLA_MS = 800;
 const unsigned long TIMEOUT_LINHA_MS = 300;
 const unsigned long TIMEOUT_ULTRA_MS = 1000;
 const unsigned long TIMEOUT_CAMERA_MS = 1000;
-// Velocidade Maxima do robô - Vamos alterar aqui!
+// Velocidade Maxima do rob├┤ - Vamos alterar aqui!
 const int velocidade_maxima = 220;
 const bool MOVIMENTO_BOLA_HABILITADO = false;
 
@@ -156,13 +156,13 @@ const float GANHO_GIRO_MISTO = 0.7f;
 
 // PID dedicado ao giro do goleiro usando apenas a linha (zonas A e B) como referencia.
 const float PID_LINHA_GOL_KP = 0.9f;
-const float PID_LINHA_GOL_KI = 0.00f;
+const float PID_LINHA_GOL_KI = 0.01f;
 const float PID_LINHA_GOL_KD = 0.55f;
 const float PID_LINHA_GOL_INTEGRAL_MAX = 90.0f;
-const int PID_LINHA_GOL_SAIDA_MIN = 40;
+const int PID_LINHA_GOL_SAIDA_MIN = 60;
 const int PID_LINHA_GOL_SAIDA_MAX = 220;
 
-// Velocidade dedicada para ataque frontal quando a bola estiver entre 330° e 30°.
+// Velocidade dedicada para ataque frontal quando a bola estiver entre 330┬░ e 30┬░.
 const int VELOCIDADE_IR_FRONTAL_PWM = 200;
 const int VELOCIDADE_IR_FAIXA_REDUZIDA_PWM = 140;
 const int PASSO_RAMPA_PWM = 16;
@@ -441,7 +441,7 @@ float converterAnguloGolParaDefensor(float anguloGolGraus) {
 
 // Calcula o erro angular atual do robo em relacao a referencia salva da bussola.
 float calcularErroAngularCampo() {
-  // A correção do campo vem do mesmo alinhamento usado pelo gol invertido.
+  // A corre├º├úo do campo vem do mesmo alinhamento usado pelo gol invertido.
   return erroAlinhamentoGraus;
 }
 
@@ -557,6 +557,57 @@ bool cameraTemGolSelecionadoValido(int16_t &anguloGol) {
   return cameraPacoteRecente() && (anguloGol != -999) && (distGol > 0);
 }
 
+constexpr float DEFENSOR_REFERENCIA_ZONA_A = 90.0f;
+constexpr float DEFENSOR_REFERENCIA_ZONA_B = 270.0f;
+constexpr float DEFENSOR_TOLERANCIA_GIRO_GRAUS = 5.0f;
+constexpr float DEFENSOR_PESO_MIN_BOLA = 75.0f;
+constexpr float DEFENSOR_PESO_MAX_BOLA = 180.0f;
+constexpr float DEFENSOR_ULTRA_LATERAL_ATIVO_CM = 70.0f;
+constexpr float DEFENSOR_ULTRA_LATERAL_CRITICO_CM = 50.0f;
+constexpr float DEFENSOR_ULTRA_LATERAL_CONFIRMADOR_CM = 60.0f;
+constexpr float DEFENSOR_ULTRA_FRENTE_LIMITE_CM = 40.0f;
+constexpr float DEFENSOR_ULTRA_TRAS_LIMITE_CM = 35.0f;
+constexpr float DEFENSOR_ULTRA_FRONTAL_CONFIRMADOR_CM = 100.0f;
+constexpr float DEFENSOR_ULTRA_PROFUNDIDADE_MAX_CM = 60.0f;
+constexpr float DEFENSOR_ULTRA_PROFUNDIDADE_MIN_CM = 10.0f;
+constexpr float DEFENSOR_PESO_MAX_ULTRA = 100.0f;
+constexpr float DEFENSOR_PESO_MAX_ULTRA_PROFUNDIDADE = 38.0f;
+constexpr float DEFENSOR_DEADZONE_VETOR = 6.0f;
+constexpr float DEFENSOR_DEADZONE_GIRO = 4.0f;
+constexpr float DEFENSOR_VELOCIDADE_MIN_PWM = 140.0f;
+constexpr float DEFENSOR_SUAVIZACAO_VETOR = 0.45f;
+constexpr float DEFENSOR_SUAVIZACAO_GIRO = 0.35f;
+
+float mapearFaixaClamped(float valor, float entradaMin, float entradaMax, float saidaMin, float saidaMax) {
+  float denominador = entradaMax - entradaMin;
+  if (fabsf(denominador) < 0.0001f) {
+    return saidaMin;
+  }
+
+  float proporcao = (valor - entradaMin) / denominador;
+  if (proporcao < 0.0f) proporcao = 0.0f;
+  if (proporcao > 1.0f) proporcao = 1.0f;
+  return saidaMin + ((saidaMax - saidaMin) * proporcao);
+}
+
+float suavizarDefensor(float atual, float alvo, float fator) {
+  float fatorClamped = constrain(fator, 0.0f, 1.0f);
+  return atual + ((alvo - atual) * fatorClamped);
+}
+
+float aplicarDeadzoneDefensor(float valor, float deadzone) {
+  return (fabsf(valor) < deadzone) ? 0.0f : valor;
+}
+
+float calcularMagnitudeVetorDefensor(float vetorX, float vetorY) {
+  return sqrtf((vetorX * vetorX) + (vetorY * vetorY));
+}
+
+float calcularAnguloVetorDefensor(float vetorX, float vetorY) {
+  // A base usa 0 = frente e 90 = direita, por isso atan2(X, Y).
+  return normalizarAngulo360(atan2f(vetorX, vetorY) * 180.0f / PI);
+}
+
 // Declaracoes antecipadas para uso no teste de centro da linha.
 extern bool linhaDetectada;
 extern float anguloLinhaPe;
@@ -595,7 +646,7 @@ int calcularVelocidadeIrPorAngulo(float anguloBolaGraus) {
   return velocidade_maxima;
 }
 
-// Detecta a faixa frontal do IR em torno de 0°, tratando a transicao 360° -> 0°.
+// Detecta a faixa frontal do IR em torno de 0┬░, tratando a transicao 360┬░ -> 0┬░.
 bool irNaFaixaFrontal(float anguloBolaGraus) {
   float ang = normalizarAngulo360(anguloBolaGraus);
   return (ang >= 340.0f || ang <= 20.0f);
@@ -1929,10 +1980,9 @@ float calcularVetorAtracaoLinha(float anguloA, float anguloB) {
 }
 
 void defensor() {
-  const float REFERENCIA_ZONA_A = 90.0f;
-  const float REFERENCIA_ZONA_B = 270.0f;
-  const float TOLERANCIA_GIRO_LINHA_GRAUS = 5.0f;
-  const int VELOCIDADE_LATERAL_MIN_PWM = 120;
+  static float vetorXSuave = 0.0f;
+  static float vetorYSuave = 0.0f;
+  static float cmdGiroSuave = 0.0f;
 
   bool temZonaAAtual = linhaZonaAValida && (anguloLinhaZonaA >= 0.0f);
   bool temZonaBAtual = linhaZonaBValida && (anguloLinhaZonaB >= 0.0f);
@@ -1958,70 +2008,117 @@ void defensor() {
   alinhandoAgora = false;
   fugindoLinhaAgora = false;
 
-  if (!temZonaA && !temZonaB) {
-    erroAlinhamentoGraus = 0.0f;
-    resetPidLinhaGoleiro();
-    pararMotores();
-    return;
-  }
-
-  float somaErro = 0.0f;
+  float erroAngularLinha = 0.0f;
   int quantidadeErros = 0;
 
   if (temZonaA) {
-    float erroA = normalizarErro180(anguloZonaAUsado - REFERENCIA_ZONA_A);
-    somaErro += erroA;
+    erroAngularLinha += normalizarErro180(anguloZonaAUsado - DEFENSOR_REFERENCIA_ZONA_A);
     quantidadeErros++;
   }
 
   if (temZonaB) {
-    float erroB = normalizarErro180(anguloZonaBUsado - REFERENCIA_ZONA_B);
-    somaErro += erroB;
+    erroAngularLinha += normalizarErro180(anguloZonaBUsado - DEFENSOR_REFERENCIA_ZONA_B);
     quantidadeErros++;
   }
 
-  float erroAngularLinha = (quantidadeErros > 0) ? (somaErro / (float)quantidadeErros) : 0.0f;
+  if (quantidadeErros > 0) {
+    erroAngularLinha /= (float)quantidadeErros;
+  } else {
+    resetPidLinhaGoleiro();
+  }
+
+  erroAngularLinha = aplicarDeadzoneDefensor(erroAngularLinha, 0.5f);
   erroAlinhamentoGraus = erroAngularLinha;
 
-  // Giro do goleiro e calculado continuamente, independente do movimento lateral.
   int cmdPid = calcularSaidaPidLinhaGoleiro(erroAngularLinha);
-  if (fabsf(erroAngularLinha) < TOLERANCIA_GIRO_LINHA_GRAUS) {
+  if (fabsf(erroAngularLinha) < DEFENSOR_TOLERANCIA_GIRO_GRAUS) {
     cmdPid = 0;
   }
   cmdPid = constrain(cmdPid, -180, 180);
-  int cmdGiro = SINAL_GIRO_PID * cmdPid;
-  alinhandoAgora = (fabsf(erroAngularLinha) >= TOLERANCIA_GIRO_LINHA_GRAUS);
 
-  // Movimento lateral da bola nunca bloqueia a correcao angular da linha.
-  float direcaoLateral = 0.0f;
-  int velocidadeLateral = 0;
-  bool moverLateral = false;
+  float cmdGiroAlvo = (float)(SINAL_GIRO_PID * cmdPid);
+  if (fabsf(cmdGiroAlvo) < DEFENSOR_DEADZONE_GIRO) {
+    cmdGiroAlvo = 0.0f;
+  }
+  cmdGiroSuave = suavizarDefensor(cmdGiroSuave, cmdGiroAlvo, DEFENSOR_SUAVIZACAO_GIRO);
+  int cmdGiro = (int)roundf(cmdGiroSuave);
+  alinhandoAgora = (fabsf(erroAngularLinha) >= DEFENSOR_TOLERANCIA_GIRO_GRAUS);
 
+  float vetorX = 0.0f;
+  float vetorY = 0.0f;
+  const bool centroLinhaValido = temZonaA && temZonaB;
+  const float pesoAtracaoLinha = 35.0f;
+  const float fatorBolaComLinha = centroLinhaValido ? 0.8f : 1.58f;
+  const float fatorUltra = centroLinhaValido ? 0.75f : 1.0f;
+  const float bolaDireitaMin = 15.0f;
+  const float bolaDireitaMax = 105.0f;
+  const float bolaEsquerdaMin = 255.0f;
+  const float bolaEsquerdaMax = 345.0f;
+
+  if (centroLinhaValido) {
+    float anguloCentroLinha = calcularVetorAtracaoLinha(anguloZonaAUsado, anguloZonaBUsado);
+    float anguloCentroLinhaRad = anguloCentroLinha * PI / 180.0f;
+
+    // O centro entre A e B passa a ser a prioridade maxima de translacao do defensor.
+    vetorX += sinf(anguloCentroLinhaRad) * pesoAtracaoLinha;
+    vetorY += cosf(anguloCentroLinhaRad) * pesoAtracaoLinha;
+  }
+
+  // Bola: mantem a mesma logica de peso, mas usa a camera quando o IR nao estiver vendo.
+  float anguloBola = -1.0f;
+  bool bolaDisponivel = false;
   if (irDetectado) {
-    float anguloBola = normalizarAngulo360(anguloIr);
-
-    // Bola entre 25 e 90: desliza para direita (mais perto de 90 = mais rapido).
-    if (anguloBola >= 25.0f && anguloBola <= 90.0f) {
-      long velMapeada = map((long)roundf(anguloBola), 25, 90, VELOCIDADE_LATERAL_MIN_PWM, velocidade_maxima);
-      velocidadeLateral = constrain((int)velMapeada, VELOCIDADE_LATERAL_MIN_PWM, velocidade_maxima);
-      direcaoLateral = 90.0f;
-      moverLateral = true;
-    }
-    // Bola entre 270 e 335: desliza para esquerda (mais perto de 270 = mais rapido).
-    else if (anguloBola >= 270.0f && anguloBola <= 335.0f) {
-      long velMapeada = map((long)roundf(anguloBola), 335, 270, VELOCIDADE_LATERAL_MIN_PWM, velocidade_maxima);
-      velocidadeLateral = constrain((int)velMapeada, VELOCIDADE_LATERAL_MIN_PWM, velocidade_maxima);
-      direcaoLateral = 270.0f;
-      moverLateral = true;
-    }
-    // Bola entre 335 e 25: para lateralmente e apenas mantem alinhamento angular.
+    anguloBola = normalizarAngulo360(anguloIr);
+    bolaDisponivel = true;
+  } else if (cameraTemBolaValida()) {
+    anguloBola = normalizarAngulo360((float)cameraBallAngle);
+    bolaDisponivel = true;
   }
 
-  if (moverLateral) {
-    seguirDirecaoComGiro(direcaoLateral, velocidadeLateral, cmdGiro);
-  } else {
-    seguirDirecaoComGiro(0.0f, 0, cmdGiro);
+  if (bolaDisponivel) {
+    if (anguloBola >= bolaDireitaMin && anguloBola <= bolaDireitaMax) {
+      vetorX += mapearFaixaClamped(anguloBola, bolaDireitaMin, bolaDireitaMax, DEFENSOR_PESO_MIN_BOLA, DEFENSOR_PESO_MAX_BOLA) * fatorBolaComLinha;
+    }
+    if (anguloBola >= bolaEsquerdaMin && anguloBola <= bolaEsquerdaMax) {
+      vetorX -= mapearFaixaClamped(anguloBola, bolaEsquerdaMax, bolaEsquerdaMin, DEFENSOR_PESO_MIN_BOLA, DEFENSOR_PESO_MAX_BOLA) * fatorBolaComLinha;
+    }
   }
+
+  // Ultrassons: vetores de contencao, nunca mais como prioridade bloqueante.
+  bool ultrasRecentes = ultrasValidos && (ultimoRxUltraMs > 0) && ((agora - ultimoRxUltraMs) <= TIMEOUT_ULTRA_MS);
+  if (ultrasRecentes) {
+    if ((ultraDcm >= 0.0f) && (ultraDcm < DEFENSOR_ULTRA_LATERAL_ATIVO_CM) && (ultraEcm > DEFENSOR_ULTRA_LATERAL_CONFIRMADOR_CM)) {
+      vetorX -= mapearFaixaClamped(ultraDcm, DEFENSOR_ULTRA_LATERAL_ATIVO_CM, DEFENSOR_ULTRA_LATERAL_CRITICO_CM, 0.0f, DEFENSOR_PESO_MAX_ULTRA) * fatorUltra;
+    }
+    if ((ultraEcm >= 0.0f) && (ultraEcm < DEFENSOR_ULTRA_LATERAL_ATIVO_CM) && (ultraDcm > DEFENSOR_ULTRA_LATERAL_CONFIRMADOR_CM)) {
+      vetorX += mapearFaixaClamped(ultraEcm, DEFENSOR_ULTRA_LATERAL_ATIVO_CM, DEFENSOR_ULTRA_LATERAL_CRITICO_CM, 0.0f, DEFENSOR_PESO_MAX_ULTRA) * fatorUltra;
+    }
+    if ((ultraTcm > DEFENSOR_ULTRA_FRENTE_LIMITE_CM) && (ultraFcm > DEFENSOR_ULTRA_FRONTAL_CONFIRMADOR_CM)) {
+      vetorY -= mapearFaixaClamped(ultraTcm, DEFENSOR_ULTRA_FRENTE_LIMITE_CM, DEFENSOR_ULTRA_PROFUNDIDADE_MAX_CM, 0.0f, DEFENSOR_PESO_MAX_ULTRA_PROFUNDIDADE) * fatorUltra;
+    }
+    if ((ultraTcm >= 0.0f) && (ultraTcm < DEFENSOR_ULTRA_TRAS_LIMITE_CM) && (ultraFcm > DEFENSOR_ULTRA_FRONTAL_CONFIRMADOR_CM)) {
+      vetorY += mapearFaixaClamped(ultraTcm, DEFENSOR_ULTRA_TRAS_LIMITE_CM, DEFENSOR_ULTRA_PROFUNDIDADE_MIN_CM, 0.0f, DEFENSOR_PESO_MAX_ULTRA_PROFUNDIDADE) * fatorUltra;
+    }
+  }
+
+  vetorX = aplicarDeadzoneDefensor(vetorX, DEFENSOR_DEADZONE_VETOR);
+  vetorY = aplicarDeadzoneDefensor(vetorY, DEFENSOR_DEADZONE_VETOR);
+
+  // Suavizacao exponencial para reduzir jitter entre frames.
+  vetorXSuave = suavizarDefensor(vetorXSuave, vetorX, DEFENSOR_SUAVIZACAO_VETOR);
+  vetorYSuave = suavizarDefensor(vetorYSuave, vetorY, DEFENSOR_SUAVIZACAO_VETOR);
+  vetorXSuave = aplicarDeadzoneDefensor(vetorXSuave, DEFENSOR_DEADZONE_VETOR * 0.5f);
+  vetorYSuave = aplicarDeadzoneDefensor(vetorYSuave, DEFENSOR_DEADZONE_VETOR * 0.5f);
+
+  // Resultado final: soma de linha, bola e ultras em um unico comando de translacao.
+  float magnitudeVetor = calcularMagnitudeVetorDefensor(vetorXSuave, vetorYSuave);
+  int velocidadeFinal = (int)roundf(constrain(magnitudeVetor, 0.0f, (float)velocidade_maxima));
+  if (velocidadeFinal > 0 && velocidadeFinal < DEFENSOR_VELOCIDADE_MIN_PWM) {
+    velocidadeFinal = (int)DEFENSOR_VELOCIDADE_MIN_PWM;
+  }
+
+  float anguloFinal = calcularAnguloVetorDefensor(vetorXSuave, vetorYSuave);
+  seguirDirecaoComGiro(anguloFinal, velocidadeFinal, cmdGiro);
 
 }
 
