@@ -17,6 +17,8 @@ bool corGolAzul = false;      // false = amarelo, true = azul
 #define ID_PLACA_OLHO 0x01
 #define ID_PLACA_PE 0x02
 #define ID_PLACA_CAMERA 0x03
+#define CAMERA_TIMEOUT_MS 2000
+#define CAMERA_RESET_INTERVAL_MS 10000
 
 #define EEPROM_SIZE 16
 #define EEPROM_ADDR_COR_GOL 0
@@ -255,8 +257,63 @@ uint16_t blueCameraDist = 0;
 int16_t yellowCameraAngle = -999;
 uint16_t yellowCameraDist = 0;
 unsigned long ultimoRxCameraMs = 0;  // timestamp do ultimo pacote valido recebido da camera
+unsigned long ultimaAtividadeCameraMs = 0;
+unsigned long ultimoResetCameraMs = 0;
+bool cameraOffline = false;
+uint16_t falhasCamera = 0;
+const uint8_t CAMERA_PAYLOAD_BYTES = 12;
+const uint16_t CAMERA_INVALID_BYTES_FLUSH_LIMIT = 32;
+const unsigned long CAMERA_INTERBYTE_TIMEOUT_MS = 20;
+uint16_t bytesInvalidosCamera = 0;
 String bufferHandshakeCabeca = "";
 unsigned long ultimoByteHandshakeCabeca = 0;
+
+enum EstadoRxCamera {
+  CAMERA_RX_AGUARDANDO_START = 0,
+  CAMERA_RX_AGUARDANDO_ID,
+  CAMERA_RX_LENDO_PAYLOAD,
+  CAMERA_RX_AGUARDANDO_STOP
+};
+
+void RegistrarFalhaCamera(const char *mensagem) {
+  falhasCamera++;
+  Serial.println(mensagem);
+}
+
+void LimparBufferCameraCorrompido() {
+  while (Serial2.available() > 0) {
+    Serial2.read();
+  }
+  bytesInvalidosCamera = 0;
+  Serial.println("CAMERA BUFFER FLUSH");
+}
+
+void ResetCamera() {
+  Serial2.println("RESET");
+  ultimoResetCameraMs = millis();
+  Serial.println("CAMERA RESET SENT");
+  Serial.println("WATCHDOG: RESET CAMERA");
+}
+
+void AplicarPayloadCamera(const uint8_t *payload) {
+  ballCameraAngle = (int16_t)((payload[0] << 8) | payload[1]);
+  ballCameraDist = (uint16_t)((payload[2] << 8) | payload[3]);
+
+  blueCameraAngle = (int16_t)((payload[4] << 8) | payload[5]);
+  blueCameraDist = (uint16_t)((payload[6] << 8) | payload[7]);
+
+  yellowCameraAngle = (int16_t)((payload[8] << 8) | payload[9]);
+  yellowCameraDist = (uint16_t)((payload[10] << 8) | payload[11]);
+
+  ultimoRxCameraMs = millis();
+  ultimaAtividadeCameraMs = ultimoRxCameraMs;
+  bytesInvalidosCamera = 0;
+
+  if (cameraOffline) {
+    Serial.println("CAMERA RECOVERED");
+  }
+  cameraOffline = false;
+}
 
 // Responde handshake textual da Cabeca sem atrapalhar o protocolo binario.
 void ProcessarPingCabeca() {
@@ -335,34 +392,98 @@ void LeituraSerial() {
 
 // Le pacote da camera com dados de BOLA + 2 GOLS (ângulo e distância cada)
 void LeituraCamera() {
+  static EstadoRxCamera estadoRx = CAMERA_RX_AGUARDANDO_START;
+  static uint8_t payload[CAMERA_PAYLOAD_BYTES];
+  static uint8_t indicePayload = 0;
+  static unsigned long ultimoByteCameraParserMs = 0;
+
+  unsigned long agora = millis();
+
   // Protocolo camera: [0xAA][ID=0x03][12 bytes payload][0x55]
   // Payload: [BALL_A(2B)][BALL_D(2B)][BLUE_A(2B)][BLUE_D(2B)][YELLOW_A(2B)][YELLOW_D(2B)]
-  while (Serial2.available() >= 15) {  // 1 + 1 + 12 + 1 = 15 bytes totais
-    if (Serial2.read() != BYTE_INICIA) continue;
+  while (Serial2.available() > 0) {
+    uint8_t dado = (uint8_t)Serial2.read();
+    agora = millis();
+    ultimaAtividadeCameraMs = agora;
 
-    byte id = Serial2.read();
-    if (id != ID_PLACA_CAMERA) {
-      continue;
+    if ((estadoRx != CAMERA_RX_AGUARDANDO_START) &&
+        ((agora - ultimoByteCameraParserMs) > CAMERA_INTERBYTE_TIMEOUT_MS)) {
+      estadoRx = CAMERA_RX_AGUARDANDO_START;
+      indicePayload = 0;
+      RegistrarFalhaCamera("CAMERA PACKET INVALID");
     }
 
-    byte payload[12];
-    Serial2.readBytes(payload, 12);
-    byte stop = Serial2.read();
-    if (stop != BYTE_PARA) {
-      continue;
+    ultimoByteCameraParserMs = agora;
+
+    switch (estadoRx) {
+      case CAMERA_RX_AGUARDANDO_START:
+        if (dado == BYTE_INICIA) {
+          estadoRx = CAMERA_RX_AGUARDANDO_ID;
+          indicePayload = 0;
+        } else {
+          bytesInvalidosCamera++;
+        }
+        break;
+
+      case CAMERA_RX_AGUARDANDO_ID:
+        if (dado == ID_PLACA_CAMERA) {
+          estadoRx = CAMERA_RX_LENDO_PAYLOAD;
+          indicePayload = 0;
+        } else if (dado == BYTE_INICIA) {
+          estadoRx = CAMERA_RX_AGUARDANDO_ID;
+          indicePayload = 0;
+          bytesInvalidosCamera++;
+        } else {
+          estadoRx = CAMERA_RX_AGUARDANDO_START;
+          indicePayload = 0;
+          bytesInvalidosCamera++;
+          RegistrarFalhaCamera("CAMERA PACKET INVALID");
+        }
+        break;
+
+      case CAMERA_RX_LENDO_PAYLOAD:
+        payload[indicePayload++] = dado;
+        if (indicePayload >= CAMERA_PAYLOAD_BYTES) {
+          estadoRx = CAMERA_RX_AGUARDANDO_STOP;
+        }
+        break;
+
+      case CAMERA_RX_AGUARDANDO_STOP:
+        if (dado == BYTE_PARA) {
+          AplicarPayloadCamera(payload);
+          estadoRx = CAMERA_RX_AGUARDANDO_START;
+          indicePayload = 0;
+        } else {
+          bytesInvalidosCamera++;
+          RegistrarFalhaCamera("CAMERA PACKET INVALID");
+          estadoRx = (dado == BYTE_INICIA) ? CAMERA_RX_AGUARDANDO_ID : CAMERA_RX_AGUARDANDO_START;
+          indicePayload = 0;
+        }
+        break;
     }
 
-    // Desempacota dados em big-endian (como enviado pela camera)
-    ballCameraAngle = (int16_t)((payload[0] << 8) | payload[1]);
-    ballCameraDist = (uint16_t)((payload[2] << 8) | payload[3]);
-    
-    blueCameraAngle = (int16_t)((payload[4] << 8) | payload[5]);
-    blueCameraDist = (uint16_t)((payload[6] << 8) | payload[7]);
-    
-    yellowCameraAngle = (int16_t)((payload[8] << 8) | payload[9]);
-    yellowCameraDist = (uint16_t)((payload[10] << 8) | payload[11]);
-    
-    ultimoRxCameraMs = millis();  // marca que camera esta viva
+    if (bytesInvalidosCamera >= CAMERA_INVALID_BYTES_FLUSH_LIMIT) {
+      LimparBufferCameraCorrompido();
+      estadoRx = CAMERA_RX_AGUARDANDO_START;
+      indicePayload = 0;
+      RegistrarFalhaCamera("CAMERA PACKET INVALID");
+      break;
+    }
+  }
+
+  unsigned long referenciaAtividadeCameraMs = (ultimaAtividadeCameraMs > 0) ? ultimaAtividadeCameraMs : ultimoRxCameraMs;
+  bool cameraSemAtividade = ((referenciaAtividadeCameraMs > 0) && ((agora - referenciaAtividadeCameraMs) > CAMERA_TIMEOUT_MS)) ||
+                            ((referenciaAtividadeCameraMs == 0) && (agora > CAMERA_TIMEOUT_MS));
+
+  if (cameraSemAtividade) {
+    if (!cameraOffline) {
+      cameraOffline = true;
+      RegistrarFalhaCamera("CAMERA TIMEOUT");
+    }
+
+    if ((agora - ultimoResetCameraMs) > CAMERA_RESET_INTERVAL_MS) {
+      ResetCamera();
+    }
   }
 }
 
@@ -387,7 +508,7 @@ void enviarDados() {
   p.yellowDist = yellowCameraDist;
   // ===== FIM dados camera =====
   
-  p.cameraOK = ((ultimoRxCameraMs > 0) && ((millis() - ultimoRxCameraMs) < 3000)) ? 1 : 0;
+  p.cameraOK = (!cameraOffline && (ultimaAtividadeCameraMs > 0) && ((millis() - ultimaAtividadeCameraMs) <= CAMERA_TIMEOUT_MS)) ? 1 : 0;
 
   Serial1.write(BYTE_INICIA);
   Serial1.write(ID_PLACA_OLHO);
@@ -418,6 +539,7 @@ void setup() {
 
     Serial1.begin(115200, SERIAL_8N1, RX_CABECA, TX_CABECA);
     Serial2.begin(115200, SERIAL_8N1, RX_CAMERA, TX_CAMERA);
+    Serial2.setTimeout(5);
 }
 
 // Laco principal: handshake, leituras de sensores e envio de pacote.

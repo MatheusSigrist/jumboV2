@@ -2,10 +2,13 @@ import sensor
 import time
 import math
 import struct
+import machine
 from machine import UART
 
 # ===== COMUNICAÇÃO SERIAL COM OLHO =====
 uart_olho = UART(1, 115200, timeout_char=200)
+UART_CMD_MAX_LEN = 16
+uart_cmd_buffer = bytearray()
 
 # ===== PROTOCOLO SERIAL =====
 BYTE_INICIA = 0xAA
@@ -22,6 +25,7 @@ cy = 110
 R2 = R * R
 
 DEBUG = True
+center = [174, 129]
 
 # centro de cada robô, descomentar conforme robô:
 # cronos
@@ -267,7 +271,7 @@ def enviar_dados_visao(ball_angle, ball_dist, blue_angle, blue_dist, yellow_angl
     yellow_d_raw = max(0, min(65535, yellow_d_raw))
 
     # Empacota dados: > = big-endian, h = int16, H = uint16
-    msg = struct.pack(">hHhHhH", 
+    msg = struct.pack(">hHhHhH",
                       ball_a_raw, ball_d_raw,
                       blue_a_raw, blue_d_raw,
                       yellow_a_raw, yellow_d_raw)
@@ -280,6 +284,53 @@ def enviar_dados_visao(ball_angle, ball_dist, blue_angle, blue_dist, yellow_angl
     buffer[14] = BYTE_PARA
 
     uart_olho.write(buffer)
+
+
+def reiniciar_camera_por_uart():
+    """
+    Executa reset logico solicitado pela placa Olho.
+    O reboot por software e o caminho mais robusto para recuperar travas da OpenMV.
+    """
+    print("UART CMD: RESET")
+    machine.reset()
+
+
+def processar_comandos_uart():
+    """
+    Le comandos ASCII vindos do Olho sem interferir no frame binario enviado pela camera.
+    Protocolo esperado do watchdog: RESET\r\n
+    """
+    global uart_cmd_buffer
+
+    if not uart_olho.any():
+        return
+
+    dados = uart_olho.read()
+    if not dados:
+        return
+
+    for byte in dados:
+        if byte == 10 or byte == 13:
+            if not uart_cmd_buffer:
+                continue
+
+            comando = bytes(uart_cmd_buffer).strip()
+            uart_cmd_buffer = bytearray()
+
+            if comando == b"RESET":
+                reiniciar_camera_por_uart()
+            continue
+
+        if 97 <= byte <= 122:
+            byte -= 32
+
+        if 32 <= byte <= 126:
+            if len(uart_cmd_buffer) < UART_CMD_MAX_LEN:
+                uart_cmd_buffer.append(byte)
+            else:
+                uart_cmd_buffer = bytearray()
+        else:
+            uart_cmd_buffer = bytearray()
 
 
 # =========================================================
@@ -318,6 +369,7 @@ print("Iniciando detecção...")
 
 while True:
     clock.tick()
+    processar_comandos_uart()
     img = sensor.snapshot()
 
     # Máscara quadrada externa
