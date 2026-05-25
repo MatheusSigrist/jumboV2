@@ -543,14 +543,6 @@ bool cameraTemGolSelecionadoValido(int16_t &anguloGol) {
   uint16_t distGol = usarAzul ? cameraBlueDist : cameraYellowDist;
   anguloGol = usarAzul ? cameraBlueAngle : cameraYellowAngle;
 
-  // No defensor, o angulo lido passa a ser o angulo invertido (+180 mod 360).
-  if (!papelAtacante && anguloGol != -999) {
-    float convertido = converterAnguloGolParaDefensor((float)anguloGol);
-    anguloGol = (int16_t)roundf(convertido);
-    if (anguloGol >= 360) {
-      anguloGol = 0;
-    }
-  }
 
   // Considera valido apenas quando houver pacote recente, angulo valido e distancia positiva.
   // Isso evita falso positivo de angulo 0 sem deteccao real, que no defensor vira erro -180.

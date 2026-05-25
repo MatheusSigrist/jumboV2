@@ -18,7 +18,7 @@ bool corGolAzul = false;      // false = amarelo, true = azul
 #define ID_PLACA_PE 0x02
 #define ID_PLACA_CAMERA 0x03
 #define CAMERA_TIMEOUT_MS 2000
-#define CAMERA_RESET_INTERVAL_MS 10000
+#define CAMERA_RESET_INTERVAL_MS 10000 // Tempo WatchDog
 
 #define EEPROM_SIZE 16
 #define EEPROM_ADDR_COR_GOL 0
