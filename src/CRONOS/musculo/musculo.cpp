@@ -559,6 +559,13 @@ bool cameraTemGolSelecionadoValido(int16_t &anguloGol) {
   return cameraGolSelecionadoValido;
 }
 
+bool cameraTemGolRetornoDefensorValido(int16_t &anguloGol) {
+  bool usarGolAzul = !corGolAzul;
+  uint16_t distGol = usarGolAzul ? cameraBlueDist : cameraYellowDist;
+  anguloGol = usarGolAzul ? cameraBlueAngle : cameraYellowAngle;
+  return cameraPacoteRecente() && (anguloGol != -999) && (distGol > 0);
+}
+
 constexpr float DEFENSOR_REFERENCIA_ZONA_A = 90.0f;
 constexpr float DEFENSOR_REFERENCIA_ZONA_B = 270.0f;
 constexpr float DEFENSOR_TOLERANCIA_GIRO_GRAUS = 5.0f;
@@ -577,6 +584,7 @@ constexpr float DEFENSOR_PESO_MAX_ULTRA_PROFUNDIDADE = 38.0f;
 constexpr float DEFENSOR_DEADZONE_VETOR = 6.0f;
 constexpr float DEFENSOR_DEADZONE_GIRO = 4.0f;
 constexpr float DEFENSOR_VELOCIDADE_MIN_PWM = 140.0f;
+constexpr float DEFENSOR_VELOCIDADE_RETORNO_GOL_PWM = 165.0f;
 constexpr float DEFENSOR_SUAVIZACAO_VETOR = 0.45f;
 constexpr float DEFENSOR_SUAVIZACAO_GIRO = 0.35f;
 
@@ -1989,7 +1997,14 @@ void defensor() {
   int16_t anguloGolSelecionadoMenu = -999;
   uint16_t distanciaGolSelecionadoMenu = 0;
   bool golSelecionadoMenuVisivel = cameraLerGolSelecionadoMenu(anguloGolSelecionadoMenu, distanciaGolSelecionadoMenu);
+  int16_t anguloGolRetornoDefensor = -999;
+  bool golRetornoDefensorVisivel = cameraTemGolRetornoDefensorValido(anguloGolRetornoDefensor);
   static unsigned long ultimoPrintGolSelecionadoMs = 0;
+
+  if (!golRetornoDefensorVisivel && golSelecionadoMenuVisivel) {
+    anguloGolRetornoDefensor = (int16_t)roundf(converterAnguloGolParaDefensor((float)anguloGolSelecionadoMenu));
+    golRetornoDefensorVisivel = true;
+  }
 
   if ((millis() - ultimoPrintGolSelecionadoMs) >= 200) {
     Serial.print("DEF GOL MENU: ");
@@ -2029,6 +2044,7 @@ void defensor() {
 
   bool temZonaA = temZonaAAtual || temZonaARetida;
   bool temZonaB = temZonaBAtual || temZonaBRetida;
+  bool linhaDefensorDisponivel = temZonaA || temZonaB;
 
   alinhandoAgora = false;
   fugindoLinhaAgora = false;
@@ -2080,6 +2096,18 @@ void defensor() {
   const float bolaEsquerdaMin = 255.0f;
   const float bolaEsquerdaMax = 345.0f;
 
+  if (!linhaDefensorDisponivel && golRetornoDefensorVisivel) {
+    erroAlinhamentoGraus = 0.0f;
+    alinhandoAgora = false;
+    resetPidLinhaGoleiro();
+    vetorXSuave = 0.0f;
+    vetorYSuave = 0.0f;
+    cmdGiroSuave = 0.0f;
+    seguirDirecaoPorAngulo(normalizarAngulo360(normalizarAngulo360((float)anguloGolRetornoDefensor + 180)),
+                           (int)DEFENSOR_VELOCIDADE_RETORNO_GOL_PWM);
+    return;
+  }
+
   if (centroLinhaValido) {
     float anguloCentroLinha = calcularVetorAtracaoLinha(anguloZonaAUsado, anguloZonaBUsado);
     float anguloCentroLinhaRad = anguloCentroLinha * PI / 180.0f;
@@ -2092,10 +2120,7 @@ void defensor() {
   // Bola: mantem a mesma logica de peso, mas usa a camera quando o IR nao estiver vendo.
   float anguloBola = -1.0f;
   bool bolaDisponivel = false;
-  if (distanciaGolSelecionadoMenu > 50) {
-    seguirDirecaoComGiro(normalizarAngulo360((float)anguloGolSelecionadoMenu), velocidade_maxima, cmdGiro);
-    return;
-  }
+
 
   if (irDetectado) {
     anguloBola = normalizarAngulo360(anguloIr);
