@@ -103,6 +103,10 @@ int16_t cameraBlueAngle = -999;
 uint16_t cameraBlueDist = 0;
 int16_t cameraYellowAngle = -999;
 uint16_t cameraYellowDist = 0;
+int16_t cameraGolSelecionadoAngle = -999;
+uint16_t cameraGolSelecionadoDist = 0;
+bool cameraGolSelecionadoValido = false;
+bool cameraGolSelecionadoAzul = false;
 bool cameraDadosValidos = false;
 unsigned long ultimoRxCameraMs = 0;
 // ===== FIM novos dados camera =====
@@ -512,15 +516,21 @@ bool cameraPacoteRecente() {
 
 void atualizarValidadeCamera() {
   cameraDadosValidos = cameraPacoteRecente();
+  cameraGolSelecionadoAzul = corGolAzul;
+  cameraGolSelecionadoAngle = cameraGolSelecionadoAzul ? cameraBlueAngle : cameraYellowAngle;
+  cameraGolSelecionadoDist = cameraGolSelecionadoAzul ? cameraBlueDist : cameraYellowDist;
+  cameraGolSelecionadoValido = cameraPacoteRecente() &&
+                               (cameraGolSelecionadoAngle != -999) &&
+                               (cameraGolSelecionadoDist > 0);
 }
 
 bool cameraTemBolaValida() {
   return cameraPacoteRecente() && (cameraBallAngle != -999);
 }
 
-// Atacante usa o gol calibrado; defensor usa o gol oposto como referencia.
+// O gol selecionado global segue diretamente a cor escolhida na calibracao.
 bool golReferenciaAzulEfetiva() {
-  return papelAtacante ? corGolAzul : !corGolAzul;
+  return corGolAzul;
 }
 
 // No defensor, espelha o alinhamento para usar o gol de tras como referencia:
@@ -538,15 +548,15 @@ float calcularErroGolPorPapel(float anguloGolGraus) {
   return calcularErroGolEspelhadoDefensor(anguloGolGraus);
 }
 
+bool cameraLerGolSelecionadoMenu(int16_t &anguloGol, uint16_t &distGol) {
+  anguloGol = cameraGolSelecionadoAngle;
+  distGol = cameraGolSelecionadoDist;
+  return cameraGolSelecionadoValido;
+}
+
 bool cameraTemGolSelecionadoValido(int16_t &anguloGol) {
-  bool usarAzul = golReferenciaAzulEfetiva();
-  uint16_t distGol = usarAzul ? cameraBlueDist : cameraYellowDist;
-  anguloGol = usarAzul ? cameraBlueAngle : cameraYellowAngle;
-
-
-  // Considera valido apenas quando houver pacote recente, angulo valido e distancia positiva.
-  // Isso evita falso positivo de angulo 0 sem deteccao real, que no defensor vira erro -180.
-  return cameraPacoteRecente() && (anguloGol != -999) && (distGol > 0);
+  anguloGol = cameraGolSelecionadoAngle;
+  return cameraGolSelecionadoValido;
 }
 
 constexpr float DEFENSOR_REFERENCIA_ZONA_A = 90.0f;
@@ -892,7 +902,8 @@ void desenharMenu() {
   display.setCursor(0, 44);
   display.print("GOL ERR:");
   if (golVisivelMenu) {
-    display.print((float)anguloGolMenu, 1);
+    float erroGolMenu = calcularErroGolPorPapel((float)anguloGolMenu);
+    display.print(erroGolMenu, 1);
     display.print("deg");
   } else {
     display.print("SEM GOL");
@@ -1260,8 +1271,7 @@ void desenharOperacao() {
       display.println(alinhandoAgora ? "MODO: ALINHANDO GOL" : "MODO: SEGUINDO BOLA");
     }
     display.print("PIX: ");
-    bool usarAzul = golReferenciaAzulEfetiva();
-    display.println(usarAzul ? cameraBlueDist : cameraYellowDist);
+    display.println(cameraGolSelecionadoDist);
   } else if (fugindoLinhaAgora) {
     display.println("MODO: FUGINDO LINHA");
   }
@@ -1391,6 +1401,7 @@ void processarEventoBotao(uint8_t botao) {
     } else if (botao == 3) {
       if (itemSubMenu == 0 || itemSubMenu == 1) {
         corGolAzul = (itemSubMenu == 1);
+        atualizarValidadeCamera();
         corGolPendenteEnvio = true;
         mensagemBotao = corGolAzul ? "ENVIA GOL AZUL" : "ENVIA GOL AMARELO";
       }
@@ -1770,6 +1781,7 @@ void processarMensagemCabeca(String msg) {
       cameraYellowDist = (uint16_t)sYellD.toInt();
       cameraDadosValidos = (sCamOK == "1");
       ultimoRxCameraMs = millis();
+      atualizarValidadeCamera();
 
       comunicacaoCabecaOK = true;
       ultimoRxCabeca = millis();
@@ -1972,6 +1984,27 @@ float calcularVetorAtracaoLinha(float anguloA, float anguloB) {
 }
 
 void defensor() {
+  int16_t anguloGolCamera = -999;
+  bool golVisivelCamera = cameraTemGolSelecionadoValido(anguloGolCamera);
+  int16_t anguloGolSelecionadoMenu = -999;
+  uint16_t distanciaGolSelecionadoMenu = 0;
+  bool golSelecionadoMenuVisivel = cameraLerGolSelecionadoMenu(anguloGolSelecionadoMenu, distanciaGolSelecionadoMenu);
+  static unsigned long ultimoPrintGolSelecionadoMs = 0;
+
+  if ((millis() - ultimoPrintGolSelecionadoMs) >= 200) {
+    Serial.print("DEF GOL MENU: ");
+    Serial.print(corGolAzul ? "AZUL" : "AMARELO");
+    Serial.print(" ANG=");
+    Serial.print(anguloGolSelecionadoMenu);
+    Serial.print(" DIST=");
+    Serial.print(distanciaGolSelecionadoMenu);
+    Serial.print(" VIS=");
+    Serial.println(golSelecionadoMenuVisivel ? 1 : 0);
+    ultimoPrintGolSelecionadoMs = millis();
+  }
+
+
+
   static float vetorXSuave = 0.0f;
   static float vetorYSuave = 0.0f;
   static float cmdGiroSuave = 0.0f;
@@ -2059,6 +2092,11 @@ void defensor() {
   // Bola: mantem a mesma logica de peso, mas usa a camera quando o IR nao estiver vendo.
   float anguloBola = -1.0f;
   bool bolaDisponivel = false;
+  if (distanciaGolSelecionadoMenu > 50) {
+    seguirDirecaoComGiro(normalizarAngulo360((float)anguloGolSelecionadoMenu), velocidade_maxima, cmdGiro);
+    return;
+  }
+
   if (irDetectado) {
     anguloBola = normalizarAngulo360(anguloIr);
     bolaDisponivel = true;
@@ -2111,7 +2149,6 @@ void defensor() {
 
   float anguloFinal = calcularAnguloVetorDefensor(vetorXSuave, vetorYSuave);
   seguirDirecaoComGiro(anguloFinal, velocidadeFinal, cmdGiro);
-
 }
 
 // Laco principal: comunica, atualiza controle de movimento e redesenha interface.
