@@ -130,7 +130,7 @@ const unsigned long TIMEOUT_LINHA_MS = 150;
 const unsigned long TIMEOUT_ULTRA_MS = 1000;
 const unsigned long TIMEOUT_CAMERA_MS = 1000;
 // Velocidade Maxima do robô - Vamos alterar aqui!
-const int velocidade_maxima = 180;
+const int velocidade_maxima = 200;
 const bool MOVIMENTO_BOLA_HABILITADO = false;
 
 
@@ -158,12 +158,16 @@ const float GANHO_GIRO_MISTO = 0.7f;
 
 // Velocidade dedicada para ataque frontal quando a bola estiver entre 330° e 30°.
 const int VELOCIDADE_IR_FRONTAL_PWM = 200;
-const int VELOCIDADE_IR_FAIXA_REDUZIDA_PWM = 140;
+const int VELOCIDADE_IR_FAIXA_REDUZIDA_PWM = 120;
 const int PASSO_RAMPA_PWM = 16;
 const unsigned long TRANSICAO_ANGULO_IR_MIN_MS = 50;
 const unsigned long TRANSICAO_ANGULO_IR_MAX_MS = 100;
 const float TRANSICAO_ANGULO_IR_MS_POR_GRAU = 2.0f;
 const float PASSO_ANGULO_IR_GRAUS = 5.0f;
+const float ATACANTE_ULTRA_FREIO_INICIO_CM = 45.0f;
+const float ATACANTE_ULTRA_FREIO_CRITICO_CM = 25.0f;
+const int ATACANTE_ULTRA_FREIO_VELOCIDADE_MIN = 140;
+const int ATACANTE_ULTRA_FREIO_PWM_POR_CM = 3;
 
 // Referencia salva da bussola e estados auxiliares do controle.
 int headingBussolaSalvo = 0;
@@ -569,6 +573,60 @@ int calcularVelocidadeLateralDefensorPorIr(float anguloBolaGraus) {
 bool irNaFaixaFrontal(float anguloBolaGraus) {
   float ang = normalizarAngulo360(anguloBolaGraus);
   return (ang >= 340.0f || ang <= 20.0f);
+}
+
+float calcularAnguloBuscaSemBolaCameraAtacante() {
+  bool ultrasRecentes = ultrasValidos && (ultimoRxUltraMs > 0) && ((millis() - ultimoRxUltraMs) <= TIMEOUT_ULTRA_MS);
+  if (ultrasRecentes) {
+    bool esquerdaPerto = (ultraEcm >= 0.0f) && (ultraEcm < 60.0f);
+    bool direitaPerto = (ultraDcm >= 0.0f) && (ultraDcm < 60.0f);
+    bool esquerdaLivre = ultraEcm > 50.0f;
+    bool direitaLivre = ultraDcm > 50.0f;
+
+    if (esquerdaPerto && direitaLivre) {
+      return 90.0f;
+    }
+
+    if (direitaPerto && esquerdaLivre) {
+      return 270.0f;
+    }
+  }
+
+  return 0.0f;
+}
+
+int aplicarFreioUltrassonicoAtacante(int velocidadeDesejada) {
+  int velocidadeBase = constrain(velocidadeDesejada, 0, 255);
+  bool ultrasRecentes = ultrasValidos && (ultimoRxUltraMs > 0) && ((millis() - ultimoRxUltraMs) <= TIMEOUT_ULTRA_MS);
+  if (!ultrasRecentes) {
+    return velocidadeBase;
+  }
+
+  float menorUltraCm = -1.0f;
+  float leituras[] = { ultraDcm, ultraEcm, ultraFcm, ultraTcm };
+  for (float leitura : leituras) {
+    if (leitura < 0.0f) {
+      continue;
+    }
+    if ((menorUltraCm < 0.0f) || (leitura < menorUltraCm)) {
+      menorUltraCm = leitura;
+    }
+  }
+
+  if ((menorUltraCm < 0.0f) || (menorUltraCm > ATACANTE_ULTRA_FREIO_INICIO_CM)) {
+    return velocidadeBase;
+  }
+
+  int velocidadeLimite = ATACANTE_ULTRA_FREIO_VELOCIDADE_MIN;
+  if (menorUltraCm > ATACANTE_ULTRA_FREIO_CRITICO_CM) {
+    velocidadeLimite += (int)((menorUltraCm - ATACANTE_ULTRA_FREIO_CRITICO_CM) * ATACANTE_ULTRA_FREIO_PWM_POR_CM);
+  }
+
+  if (velocidadeLimite > velocidade_maxima) {
+    velocidadeLimite = velocidade_maxima;
+  }
+
+  return min(velocidadeBase, velocidadeLimite);
 }
 
 // Para teste de centralizacao: indica para onde mover para aproximar o centro do robo ao centro da linha.
@@ -1791,24 +1849,27 @@ void atacante() {
     // No NEXUS, o Pe ja envia angulo em modo repulsao quando atacante=true.
     fugindoLinhaAgora = true;
     anguloFugaLinhaCmd = normalizarAngulo360(anguloLinhaParaFuga);
-    seguirDirecaoPorAngulo(anguloFugaLinhaCmd, VELOCIDADE_FUGA_LINHA);
+    seguirDirecaoPorAngulo(anguloFugaLinhaCmd, aplicarFreioUltrassonicoAtacante(VELOCIDADE_FUGA_LINHA));
     
   } else if (erroGrande) {
     girarNoEixo(cmdPidAssinado);
   } else if (irDetectado) {
     if (irNaFaixaFrontal(anguloIr)) {
       // Na faixa frontal aplica PWM direto e mantem correcao de alinhamento do gol.
-      moverFrenteComGiro(VELOCIDADE_IR_FRONTAL_PWM, cmdPidAssinado);
+      moverFrenteComGiro(aplicarFreioUltrassonicoAtacante(VELOCIDADE_IR_FRONTAL_PWM), cmdPidAssinado);
     } else {
       float anguloIrAlvo = mapearAnguloBolaParaMovimento(anguloIr);
       float anguloIrComRampa = obterAnguloIrSuavizado(anguloIrAlvo);
-      int velocidadeIr = calcularVelocidadeIrPorAngulo(anguloIr);
+      int velocidadeIr = aplicarFreioUltrassonicoAtacante(calcularVelocidadeIrPorAngulo(anguloIr));
       seguirDirecaoPorAngulo(anguloIrComRampa, velocidadeIr);
     }
   } else if (cameraBolaVisivel) {
-    float anguloCameraVetorial = normalizarAngulo360((float)cameraBallAngle);
+    bool cameraSemBola = (cameraBallAngle == 0) && (cameraBallDist == 0);
+    float anguloCameraVetorial = cameraSemBola
+                                ? calcularAnguloBuscaSemBolaCameraAtacante()
+                                : normalizarAngulo360((float)cameraBallAngle);
     float anguloCameraComRampa = obterAnguloIrSuavizado(anguloCameraVetorial);
-    seguirDirecaoComGiro(anguloCameraComRampa, velocidade_maxima, cmdPidAssinado);
+    seguirDirecaoComGiro(anguloCameraComRampa, aplicarFreioUltrassonicoAtacante(velocidade_maxima), cmdPidAssinado);
   } else if (precisaAlinhar) {
     girarNoEixo(cmdPidAssinado);
   } else {
