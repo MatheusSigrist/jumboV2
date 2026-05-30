@@ -117,6 +117,8 @@ bool sozinho = true;
 unsigned long ultimoRxEspnowMs = 0;
 bool estadoJogoCabecaEnviado = false;
 unsigned long ultimoEnvioEstadoJogoCabecaMs = 0;
+constexpr bool PAPEL_AUTO_DESEMPATE_ATACANTE = false;
+constexpr float PAPEL_AUTO_JANELA_EMPATE_CM = 0.5f;
 
 // Estados principais da interface/operacao.
 enum Estado { MENU, CALIBRACAO, FUNCAO, INICIAR };
@@ -1149,16 +1151,16 @@ void atualizarPapelAutomaticoPorParceria() {
   if (sozinho) {
     novoPapelAtacante = true;
   } else {
-    if (!ultrasLocaisRecentesParaPapel() || !ultrasRemotosRecentesParaPapel()) {
-      return;
-    }
+    if (ultrasLocaisRecentesParaPapel() && ultrasRemotosRecentesParaPapel()) {
+      float diferencaUltraTrasCm = ultraTcm - ultraRemotoTcm;
 
-    if (ultraTcm > ultraRemotoTcm) {
-      novoPapelAtacante = true;
-    } else if (ultraTcm < ultraRemotoTcm) {
-      novoPapelAtacante = false;
+      if (fabsf(diferencaUltraTrasCm) > PAPEL_AUTO_JANELA_EMPATE_CM) {
+        novoPapelAtacante = (diferencaUltraTrasCm > 0.0f);
+      } else {
+        novoPapelAtacante = PAPEL_AUTO_DESEMPATE_ATACANTE;
+      }
     } else {
-      return;
+      novoPapelAtacante = PAPEL_AUTO_DESEMPATE_ATACANTE;
     }
   }
 
