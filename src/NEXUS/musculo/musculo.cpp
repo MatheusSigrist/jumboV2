@@ -146,7 +146,7 @@ const unsigned long TIMEOUT_ULTRA_MS = 1000;
 const unsigned long TIMEOUT_CAMERA_MS = 1000;
 const unsigned long INTERVALO_ENVIO_ESTADO_JOGO_MS = 500;
 // Velocidade Maxima do robô - Vamos alterar aqui!
-const int velocidade_maxima = 200;
+const int velocidade_maxima = 195;
 const bool MOVIMENTO_BOLA_HABILITADO = false;
 
 
