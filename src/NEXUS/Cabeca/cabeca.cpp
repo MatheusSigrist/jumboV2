@@ -348,6 +348,30 @@ static bool macEq(const uint8_t* a, const uint8_t* b) {
   return true;
 }
 
+static void atualizarParceiroEspNow(const uint8_t* mac) {
+  if (macEq(mac, espnowTargetMac)) {
+    return;
+  }
+
+  for (int i = 0; i < 6; i++) {
+    espnowTargetMac[i] = mac[i];
+  }
+
+  esp_now_peer_info_t peer;
+  memset(&peer, 0, sizeof(peer));
+  memcpy(peer.peer_addr, espnowTargetMac, 6);
+  peer.channel = 0;
+  peer.encrypt = false;
+
+  if (!esp_now_is_peer_exist(espnowTargetMac)) {
+    esp_now_add_peer(&peer);
+  }
+
+  Serial.printf("[ESPNOW] Parceiro aprendido: %02X:%02X:%02X:%02X:%02X:%02X\n",
+                espnowTargetMac[0], espnowTargetMac[1], espnowTargetMac[2],
+                espnowTargetMac[3], espnowTargetMac[4], espnowTargetMac[5]);
+}
+
 static bool ultrasLocaisRecentes() {
   return (ultimoRxOlhoMs > 0) && ((millis() - ultimoRxOlhoMs) < TIMEOUT_DADO_OLHO_MS);
 }
@@ -400,10 +424,6 @@ void onEspNowSent(const uint8_t* mac, esp_now_send_status_t st) {
 }
 
 void onEspNowRecv(const uint8_t* mac, const uint8_t* data, int len) {
-  if (!macEq(mac, espnowTargetMac)) return;
-  espnowUltimoRxMs = millis();
-  espnowComOK = true;
-
   EspNowMsg rx;
   memset(&rx, 0, sizeof(rx));
   int clen = len < (int)sizeof(rx) ? len : (int)sizeof(rx);
@@ -412,16 +432,22 @@ void onEspNowRecv(const uint8_t* mac, const uint8_t* data, int len) {
   bool ehReq = (rx.tipo == ESPNOW_MSG_ULTRA_REQ) || (strncmp(rx.text, "ULTRA_REQ", 9) == 0);
   bool ehResp = (rx.tipo == ESPNOW_MSG_ULTRA_RESP) || (strncmp(rx.text, "ULTRA_RESP", 10) == 0);
 
-  if (ehReq || ehResp) {
-    ultimoUltraRemotoDX10 = rx.uD;
-    ultimoUltraRemotoEX10 = rx.uE;
-    ultimoUltraRemotoFX10 = rx.uF;
-    ultimoUltraRemotoTX10 = rx.uT;
-    ultimoRxUltraRemotoMs = millis();
+  if (!ehReq && !ehResp) {
+    return;
+  }
 
-    if (ehReq) {
-      enviarPacoteUltraEspNow(true);
-    }
+  atualizarParceiroEspNow(mac);
+  espnowUltimoRxMs = millis();
+  espnowComOK = true;
+
+  ultimoUltraRemotoDX10 = rx.uD;
+  ultimoUltraRemotoEX10 = rx.uE;
+  ultimoUltraRemotoFX10 = rx.uF;
+  ultimoUltraRemotoTX10 = rx.uT;
+  ultimoRxUltraRemotoMs = millis();
+
+  if (ehReq) {
+    enviarPacoteUltraEspNow(true);
   }
 }
 
