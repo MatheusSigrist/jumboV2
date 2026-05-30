@@ -1133,13 +1133,14 @@ bool ultrasRemotosRecentesParaPapel() {
 }
 
 void atualizarPapelAutomaticoPorParceria() {
-  if (papelConfiguradoMenu != PAPEL_CONFIG_AUTO || estadoAtual != INICIAR) {
+  if (papelConfiguradoMenu != PAPEL_CONFIG_AUTO) {
     return;
   }
 
   bool novoPapelAtacante = papelAtacante;
+  bool parceiroConectado = espnowConectadoRecente();
 
-  if (sozinho) {
+  if (!parceiroConectado) {
     novoPapelAtacante = true;
   } else {
     if (ultrasLocaisRecentesParaPapel() && ultrasRemotosRecentesParaPapel()) {
@@ -1207,13 +1208,10 @@ void desenharMenu() {
   }
 
   display.setCursor(0, 56);
-  display.print("GOL ERR:");
-  if (golVisivelMenu) {
-    display.print((float)anguloGolMenu, 1);
-    display.print("deg");
-  } else {
-    display.print("SEM GOL");
-  }
+  display.print("P:");
+  display.print(papelAtacante ? "ATC" : "DEF");
+  display.print(" ESN:");
+  display.print(espnowConectadoRecente() ? "ON" : "OFF");
   display.display();
 }
 
@@ -1248,8 +1246,8 @@ void desenharSubmenuFuncao() {
       display.println("VOLTA");
     }
 
-    display.setCursor(0, 54);
-    display.print("ATUAL: ");
+    display.setCursor(0, 46);
+    display.print("MODO: ");
     if (papelConfiguradoMenu == PAPEL_CONFIG_ATACANTE) {
       display.println("ATACANTE");
     } else if (papelConfiguradoMenu == PAPEL_CONFIG_DEFENSOR) {
@@ -1257,6 +1255,12 @@ void desenharSubmenuFuncao() {
     } else {
       display.println("AUTO");
     }
+
+    display.setCursor(0, 56);
+    display.print("PAPEL: ");
+    display.print(papelAtacante ? "ATC" : "DEF");
+    display.print(" ");
+    display.println(espnowConectadoRecente() ? "ON" : "OFF");
   } else if (subMenuFuncao == SUBFUNCAO_PAPEIS) {
     if (itemSubMenuFuncao == 0) {
       display.fillRect(0, 16, 128, 8, SSD1306_WHITE);
