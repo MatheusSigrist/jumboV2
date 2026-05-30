@@ -117,7 +117,7 @@ bool sozinho = true;
 unsigned long ultimoRxEspnowMs = 0;
 
 // Estados principais da interface/operacao.
-enum Estado { MENU, CALIBRACAO, INICIAR };
+enum Estado { MENU, CALIBRACAO, FUNCAO, INICIAR };
 Estado estadoAtual = MENU;
 int itemSelecionado = 0;
 
@@ -125,6 +125,13 @@ int itemSelecionado = 0;
 enum SubMenuCalibracao { SUBMENU_PRINCIPAL, SUBMENU_GOL, SUBMENU_BUSSOLA, SUBMENU_IR, SUBMENU_ULTRA, SUBMENU_CAMERA, SUBMENU_ESPNOW };
 SubMenuCalibracao subMenuCalibracao = SUBMENU_PRINCIPAL;
 int itemSubMenu = 0;
+
+enum SubMenuFuncao { SUBFUNCAO_PRINCIPAL, SUBFUNCAO_PAPEIS };
+SubMenuFuncao subMenuFuncao = SUBFUNCAO_PRINCIPAL;
+int itemSubMenuFuncao = 0;
+
+enum PapelConfigurado { PAPEL_CONFIG_ATACANTE, PAPEL_CONFIG_DEFENSOR, PAPEL_CONFIG_AUTO };
+PapelConfigurado papelConfiguradoMenu = PAPEL_CONFIG_AUTO;
 
 // Temporizacao da comunicacao e limites gerais de velocidade.
 const unsigned long INTERVALO_OI_MS = 1000;
@@ -142,6 +149,34 @@ const bool MOVIMENTO_BOLA_HABILITADO = false;
 // Endereco e tamanho usados para persistir a bussola na EEPROM.
 const int EEPROM_SIZE = 64;
 const int EEPROM_ADDR_BUSSOLA = 0;
+const int EEPROM_ADDR_PAPEL_CONFIG = EEPROM_ADDR_BUSSOLA + (int)sizeof(int);
+
+void aplicarPapelConfiguradoLocal() {
+  if (papelConfiguradoMenu == PAPEL_CONFIG_ATACANTE) {
+    papelAtacante = true;
+    papelAtacanteAnterior = true;
+  } else if (papelConfiguradoMenu == PAPEL_CONFIG_DEFENSOR) {
+    papelAtacante = false;
+    papelAtacanteAnterior = false;
+  }
+}
+
+bool salvarPapelConfiguradoEEPROM() {
+  uint8_t papelSalvo = (uint8_t)papelConfiguradoMenu;
+  EEPROM.put(EEPROM_ADDR_PAPEL_CONFIG, papelSalvo);
+  return EEPROM.commit();
+}
+
+void carregarPapelConfiguradoEEPROM() {
+  uint8_t papelSalvo = (uint8_t)PAPEL_CONFIG_AUTO;
+  EEPROM.get(EEPROM_ADDR_PAPEL_CONFIG, papelSalvo);
+  if (papelSalvo > (uint8_t)PAPEL_CONFIG_AUTO) {
+    papelSalvo = (uint8_t)PAPEL_CONFIG_AUTO;
+  }
+
+  papelConfiguradoMenu = (PapelConfigurado)papelSalvo;
+  aplicarPapelConfiguradoLocal();
+}
 
 // Parametros do alinhamento por camera + bussola.
 const float TOLERANCIA_ALINHAMENTO_GRAUS = 10.0f;
@@ -175,6 +210,10 @@ const unsigned long TRANSICAO_ANGULO_IR_MIN_MS = 50;
 const unsigned long TRANSICAO_ANGULO_IR_MAX_MS = 100;
 const float TRANSICAO_ANGULO_IR_MS_POR_GRAU = 2.0f;
 const float PASSO_ANGULO_IR_GRAUS = 5.0f;
+const float ATACANTE_ULTRA_FREIO_INICIO_CM = 45.0f;
+const float ATACANTE_ULTRA_FREIO_CRITICO_CM = 25.0f;
+const int ATACANTE_ULTRA_FREIO_VELOCIDADE_MIN = 140;
+const int ATACANTE_ULTRA_FREIO_PWM_POR_CM = 3;
 const unsigned long DEFENSOR_TEMPO_GATILHO_IR_FRONTAL_MS = 3000;
 const unsigned long DEFENSOR_TEMPO_AVANCO_IR_FRONTAL_MS = 2500;
 const float DEFENSOR_TOLERANCIA_IR_FRONTAL_GRAUS = 45.0f;
@@ -513,6 +552,10 @@ void atualizarValidadeBussola() {
   }
 }
 
+bool espnowConectadoRecente() {
+  return espnowOK && (ultimoRxEspnowMs > 0) && ((millis() - ultimoRxEspnowMs) <= TIMEOUT_COM_MS);
+}
+
 bool bussolaTemReferenciaValida() {
   return bussolaValida;
 }
@@ -682,6 +725,60 @@ int calcularVelocidadeIrPorAngulo(float anguloBolaGraus) {
 bool irNaFaixaFrontal(float anguloBolaGraus) {
   float ang = normalizarAngulo360(anguloBolaGraus);
   return (ang >= 340.0f || ang <= 20.0f);
+}
+
+float calcularAnguloBuscaSemBolaCameraAtacante() {
+  bool ultrasRecentes = ultrasValidos && (ultimoRxUltraMs > 0) && ((millis() - ultimoRxUltraMs) <= TIMEOUT_ULTRA_MS);
+  if (ultrasRecentes) {
+    bool esquerdaPerto = (ultraEcm >= 0.0f) && (ultraEcm < 60.0f);
+    bool direitaPerto = (ultraDcm >= 0.0f) && (ultraDcm < 60.0f);
+    bool esquerdaLivre = ultraEcm > 50.0f;
+    bool direitaLivre = ultraDcm > 50.0f;
+
+    if (esquerdaPerto && direitaLivre) {
+      return 90.0f;
+    }
+
+    if (direitaPerto && esquerdaLivre) {
+      return 270.0f;
+    }
+  }
+
+  return 0.0f;
+}
+
+int aplicarFreioUltrassonicoAtacante(int velocidadeDesejada) {
+  int velocidadeBase = constrain(velocidadeDesejada, 0, 255);
+  bool ultrasRecentes = ultrasValidos && (ultimoRxUltraMs > 0) && ((millis() - ultimoRxUltraMs) <= TIMEOUT_ULTRA_MS);
+  if (!ultrasRecentes) {
+    return velocidadeBase;
+  }
+
+  float menorUltraCm = -1.0f;
+  float leituras[] = { ultraDcm, ultraEcm, ultraFcm, ultraTcm };
+  for (float leitura : leituras) {
+    if (leitura < 0.0f) {
+      continue;
+    }
+    if ((menorUltraCm < 0.0f) || (leitura < menorUltraCm)) {
+      menorUltraCm = leitura;
+    }
+  }
+
+  if ((menorUltraCm < 0.0f) || (menorUltraCm > ATACANTE_ULTRA_FREIO_INICIO_CM)) {
+    return velocidadeBase;
+  }
+
+  int velocidadeLimite = ATACANTE_ULTRA_FREIO_VELOCIDADE_MIN;
+  if (menorUltraCm > ATACANTE_ULTRA_FREIO_CRITICO_CM) {
+    velocidadeLimite += (int)((menorUltraCm - ATACANTE_ULTRA_FREIO_CRITICO_CM) * ATACANTE_ULTRA_FREIO_PWM_POR_CM);
+  }
+
+  if (velocidadeLimite > velocidade_maxima) {
+    velocidadeLimite = velocidade_maxima;
+  }
+
+  return min(velocidadeBase, velocidadeLimite);
 }
 
 // Para teste de centralizacao: indica para onde mover para aproximar o centro do robo ao centro da linha.
@@ -1004,6 +1101,11 @@ void enviarCorGolParaCabeca() {
   ultimoEnvioCorGolMs = millis();
 }
 
+void enviarPapelAtualParaCabeca() {
+  Serial1.print("ATCFB:");
+  Serial1.println(papelAtacante ? 1 : 0);
+}
+
 // Desenha a tela principal de menu no display OLED.
 void desenharMenu() {
   display.clearDisplay();
@@ -1030,14 +1132,25 @@ void desenharMenu() {
     display.fillRect(0, 32, 128, 10, SSD1306_WHITE);
     display.setTextColor(SSD1306_BLACK);
     display.setCursor(4, 34);
-    display.println("INICIAR");
+    display.println("FUNCAO");
     display.setTextColor(SSD1306_WHITE);
   } else {
     display.setCursor(4, 34);
+    display.println("FUNCAO");
+  }
+
+  if (itemSelecionado == 2) {
+    display.fillRect(0, 44, 128, 10, SSD1306_WHITE);
+    display.setTextColor(SSD1306_BLACK);
+    display.setCursor(4, 46);
+    display.println("INICIAR");
+    display.setTextColor(SSD1306_WHITE);
+  } else {
+    display.setCursor(4, 46);
     display.println("INICIAR");
   }
 
-  display.setCursor(0, 44);
+  display.setCursor(0, 56);
   display.print("GOL ERR:");
   if (golVisivelMenu) {
     float erroGolMenu = calcularErroGolPorPapel((float)anguloGolMenu);
@@ -1046,12 +1159,98 @@ void desenharMenu() {
   } else {
     display.print("SEM GOL");
   }
+  display.display();
+}
 
-  display.setCursor(0, 54);
-  display.print("COM:");
-  display.print(comunicacaoCabecaOK ? "OK" : "FALHA");
-  display.print("  ");
-  display.print(mensagemBotao);
+void desenharSubmenuFuncao() {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, 0);
+  display.println("=== FUNCAO ===");
+  display.println();
+
+  if (subMenuFuncao == SUBFUNCAO_PRINCIPAL) {
+    if (itemSubMenuFuncao == 0) {
+      display.fillRect(0, 16, 128, 10, SSD1306_WHITE);
+      display.setTextColor(SSD1306_BLACK);
+      display.setCursor(4, 18);
+      display.println("PAPEIS");
+      display.setTextColor(SSD1306_WHITE);
+    } else {
+      display.setCursor(4, 18);
+      display.println("PAPEIS");
+    }
+
+    if (itemSubMenuFuncao == 1) {
+      display.fillRect(0, 32, 128, 10, SSD1306_WHITE);
+      display.setTextColor(SSD1306_BLACK);
+      display.setCursor(4, 34);
+      display.println("VOLTA");
+      display.setTextColor(SSD1306_WHITE);
+    } else {
+      display.setCursor(4, 34);
+      display.println("VOLTA");
+    }
+
+    display.setCursor(0, 54);
+    display.print("ATUAL: ");
+    if (papelConfiguradoMenu == PAPEL_CONFIG_ATACANTE) {
+      display.println("ATACANTE");
+    } else if (papelConfiguradoMenu == PAPEL_CONFIG_DEFENSOR) {
+      display.println("DEFENSOR");
+    } else {
+      display.println("AUTO");
+    }
+  } else if (subMenuFuncao == SUBFUNCAO_PAPEIS) {
+    if (itemSubMenuFuncao == 0) {
+      display.fillRect(0, 16, 128, 8, SSD1306_WHITE);
+      display.setTextColor(SSD1306_BLACK);
+      display.setCursor(4, 16);
+      display.println("ATACANTE");
+      display.setTextColor(SSD1306_WHITE);
+    } else {
+      display.setCursor(4, 16);
+      display.println("ATACANTE");
+    }
+
+    if (itemSubMenuFuncao == 1) {
+      display.fillRect(0, 24, 128, 8, SSD1306_WHITE);
+      display.setTextColor(SSD1306_BLACK);
+      display.setCursor(4, 24);
+      display.println("DEFENSOR");
+      display.setTextColor(SSD1306_WHITE);
+    } else {
+      display.setCursor(4, 24);
+      display.println("DEFENSOR");
+    }
+
+    if (itemSubMenuFuncao == 2) {
+      display.fillRect(0, 32, 128, 8, SSD1306_WHITE);
+      display.setTextColor(SSD1306_BLACK);
+      display.setCursor(4, 32);
+      display.println("AUTO");
+      display.setTextColor(SSD1306_WHITE);
+    } else {
+      display.setCursor(4, 32);
+      display.println("AUTO");
+    }
+
+    if (itemSubMenuFuncao == 3) {
+      display.fillRect(0, 40, 128, 8, SSD1306_WHITE);
+      display.setTextColor(SSD1306_BLACK);
+      display.setCursor(4, 40);
+      display.println("VOLTA");
+      display.setTextColor(SSD1306_WHITE);
+    } else {
+      display.setCursor(4, 40);
+      display.println("VOLTA");
+    }
+
+    display.setCursor(0, 56);
+    display.println("BTN3 CONFIRMA");
+  }
+
   display.display();
 }
 
@@ -1228,7 +1427,7 @@ void desenharSubmenuCalibracao() {
     }
     display.println("BTN1/2/3 VOLTAR");
 
-  // Tela de teste de centralizacao da linha.
+  // Tela de teste de centralizacao da linha com status do ESP-NOW.
   } else if (subMenuCalibracao == SUBMENU_ESPNOW) {
     display.clearDisplay();
     display.setTextSize(1);
@@ -1241,7 +1440,7 @@ void desenharSubmenuCalibracao() {
     display.println(papelAtacante ? "ATC" : "DEF");
 
     if (papelAtacante) {
-      display.setCursor(0, 26);
+      display.setCursor(0, 24);
       display.print("ANG: ");
       if (linhaDetectada && anguloLinhaPe >= 0.0f) {
         display.print(anguloLinhaPe, 1);
@@ -1249,8 +1448,12 @@ void desenharSubmenuCalibracao() {
       } else {
         display.println("SEM LEITURA");
       }
+
+      display.setCursor(0, 40);
+      display.print("ESN: ");
+      display.println(espnowConectadoRecente() ? "CONECTADO" : "DESCONECTADO");
     } else {
-      display.setCursor(0, 24);
+      display.setCursor(0, 22);
       display.print("A: ");
       if (linhaZonaAValida && anguloLinhaZonaA >= 0.0f) {
         display.print(anguloLinhaZonaA, 1);
@@ -1259,7 +1462,7 @@ void desenharSubmenuCalibracao() {
         display.println("SEM LEITURA");
       }
 
-      display.setCursor(0, 36);
+      display.setCursor(0, 32);
       display.print("B: ");
       if (linhaZonaBValida && anguloLinhaZonaB >= 0.0f) {
         display.print(anguloLinhaZonaB, 1);
@@ -1267,10 +1470,11 @@ void desenharSubmenuCalibracao() {
       } else {
         display.println("SEM LEITURA");
       }
-    }
 
-    display.setCursor(0, 48);
-    display.println("AUTO: PAPEL CABECA");
+      display.setCursor(0, 44);
+      display.print("ESN: ");
+      display.println(espnowConectadoRecente() ? "CONECTADO" : "DESCONECTADO");
+    }
 
     display.setCursor(0, 56);
     display.println("BTN1/2/3 VOLTAR");
@@ -1466,6 +1670,8 @@ void desenharTelaAtual() {
     desenharMenu();
   } else if (estadoAtual == CALIBRACAO) {
     desenharSubmenuCalibracao();
+  } else if (estadoAtual == FUNCAO) {
+    desenharSubmenuFuncao();
   } else {
     desenharOperacao();
   }
@@ -1477,18 +1683,76 @@ void processarEventoBotao(uint8_t botao) {
     // BTN1 sobe, BTN2 desce, BTN3 confirma.
     if (botao == 1) {
       itemSelecionado--;
-      if (itemSelecionado < 0) itemSelecionado = 1;
+      if (itemSelecionado < 0) itemSelecionado = 2;
     } else if (botao == 2) {
       itemSelecionado++;
-      if (itemSelecionado > 1) itemSelecionado = 0;
+      if (itemSelecionado > 2) itemSelecionado = 0;
     } else if (botao == 3) {
       if (itemSelecionado == 0) {
         estadoAtual = CALIBRACAO;
         subMenuCalibracao = SUBMENU_PRINCIPAL;
         itemSubMenu = 0;
+      } else if (itemSelecionado == 1) {
+        estadoAtual = FUNCAO;
+        subMenuFuncao = SUBFUNCAO_PRINCIPAL;
+        itemSubMenuFuncao = 0;
       } else {
         estadoAtual = INICIAR;
       }
+    }
+    return;
+  }
+
+  if (estadoAtual == FUNCAO && subMenuFuncao == SUBFUNCAO_PRINCIPAL) {
+    if (botao == 1) {
+      itemSubMenuFuncao--;
+      if (itemSubMenuFuncao < 0) itemSubMenuFuncao = 1;
+    } else if (botao == 2) {
+      itemSubMenuFuncao++;
+      if (itemSubMenuFuncao > 1) itemSubMenuFuncao = 0;
+    } else if (botao == 3) {
+      if (itemSubMenuFuncao == 0) {
+        subMenuFuncao = SUBFUNCAO_PAPEIS;
+        if (papelConfiguradoMenu == PAPEL_CONFIG_ATACANTE) {
+          itemSubMenuFuncao = 0;
+        } else if (papelConfiguradoMenu == PAPEL_CONFIG_DEFENSOR) {
+          itemSubMenuFuncao = 1;
+        } else {
+          itemSubMenuFuncao = 2;
+        }
+      } else {
+        estadoAtual = MENU;
+        itemSelecionado = 1;
+      }
+    }
+    return;
+  }
+
+  if (estadoAtual == FUNCAO && subMenuFuncao == SUBFUNCAO_PAPEIS) {
+    if (botao == 1) {
+      itemSubMenuFuncao--;
+      if (itemSubMenuFuncao < 0) itemSubMenuFuncao = 3;
+    } else if (botao == 2) {
+      itemSubMenuFuncao++;
+      if (itemSubMenuFuncao > 3) itemSubMenuFuncao = 0;
+    } else if (botao == 3) {
+      if (itemSubMenuFuncao == 0) {
+        papelConfiguradoMenu = PAPEL_CONFIG_ATACANTE;
+        aplicarPapelConfiguradoLocal();
+        enviarPapelAtualParaCabeca();
+        mensagemBotao = salvarPapelConfiguradoEEPROM() ? "PAPEL FIXO ATC" : "ERRO EEPROM";
+      } else if (itemSubMenuFuncao == 1) {
+        papelConfiguradoMenu = PAPEL_CONFIG_DEFENSOR;
+        aplicarPapelConfiguradoLocal();
+        enviarPapelAtualParaCabeca();
+        mensagemBotao = salvarPapelConfiguradoEEPROM() ? "PAPEL FIXO DEF" : "ERRO EEPROM";
+      } else if (itemSubMenuFuncao == 2) {
+        papelConfiguradoMenu = PAPEL_CONFIG_AUTO;
+        mensagemBotao = salvarPapelConfiguradoEEPROM() ? "PAPEL AUTO" : "ERRO EEPROM";
+      }
+
+      subMenuFuncao = SUBFUNCAO_PRINCIPAL;
+      itemSubMenuFuncao = 0;
     }
     return;
   }
@@ -1870,12 +2134,20 @@ void processarMensagemCabeca(String msg) {
     sAtc.trim();
     if (sAtc == "0" || sAtc == "1") {
       bool novoValor = (sAtc == "1");
-      if (novoValor != papelAtacante) {
-        // Detectou mudanca, envia feedback para Cabeca resincronizar Pe
-        Serial0.print("ATCFB:");
-        Serial0.println(novoValor ? 1 : 0);
+      if (papelConfiguradoMenu == PAPEL_CONFIG_AUTO) {
+        if (novoValor != papelAtacante) {
+          // Detectou mudanca, envia feedback para Cabeca resincronizar Pe
+          Serial0.print("ATCFB:");
+          Serial0.println(novoValor ? 1 : 0);
+        }
+        papelAtacante = novoValor;
+      } else {
+        aplicarPapelConfiguradoLocal();
+        if (novoValor != papelAtacante) {
+          Serial0.print("ATCFB:");
+          Serial0.println(papelAtacante ? 1 : 0);
+        }
       }
-      papelAtacante = novoValor;
       papelAtacanteAnterior = papelAtacante;
       comunicacaoCabecaOK = true;
       ultimoRxCabeca = millis();
@@ -1973,6 +2245,7 @@ void setup() {
   if (headingBussolaSalvo < 0 || headingBussolaSalvo >= 360) {
     headingBussolaSalvo = 0;
   }
+  carregarPapelConfiguradoEEPROM();
 
   // Configura todas as saidas da ponte H e o pino do kicker.
   pinMode(IN1_1_A, OUTPUT);
@@ -2031,18 +2304,18 @@ void setup() {
 
 // Funcao de controle para o robo atacante: alinhamento com gol, movimentacao em torno da bola e logica de chute.
 void atacante() {
-  bool referenciaBussolaValida = bussolaTemReferenciaValida();
-  erroAlinhamentoGraus = referenciaBussolaValida ? calcularErroReferenciaBussola() : 0.0f;
+  int16_t anguloGolCamera = -999;
+  bool golVisivelCamera = cameraTemGolSelecionadoValido(anguloGolCamera);
+  erroAlinhamentoGraus = golVisivelCamera ? calcularErroGolPorPapel((float)anguloGolCamera) : 0.0f;
   fugindoLinhaAgora = false;
   anguloFugaLinhaCmd = 0.0f;
 
   int cmdPidAssinado = 0;
   bool cameraBolaVisivel = cameraTemBolaValida();
-  float erroAngularCampo = calcularErroAngularCampo();
 
-  // So gira para alinhar quando a referencia da bussola estiver valida e fora da tolerancia.
-  bool precisaAlinhar = referenciaBussolaValida && (fabsf(erroAlinhamentoGraus) > TOLERANCIA_ALINHAMENTO_GRAUS);
-  bool erroGrande = referenciaBussolaValida && (fabsf(erroAlinhamentoGraus) > 40.0f);
+  // So gira para alinhar quando o gol estiver visivel na camera e fora da tolerancia.
+  bool precisaAlinhar = golVisivelCamera && (fabsf(erroAlinhamentoGraus) > TOLERANCIA_ALINHAMENTO_GRAUS);
+  bool erroGrande = golVisivelCamera && (fabsf(erroAlinhamentoGraus) > 40.0f);
   if (precisaAlinhar) {
     alinhandoAgora = true;
     int cmdPid = calcularSaidaPidBussola(erroAlinhamentoGraus);
@@ -2081,26 +2354,27 @@ void atacante() {
     // No NEXUS, o Pe ja envia angulo em modo repulsao quando atacante=true.
     fugindoLinhaAgora = true;
     anguloFugaLinhaCmd = normalizarAngulo360(anguloLinhaParaFuga);
-    seguirDirecaoPorAngulo(anguloFugaLinhaCmd, VELOCIDADE_FUGA_LINHA);
+    seguirDirecaoPorAngulo(anguloFugaLinhaCmd, aplicarFreioUltrassonicoAtacante(VELOCIDADE_FUGA_LINHA));
     
   } else if (erroGrande) {
     girarNoEixo(cmdPidAssinado);
   } else if (irDetectado) {
-    float anguloIrCorrigido = corrigirAnguloParaCampo(anguloIr, erroAngularCampo);
-
-    if (irNaFaixaFrontal(anguloIrCorrigido)) {
+    if (irNaFaixaFrontal(anguloIr)) {
       // Na faixa frontal aplica PWM direto e mantem correcao de alinhamento do gol.
-      moverFrenteComGiro(VELOCIDADE_IR_FRONTAL_PWM, cmdPidAssinado);
+      moverFrenteComGiro(aplicarFreioUltrassonicoAtacante(VELOCIDADE_IR_FRONTAL_PWM), cmdPidAssinado);
     } else {
-      float anguloIrAlvo = mapearAnguloBolaParaMovimento(anguloIrCorrigido);
+      float anguloIrAlvo = mapearAnguloBolaParaMovimento(anguloIr);
       float anguloIrComRampa = obterAnguloIrSuavizado(anguloIrAlvo);
-      int velocidadeIr = calcularVelocidadeIrPorAngulo(anguloIrCorrigido);
+      int velocidadeIr = aplicarFreioUltrassonicoAtacante(calcularVelocidadeIrPorAngulo(anguloIr));
       seguirDirecaoPorAngulo(anguloIrComRampa, velocidadeIr);
     }
   } else if (cameraBolaVisivel) {
-    float anguloCameraVetorial = corrigirAnguloParaCampo((float)cameraBallAngle, erroAngularCampo);
+    bool cameraSemBola = (cameraBallAngle == 0) && (cameraBallDist == 0);
+    float anguloCameraVetorial = cameraSemBola
+                                ? calcularAnguloBuscaSemBolaCameraAtacante()
+                                : normalizarAngulo360((float)cameraBallAngle);
     float anguloCameraComRampa = obterAnguloIrSuavizado(anguloCameraVetorial);
-    seguirDirecaoComGiro(anguloCameraComRampa, velocidade_maxima, cmdPidAssinado);
+    seguirDirecaoComGiro(anguloCameraComRampa, aplicarFreioUltrassonicoAtacante(velocidade_maxima), cmdPidAssinado);
   } else if (precisaAlinhar) {
     girarNoEixo(cmdPidAssinado);
   } else {

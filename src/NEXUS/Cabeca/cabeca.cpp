@@ -266,6 +266,7 @@ int16_t ultimoAnguloLinhaZonaBX10 = -10;
 bool linhaZonaAValida = false;
 bool linhaZonaBValida = false;
 unsigned long ultimoRxUltraRemotoMs = 0;
+unsigned long ignorarPacotesPeAteMs = 0;
 
 // ===== NOVOS: dados de camera (bola + 2 gols) =====
 int16_t ultimoBallAngle = -999;
@@ -282,6 +283,18 @@ bool kickerAtivado = false;
 int ultimoKickerEnviado = -1;
 float ultimoHeadingBussola = 0.0f;
 bool bussolaOK = false;
+
+void prepararTrocaPapelPe() {
+  // Durante a troca de papel, o Pe ainda pode emitir alguns frames no formato anterior.
+  // Ignoramos essa janela curta para nao misturar pacotes de tamanhos diferentes.
+  while (SerialPe.available() > 0) SerialPe.read();
+  ignorarPacotesPeAteMs = millis() + 40;
+  ultimoAnguloLinhaX10 = -10;
+  ultimoAnguloLinhaZonaAX10 = -10;
+  ultimoAnguloLinhaZonaBX10 = -10;
+  linhaZonaAValida = false;
+  linhaZonaBValida = false;
+}
 
 const unsigned long INTERVALO_ENVIO_IR_MS = 120;
 const unsigned long INTERVALO_ENVIO_BUSSOLA_MS = 120;
@@ -569,6 +582,7 @@ void processarMensagem(String msg) {
       bool novoAtacante = (v == "1");
       if (novoAtacante != atacanteCfg) {
         atacanteCfg = novoAtacante;
+        prepararTrocaPapelPe();
         Serial.print("Papel mudou para: ");
         Serial.println(atacanteCfg ? "ATACANTE" : "DEFENSOR");
         // Envia imediatamente para Pe (sem wait de 700ms)
@@ -891,6 +905,15 @@ void lerRespostaOlho() {
 
 // Le serial da placa Pe, decodifica pacote binario e fallback textual.
 void lerRespostaPe() {
+  if (ignorarPacotesPeAteMs > 0) {
+    long restanteMs = (long)(ignorarPacotesPeAteMs - millis());
+    if (restanteMs > 0) {
+      while (SerialPe.available() > 0) SerialPe.read();
+      return;
+    }
+    ignorarPacotesPeAteMs = 0;
+  }
+
   while (SerialPe.available() > 0) {
     if (SerialPe.peek() == BYTE_INICIA) {
       SerialPe.read();

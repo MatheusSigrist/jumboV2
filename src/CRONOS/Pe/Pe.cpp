@@ -246,6 +246,10 @@ PacoteDefensor detectarLinhaDefensorPorZonas() {
   // Ex.: 360 -> 180, 350 -> 190, 180 -> 360.
   if (pacote.anguloZonaB >= 0) {
     float angB = pacote.anguloZonaB / 10.0f;
+    angB = 540.0f - angB;
+    if (angB > 360.0f) {
+      angB -= 360.0f;
+    }
     pacote.anguloZonaB = (int16_t)round(angB * 10.0f);
   }
 
