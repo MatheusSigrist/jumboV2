@@ -244,6 +244,7 @@ bool comunicacaoPeOK = false;
 bool atacanteCfg = true;
 //==============================//
 bool corGolAzulCfg = false;
+bool jogoEmExecucao = false;
 
 String bufferOlho = "";
 String bufferPe = "";
@@ -353,6 +354,16 @@ static bool ultrasLocaisRecentes() {
 
 // Declaracao forward para processar mudancas de papel
 void enviarEstadoParaPeSemDelay();
+void enviarEstadoParaPlacas();
+
+bool calcularSozinhoEmJogo() {
+  if (!jogoEmExecucao) {
+    return false;
+  }
+
+  bool espnowRecente = (espnowUltimoRxMs > 0) && ((millis() - espnowUltimoRxMs) < ESPNOW_TIMEOUT_MS);
+  return (!espnowComOK) || (!espnowRecente);
+}
 
 void enviarPacoteUltraEspNow(bool resposta) {
   if (!espnowInicializado) {
@@ -589,6 +600,17 @@ void processarMensagem(String msg) {
         enviarEstadoParaPeSemDelay();
       }
     }
+  } else if (msg.startsWith("run:")) {
+    String v = msg.substring(4);
+    v.trim();
+    if (v == "0" || v == "1") {
+      bool novoJogoEmExecucao = (v == "1");
+      if (novoJogoEmExecucao != jogoEmExecucao) {
+        jogoEmExecucao = novoJogoEmExecucao;
+        ultimoEnvioEstadoOlhoMs = 0;
+        enviarEstadoParaPlacas();
+      }
+    }
   } else if (msg.length() > 0) {
     Serial.print("Recebido do musculo: ");
     Serial.println(msg);
@@ -620,10 +642,8 @@ void enviarEstadoParaPeSemDelay() {
   // Descarta buffer serial da Pe para evitar dessincronia de tamanho de pacote
   while (SerialPe.available() > 0) SerialPe.read();
 
-  bool espnowRecente = (espnowUltimoRxMs > 0) && ((millis() - espnowUltimoRxMs) < ESPNOW_TIMEOUT_MS);
-
   PacoteEstado estado;
-  estado.sozinho = (!espnowComOK) || (!espnowRecente);
+  estado.sozinho = calcularSozinhoEmJogo();
   estado.atacante = atacanteCfg;
   estado.corGolAzul = corGolAzulCfg;
 
@@ -646,10 +666,8 @@ void enviarEstadoParaPlacas() {
     return;
   }
 
-  bool espnowRecente = (espnowUltimoRxMs > 0) && ((millis() - espnowUltimoRxMs) < ESPNOW_TIMEOUT_MS);
-
   PacoteEstado estado;
-  estado.sozinho = (!espnowComOK) || (!espnowRecente);
+  estado.sozinho = calcularSozinhoEmJogo();
   estado.atacante = atacanteCfg;
   estado.corGolAzul = corGolAzulCfg;
 

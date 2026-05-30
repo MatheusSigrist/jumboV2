@@ -115,6 +115,8 @@ unsigned long ultimoRxCameraMs = 0;
 bool espnowOK = false;
 bool sozinho = true;
 unsigned long ultimoRxEspnowMs = 0;
+bool estadoJogoCabecaEnviado = false;
+unsigned long ultimoEnvioEstadoJogoCabecaMs = 0;
 
 // Estados principais da interface/operacao.
 enum Estado { MENU, CALIBRACAO, FUNCAO, INICIAR };
@@ -140,6 +142,7 @@ const unsigned long TIMEOUT_BUSSOLA_MS = 800;
 const unsigned long TIMEOUT_LINHA_MS = 300;
 const unsigned long TIMEOUT_ULTRA_MS = 1000;
 const unsigned long TIMEOUT_CAMERA_MS = 1000;
+const unsigned long INTERVALO_ENVIO_ESTADO_JOGO_MS = 500;
 // Velocidade Maxima do rob├┤ - Vamos alterar aqui!
 const int velocidade_maxima = 220;
 const bool MOVIMENTO_BOLA_HABILITADO = false;
@@ -554,6 +557,28 @@ void atualizarValidadeBussola() {
 
 bool espnowConectadoRecente() {
   return espnowOK && (ultimoRxEspnowMs > 0) && ((millis() - ultimoRxEspnowMs) <= TIMEOUT_COM_MS);
+}
+
+void atualizarSozinhoLocal() {
+  if (estadoAtual == INICIAR) {
+    sozinho = !espnowConectadoRecente();
+  }
+}
+
+void enviarEstadoJogoParaCabeca(bool forcar = false) {
+  bool emJogo = (estadoAtual == INICIAR);
+  unsigned long agora = millis();
+
+  if (!forcar &&
+      emJogo == estadoJogoCabecaEnviado &&
+      (agora - ultimoEnvioEstadoJogoCabecaMs) < INTERVALO_ENVIO_ESTADO_JOGO_MS) {
+    return;
+  }
+
+  Serial1.print("RUN:");
+  Serial1.println(emJogo ? 1 : 0);
+  estadoJogoCabecaEnviado = emJogo;
+  ultimoEnvioEstadoJogoCabecaMs = agora;
 }
 
 bool bussolaTemReferenciaValida() {
@@ -1104,6 +1129,44 @@ void enviarCorGolParaCabeca() {
 void enviarPapelAtualParaCabeca() {
   Serial1.print("ATCFB:");
   Serial1.println(papelAtacante ? 1 : 0);
+}
+
+bool ultrasLocaisRecentesParaPapel() {
+  return ultrasValidos && (ultimoRxUltraMs > 0) && ((millis() - ultimoRxUltraMs) <= TIMEOUT_ULTRA_MS);
+}
+
+bool ultrasRemotosRecentesParaPapel() {
+  return ultrasRemotosValidos && (ultimoRxUltraRemotoMs > 0) && ((millis() - ultimoRxUltraRemotoMs) <= TIMEOUT_ULTRA_MS);
+}
+
+void atualizarPapelAutomaticoPorParceria() {
+  if (papelConfiguradoMenu != PAPEL_CONFIG_AUTO || estadoAtual != INICIAR) {
+    return;
+  }
+
+  bool novoPapelAtacante = papelAtacante;
+
+  if (sozinho) {
+    novoPapelAtacante = true;
+  } else {
+    if (!ultrasLocaisRecentesParaPapel() || !ultrasRemotosRecentesParaPapel()) {
+      return;
+    }
+
+    if (ultraTcm > ultraRemotoTcm) {
+      novoPapelAtacante = true;
+    } else if (ultraTcm < ultraRemotoTcm) {
+      novoPapelAtacante = false;
+    } else {
+      return;
+    }
+  }
+
+  if (novoPapelAtacante != papelAtacante) {
+    papelAtacante = novoPapelAtacante;
+    papelAtacanteAnterior = novoPapelAtacante;
+    enviarPapelAtualParaCabeca();
+  }
 }
 
 // Desenha a tela principal de menu no display OLED.
@@ -1698,6 +1761,8 @@ void processarEventoBotao(uint8_t botao) {
         itemSubMenuFuncao = 0;
       } else {
         estadoAtual = INICIAR;
+        atualizarSozinhoLocal();
+        enviarEstadoJogoParaCabeca(true);
       }
     }
     return;
@@ -1863,6 +1928,7 @@ void processarEventoBotao(uint8_t botao) {
 
   if (estadoAtual == INICIAR && botao == 3) {
     estadoAtual = MENU;
+    enviarEstadoJogoParaCabeca(true);
   }
 }
 
@@ -2080,6 +2146,7 @@ void processarMensagemCabeca(String msg) {
       ultraTcm = sT.toFloat();
       ultrasValidos = (ultraDcm >= 0.0f && ultraEcm >= 0.0f && ultraFcm >= 0.0f && ultraTcm >= 0.0f);
       ultimoRxUltraMs = millis();
+      atualizarPapelAutomaticoPorParceria();
       comunicacaoCabecaOK = true;
       ultimoRxCabeca = millis();
     }
@@ -2108,6 +2175,7 @@ void processarMensagemCabeca(String msg) {
       ultraRemotoTcm = sT.toFloat();
       ultrasRemotosValidos = (ultraRemotoDcm >= 0.0f && ultraRemotoEcm >= 0.0f && ultraRemotoFcm >= 0.0f && ultraRemotoTcm >= 0.0f);
       ultimoRxUltraRemotoMs = millis();
+      atualizarPapelAutomaticoPorParceria();
       comunicacaoCabecaOK = true;
       ultimoRxCabeca = millis();
     }
@@ -2141,6 +2209,7 @@ void processarMensagemCabeca(String msg) {
           Serial0.println(novoValor ? 1 : 0);
         }
         papelAtacante = novoValor;
+        atualizarPapelAutomaticoPorParceria();
       } else {
         aplicarPapelConfiguradoLocal();
         if (novoValor != papelAtacante) {
@@ -2205,8 +2274,9 @@ void processarMensagemCabeca(String msg) {
     String sEsn = msg.substring(4);
     sEsn.trim();
     espnowOK = (sEsn == "1");
-    sozinho = !espnowOK;
     ultimoRxEspnowMs = millis();
+    atualizarSozinhoLocal();
+    atualizarPapelAutomaticoPorParceria();
     comunicacaoCabecaOK = true;
     ultimoRxCabeca = millis();
     return;
@@ -2299,6 +2369,7 @@ void setup() {
     delay(10);
   }
 
+  enviarEstadoJogoParaCabeca(true);
   desenharTelaAtual();
 }
 
@@ -2708,6 +2779,9 @@ void loop() {
   atualizarValidadeBussola();
   atualizarValidadeLinha();
   atualizarValidadeCamera();
+  atualizarSozinhoLocal();
+  atualizarPapelAutomaticoPorParceria();
+  enviarEstadoJogoParaCabeca();
   enviarCorGolParaCabeca();
   atualizarKicker();
 
