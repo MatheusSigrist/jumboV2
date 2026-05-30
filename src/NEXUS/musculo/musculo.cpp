@@ -1137,24 +1137,7 @@ void atualizarPapelAutomaticoPorParceria() {
     return;
   }
 
-  bool novoPapelAtacante = papelAtacante;
-  bool parceiroConectado = espnowConectadoRecente();
-
-  if (!parceiroConectado) {
-    novoPapelAtacante = true;
-  } else {
-    if (ultrasLocaisRecentesParaPapel() && ultrasRemotosRecentesParaPapel()) {
-      float diferencaUltraTrasCm = ultraTcm - ultraRemotoTcm;
-
-      if (fabsf(diferencaUltraTrasCm) > PAPEL_AUTO_JANELA_EMPATE_CM) {
-        novoPapelAtacante = (diferencaUltraTrasCm > 0.0f);
-      } else {
-        novoPapelAtacante = PAPEL_AUTO_DESEMPATE_ATACANTE;
-      }
-    } else {
-      novoPapelAtacante = PAPEL_AUTO_DESEMPATE_ATACANTE;
-    }
-  }
+  bool novoPapelAtacante = true;
 
   if (novoPapelAtacante != papelAtacante) {
     papelAtacante = novoPapelAtacante;
