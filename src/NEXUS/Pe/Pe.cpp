@@ -2,7 +2,7 @@
 // Funcao: ler 32 sensores de linha via dois multiplexadores,
 // calcular o angulo da linha e enviar esse angulo para a Cabeca.
 // Entrada: LDRs da linha e estado atacante/defensor vindo da Cabeca.
-// Saida: pacote serial com angulo da linha (em decimos de grau).
+// Saida: pacote serial com angulo da linha (em decimos de grau)..
 #include <Arduino.h>
 #include <EEPROM.h>
 #include <math.h>
