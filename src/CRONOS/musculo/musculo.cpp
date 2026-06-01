@@ -174,6 +174,7 @@ const bool MOVIMENTO_BOLA_HABILITADO = false;
 const int EEPROM_SIZE = 64;
 const int EEPROM_ADDR_BUSSOLA = 0;
 const int EEPROM_ADDR_PAPEL_CONFIG = EEPROM_ADDR_BUSSOLA + (int)sizeof(int);
+const int EEPROM_ADDR_COR_GOL = EEPROM_ADDR_PAPEL_CONFIG + (int)sizeof(uint8_t);
 
 void aplicarPapelConfiguradoLocal() {
   if (papelConfiguradoMenu == PAPEL_CONFIG_ATACANTE) {
@@ -191,6 +192,12 @@ bool salvarPapelConfiguradoEEPROM() {
   return EEPROM.commit();
 }
 
+bool salvarCorGolEEPROM() {
+  uint8_t corGolSalva = corGolAzul ? 1 : 0;
+  EEPROM.put(EEPROM_ADDR_COR_GOL, corGolSalva);
+  return EEPROM.commit();
+}
+
 void carregarPapelConfiguradoEEPROM() {
   uint8_t papelSalvo = (uint8_t)PAPEL_CONFIG_AUTO;
   EEPROM.get(EEPROM_ADDR_PAPEL_CONFIG, papelSalvo);
@@ -200,6 +207,15 @@ void carregarPapelConfiguradoEEPROM() {
 
   papelConfiguradoMenu = (PapelConfigurado)papelSalvo;
   aplicarPapelConfiguradoLocal();
+}
+
+void carregarCorGolEEPROM() {
+  uint8_t corGolSalva = 0;
+  EEPROM.get(EEPROM_ADDR_COR_GOL, corGolSalva);
+  if (corGolSalva > 1) {
+    corGolSalva = 0;
+  }
+  corGolAzul = (corGolSalva == 1);
 }
 
 // Parametros do alinhamento por camera + bussola.
@@ -2067,7 +2083,8 @@ void processarEventoBotao(uint8_t botao) {
         corGolAzul = (itemSubMenu == 1);
         atualizarValidadeCamera();
         corGolPendenteEnvio = true;
-        mensagemBotao = corGolAzul ? "ENVIA GOL AZUL" : "ENVIA GOL AMARELO";
+        bool ok = salvarCorGolEEPROM();
+        mensagemBotao = ok ? (corGolAzul ? "GOL AZUL SALVO" : "GOL AMARELO SALVO") : "ERRO EEPROM";
       }
       subMenuCalibracao = SUBMENU_PRINCIPAL;
       itemSubMenu = 0;
@@ -2554,6 +2571,7 @@ void setup() {
     headingBussolaSalvo = 0;
   }
   carregarPapelConfiguradoEEPROM();
+  carregarCorGolEEPROM();
 
   // Configura todas as saidas da ponte H e o pino do kicker.
   pinMode(IN1_1_A, OUTPUT);
