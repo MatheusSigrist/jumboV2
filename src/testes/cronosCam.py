@@ -25,7 +25,7 @@ cy = 110
 R2 = R * R
 
 DEBUG = True
-center = [173, 119]
+center = [158, 133]
 
 # =========================================================
 # FILTRO ANTI-RUIDO DA BOLA
@@ -330,11 +330,9 @@ def processar_comandos_uart():
 # THRESHOLDS
 # =========================================================
 
-
 thresholdb = [15, 20, -11, 15, -20, 0]   # azul
 thresholdy = [40, 55, 5, 20, 45, 5]      # amarelo
-thresholdo = [38, 50, 5, 20, 9, 18]    # laranja
-
+thresholdo = [31, 48, -9, 27, 17, 35]    # laranja
 
 # =========================================================
 # CÂMERA
