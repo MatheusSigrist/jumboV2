@@ -90,9 +90,21 @@ bool ultrasValidos = false;
 bool ultrasRemotosValidos = false;
 unsigned long ultimoRxUltraMs = 0;
 unsigned long ultimoRxUltraRemotoMs = 0;
+int sensorBruto1 = -1;
+int sensorBruto9 = -1;
+int sensorBruto17 = -1;
+int sensorBruto25 = -1;
+unsigned long ultimoRxSensoresBrutosMs = 0;
+unsigned long ultimoReqSensoresBrutosMs = 0;
+int limiarLinhaEditado = 2500;
+unsigned long ultimoReqLimiarLinhaMs = 0;
+bool limiarLinhaSincronizado = false;
+unsigned long entradaTelaLimiarMs = 0;
 bool kickerRecebido = false;
 bool kickerAtivado = false;  // true quando chave acionada (valor 0 vindo da cabeca)
 bool pulsoKickerAtivo = false;
+bool pulsoKickerManualAtivo = false;
+bool pedidoChuteManual = false;
 unsigned long inicioPulsoKickerMs = 0;
 unsigned long ultimoDisparoKickerMs = 0;
 
@@ -130,7 +142,7 @@ enum SubMenuCalibracao { SUBMENU_PRINCIPAL, SUBMENU_GOL, SUBMENU_BUSSOLA, SUBMEN
 SubMenuCalibracao subMenuCalibracao = SUBMENU_PRINCIPAL;
 int itemSubMenu = 0;
 
-enum SubMenuFuncao { SUBFUNCAO_PRINCIPAL, SUBFUNCAO_PAPEIS };
+enum SubMenuFuncao { SUBFUNCAO_PRINCIPAL, SUBFUNCAO_PAPEIS, SUBFUNCAO_SENSORES, SUBFUNCAO_LIMIAR_LINHA, SUBFUNCAO_KIKER };
 SubMenuFuncao subMenuFuncao = SUBFUNCAO_PRINCIPAL;
 int itemSubMenuFuncao = 0;
 
@@ -144,7 +156,14 @@ const unsigned long TIMEOUT_BUSSOLA_MS = 800;
 const unsigned long TIMEOUT_LINHA_MS = 150;
 const unsigned long TIMEOUT_ULTRA_MS = 1000;
 const unsigned long TIMEOUT_CAMERA_MS = 1000;
+const unsigned long TIMEOUT_SENSORES_BRUTOS_MS = 1200;
+const unsigned long INTERVALO_REQ_SENSORES_BRUTOS_MS = 250;
+const unsigned long INTERVALO_REQ_LIMIAR_LINHA_MS = 400;
 const unsigned long INTERVALO_ENVIO_ESTADO_JOGO_MS = 500;
+const int LIMIAR_LINHA_MIN = 100;
+const int LIMIAR_LINHA_MAX = 4000;
+const int LIMIAR_LINHA_PASSO = 100;
+const uint8_t BOTAO_MEIO_LONGO = 23;
 // Velocidade Maxima do robô - Vamos alterar aqui!
 const int velocidade_maxima = 195;
 const bool MOVIMENTO_BOLA_HABILITADO = false;
@@ -264,13 +283,27 @@ void atualizarKicker() {
   if (pulsoKickerAtivo && (agora - inicioPulsoKickerMs) >= KICK_PULSE_MS) {
     digitalWrite(KICKER_PIN, LOW);
     pulsoKickerAtivo = false;
+    pulsoKickerManualAtivo = false;
   }
+
+  // Disparo manual solicitado no submenu KIKER.
+  if (pedidoChuteManual && !pulsoKickerAtivo) {
+    digitalWrite(KICKER_PIN, HIGH);
+    inicioPulsoKickerMs = agora;
+    ultimoDisparoKickerMs = agora;
+    pulsoKickerAtivo = true;
+    pulsoKickerManualAtivo = true;
+    pedidoChuteManual = false;
+    Serial.println("Chute manual");
+    return;
+  }
+  pedidoChuteManual = false;
 
   // So permite chute durante o jogo, com comunicacao valida e chave acionada.
   bool podeChutar = (estadoAtual == INICIAR) && comunicacaoCabecaOK && kickerRecebido && kickerAtivado;
   if (!podeChutar) {
-    // Garante desligamento imediato se alguma pre-condicao deixar de valer.
-    if (pulsoKickerAtivo) {
+    // Garante desligamento imediato apenas para pulso automatico.
+    if (pulsoKickerAtivo && !pulsoKickerManualAtivo) {
       digitalWrite(KICKER_PIN, LOW);
       pulsoKickerAtivo = false;
     }
@@ -283,8 +316,13 @@ void atualizarKicker() {
     inicioPulsoKickerMs = agora;
     ultimoDisparoKickerMs = agora;
     pulsoKickerAtivo = true;
+    pulsoKickerManualAtivo = false;
     Serial.println("Chutei");
   }
+}
+
+void solicitarChuteManualKiker() {
+  pedidoChuteManual = true;
 }
 
 // Aciona o motor 1 com sentido e PWM conforme a velocidade assinada.
@@ -1208,28 +1246,50 @@ void desenharSubmenuFuncao() {
 
   if (subMenuFuncao == SUBFUNCAO_PRINCIPAL) {
     if (itemSubMenuFuncao == 0) {
-      display.fillRect(0, 16, 128, 10, SSD1306_WHITE);
+      display.fillRect(0, 16, 128, 8, SSD1306_WHITE);
       display.setTextColor(SSD1306_BLACK);
-      display.setCursor(4, 18);
+      display.setCursor(4, 16);
       display.println("PAPEIS");
       display.setTextColor(SSD1306_WHITE);
     } else {
-      display.setCursor(4, 18);
+      display.setCursor(4, 16);
       display.println("PAPEIS");
     }
 
     if (itemSubMenuFuncao == 1) {
-      display.fillRect(0, 32, 128, 10, SSD1306_WHITE);
+      display.fillRect(0, 24, 128, 8, SSD1306_WHITE);
       display.setTextColor(SSD1306_BLACK);
-      display.setCursor(4, 34);
+      display.setCursor(4, 24);
+      display.println("SENSORES");
+      display.setTextColor(SSD1306_WHITE);
+    } else {
+      display.setCursor(4, 24);
+      display.println("SENSORES");
+    }
+
+    if (itemSubMenuFuncao == 2) {
+      display.fillRect(0, 32, 128, 8, SSD1306_WHITE);
+      display.setTextColor(SSD1306_BLACK);
+      display.setCursor(4, 32);
+      display.println("KIKER");
+      display.setTextColor(SSD1306_WHITE);
+    } else {
+      display.setCursor(4, 32);
+      display.println("KIKER");
+    }
+
+    if (itemSubMenuFuncao == 3) {
+      display.fillRect(0, 32, 128, 8, SSD1306_WHITE);
+      display.setTextColor(SSD1306_BLACK);
+      display.setCursor(4, 32);
       display.println("VOLTA");
       display.setTextColor(SSD1306_WHITE);
     } else {
-      display.setCursor(4, 34);
+      display.setCursor(4, 32);
       display.println("VOLTA");
     }
 
-    display.setCursor(0, 46);
+    display.setCursor(0, 48);
     display.print("MODO: ");
     if (papelConfiguradoMenu == PAPEL_CONFIG_ATACANTE) {
       display.println("ATACANTE");
@@ -1291,9 +1351,107 @@ void desenharSubmenuFuncao() {
 
     display.setCursor(0, 56);
     display.println("BTN3 CONFIRMA");
+  } else if (subMenuFuncao == SUBFUNCAO_SENSORES) {
+    bool sensoresRecentes = (ultimoRxSensoresBrutosMs > 0) &&
+                            ((millis() - ultimoRxSensoresBrutosMs) <= TIMEOUT_SENSORES_BRUTOS_MS);
+
+    display.setCursor(0, 8);
+    display.println("LDR BRUTO PE");
+    display.setCursor(0, 20);
+    display.print("S1 :");
+    display.print(sensoresRecentes ? sensorBruto1 : -1);
+
+    display.setCursor(66, 20);
+    display.print("S9 :");
+    display.print(sensoresRecentes ? sensorBruto9 : -1);
+
+    display.setCursor(0, 34);
+    display.print("S17:");
+    display.print(sensoresRecentes ? sensorBruto17 : -1);
+
+    display.setCursor(66, 34);
+    display.print("S25:");
+    display.print(sensoresRecentes ? sensorBruto25 : -1);
+
+    display.setCursor(0, 46);
+    display.println(sensoresRecentes ? "DADOS: OK" : "DADOS: AGUARDANDO");
+    display.setCursor(0, 56);
+    display.println("BTN3 ABRE LIMIAR");
+  } else if (subMenuFuncao == SUBFUNCAO_LIMIAR_LINHA) {
+    display.setCursor(0, 0);
+    display.println("AJUSTE LIMIAR LINHA");
+
+    display.setCursor(61, 16);
+    display.println("^");
+
+    display.setTextSize(2);
+    display.setCursor(24, 26);
+    display.println(limiarLinhaEditado);
+    display.setTextSize(1);
+
+    display.setCursor(61, 48);
+    display.println("v");
+    display.setCursor(0, 56);
+    display.println("BTN3 SALVA E VOLTA");
+  } else if (subMenuFuncao == SUBFUNCAO_KIKER) {
+    if (itemSubMenuFuncao == 0) {
+      display.fillRect(0, 18, 128, 12, SSD1306_WHITE);
+      display.setTextColor(SSD1306_BLACK);
+      display.setCursor(24, 20);
+      display.println("CHUTAR");
+      display.setTextColor(SSD1306_WHITE);
+    } else {
+      display.setCursor(24, 20);
+      display.println("CHUTAR");
+    }
+
+    if (itemSubMenuFuncao == 1) {
+      display.fillRect(0, 36, 128, 12, SSD1306_WHITE);
+      display.setTextColor(SSD1306_BLACK);
+      display.setCursor(24, 38);
+      display.println("VOLTAR");
+      display.setTextColor(SSD1306_WHITE);
+    } else {
+      display.setCursor(24, 38);
+      display.println("VOLTAR");
+    }
+
+    display.setCursor(0, 56);
+    display.println("BTN3 CONFIRMA");
   }
 
   display.display();
+}
+
+void solicitarSensoresBrutosPe(bool forcar = false) {
+  if (estadoAtual != FUNCAO || subMenuFuncao != SUBFUNCAO_SENSORES) {
+    return;
+  }
+
+  if (!forcar && (millis() - ultimoReqSensoresBrutosMs) < INTERVALO_REQ_SENSORES_BRUTOS_MS) {
+    return;
+  }
+
+  Serial1.println("REQ:SENS");
+  ultimoReqSensoresBrutosMs = millis();
+}
+
+void solicitarLimiarLinhaPe(bool forcar = false) {
+  if (estadoAtual != FUNCAO || subMenuFuncao != SUBFUNCAO_LIMIAR_LINHA) {
+    return;
+  }
+
+  if (!forcar && (millis() - ultimoReqLimiarLinhaMs) < INTERVALO_REQ_LIMIAR_LINHA_MS) {
+    return;
+  }
+
+  Serial1.println("REQ:LIM");
+  ultimoReqLimiarLinhaMs = millis();
+}
+
+void enviarLimiarLinhaParaPe() {
+  Serial1.print("SETLIM:");
+  Serial1.println(limiarLinhaEditado);
 }
 
 // Desenha as telas de calibracao (principal, gol, bussola e teste de camera).
@@ -1730,10 +1888,10 @@ void processarEventoBotao(uint8_t botao) {
   if (estadoAtual == FUNCAO && subMenuFuncao == SUBFUNCAO_PRINCIPAL) {
     if (botao == 1) {
       itemSubMenuFuncao--;
-      if (itemSubMenuFuncao < 0) itemSubMenuFuncao = 1;
+      if (itemSubMenuFuncao < 0) itemSubMenuFuncao = 3;
     } else if (botao == 2) {
       itemSubMenuFuncao++;
-      if (itemSubMenuFuncao > 1) itemSubMenuFuncao = 0;
+      if (itemSubMenuFuncao > 3) itemSubMenuFuncao = 0;
     } else if (botao == 3) {
       if (itemSubMenuFuncao == 0) {
         subMenuFuncao = SUBFUNCAO_PAPEIS;
@@ -1744,6 +1902,12 @@ void processarEventoBotao(uint8_t botao) {
         } else {
           itemSubMenuFuncao = 2;
         }
+      } else if (itemSubMenuFuncao == 1) {
+        subMenuFuncao = SUBFUNCAO_SENSORES;
+        solicitarSensoresBrutosPe(true);
+      } else if (itemSubMenuFuncao == 2) {
+        subMenuFuncao = SUBFUNCAO_KIKER;
+        itemSubMenuFuncao = 0;
       } else {
         estadoAtual = MENU;
         itemSelecionado = 1;
@@ -1777,6 +1941,51 @@ void processarEventoBotao(uint8_t botao) {
 
       subMenuFuncao = SUBFUNCAO_PRINCIPAL;
       itemSubMenuFuncao = 0;
+    }
+    return;
+  }
+
+  if (estadoAtual == FUNCAO && subMenuFuncao == SUBFUNCAO_SENSORES) {
+    if (botao == 1 || botao == 2) {
+      solicitarSensoresBrutosPe(true);
+    } else if (botao == 3) {
+      subMenuFuncao = SUBFUNCAO_LIMIAR_LINHA;
+      limiarLinhaSincronizado = false;
+      entradaTelaLimiarMs = millis();
+      solicitarLimiarLinhaPe(true);
+    }
+    return;
+  }
+
+  if (estadoAtual == FUNCAO && subMenuFuncao == SUBFUNCAO_LIMIAR_LINHA) {
+    if (botao == 1) {
+      limiarLinhaEditado += LIMIAR_LINHA_PASSO;
+      if (limiarLinhaEditado > LIMIAR_LINHA_MAX) limiarLinhaEditado = LIMIAR_LINHA_MAX;
+      limiarLinhaSincronizado = true;
+    } else if (botao == 2) {
+      limiarLinhaEditado -= LIMIAR_LINHA_PASSO;
+      if (limiarLinhaEditado < LIMIAR_LINHA_MIN) limiarLinhaEditado = LIMIAR_LINHA_MIN;
+      limiarLinhaSincronizado = true;
+    } else if (botao == 3) {
+      enviarLimiarLinhaParaPe();
+      mensagemBotao = "LIMIAR SALVO";
+      subMenuFuncao = SUBFUNCAO_PRINCIPAL;
+      itemSubMenuFuncao = 1;
+    }
+    return;
+  }
+
+  if (estadoAtual == FUNCAO && subMenuFuncao == SUBFUNCAO_KIKER) {
+    if (botao == 1 || botao == 2) {
+      itemSubMenuFuncao = 1 - itemSubMenuFuncao;
+    } else if (botao == 3) {
+      if (itemSubMenuFuncao == 0) {
+        solicitarChuteManualKiker();
+        mensagemBotao = "CHUTE MANUAL";
+      } else {
+        subMenuFuncao = SUBFUNCAO_PRINCIPAL;
+        itemSubMenuFuncao = 2;
+      }
     }
     return;
   }
@@ -1920,11 +2129,11 @@ void processarMensagemCabeca(String msg) {
     return;
   }
 
-  // Eventos de botoes chegam como BTN:1 / BTN:2 / BTN:3.
+  // Eventos de botoes chegam como BTN:1 / BTN:2 / BTN:3 / BTN:23.
   if (msg.startsWith("BTN:")) {
     String valor = msg.substring(4);
     valor.trim();
-    if (valor == "1" || valor == "2" || valor == "3") {
+    if (valor == "1" || valor == "2" || valor == "3" || valor == "23") {
       mensagemBotao = "BOTAO " + valor + " APERTADO";
       comunicacaoCabecaOK = true;
       ultimoRxCabeca = millis();
@@ -2226,6 +2435,47 @@ void processarMensagemCabeca(String msg) {
     return;
   }
   // ===== FIM dados camera =====
+
+  if (msg.startsWith("SENS:")) {
+    String payload = msg.substring(5);
+    int p1 = payload.indexOf(',');
+    int p2 = payload.indexOf(',', p1 + 1);
+    int p3 = payload.indexOf(',', p2 + 1);
+    if (p1 > 0 && p2 > p1 && p3 > p2) {
+      String s1 = payload.substring(0, p1);
+      String s9 = payload.substring(p1 + 1, p2);
+      String s17 = payload.substring(p2 + 1, p3);
+      String s25 = payload.substring(p3 + 1);
+
+      s1.trim();
+      s9.trim();
+      s17.trim();
+      s25.trim();
+
+      sensorBruto1 = s1.toInt();
+      sensorBruto9 = s9.toInt();
+      sensorBruto17 = s17.toInt();
+      sensorBruto25 = s25.toInt();
+      ultimoRxSensoresBrutosMs = millis();
+
+      comunicacaoCabecaOK = true;
+      ultimoRxCabeca = millis();
+    }
+    return;
+  }
+
+  if (msg.startsWith("LIM:")) {
+    String valor = msg.substring(4);
+    valor.trim();
+    int recebido = valor.toInt();
+    if (recebido >= LIMIAR_LINHA_MIN && recebido <= LIMIAR_LINHA_MAX) {
+      limiarLinhaEditado = recebido;
+      limiarLinhaSincronizado = true;
+      comunicacaoCabecaOK = true;
+      ultimoRxCabeca = millis();
+    }
+    return;
+  }
 
   // Status da comunicacao ESP-NOW entre as Cabecas reportado pela Cabeca local.
   if (msg.startsWith("ESN:")) {
@@ -2816,6 +3066,10 @@ void loop() {
   atualizarPapelAutomaticoPorParceria();
   enviarEstadoJogoParaCabeca();
   enviarCorGolParaCabeca();
+  solicitarSensoresBrutosPe();
+  if (!limiarLinhaSincronizado) {
+    solicitarLimiarLinhaPe();
+  }
   atualizarKicker();
 
   // Se a Cabeca ficar silenciosa alem do timeout, derruba o estado de comunicacao.
