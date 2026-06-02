@@ -121,6 +121,7 @@ bool cameraGolSelecionadoValido = false;
 bool cameraGolSelecionadoAzul = false;
 bool cameraDadosValidos = false;
 unsigned long ultimoRxCameraMs = 0;
+unsigned long cameraUltimaVezBolaDetetadaMs = 0;  // Ultima vez que a camera detectou a bola
 // ===== FIM novos dados camera =====
 
 // Status da comunicacao ESP-NOW entre as Cabecas.
@@ -2438,6 +2439,9 @@ void processarMensagemCabeca(String msg) {
 
       cameraBallAngle = (int16_t)sBallA.toInt();
       cameraBallDist = (uint16_t)sBallD.toInt();
+      if (!((cameraBallAngle == 0) && (cameraBallDist == 0))) {
+        cameraUltimaVezBolaDetetadaMs = millis();
+      }
       cameraBlueAngle = (int16_t)sBlueA.toInt();
       cameraBlueDist = (uint16_t)sBlueD.toInt();
       cameraYellowAngle = (int16_t)sYellA.toInt();
@@ -2668,11 +2672,18 @@ void atacante() {
     }
   } else if (cameraBolaVisivel) {
     bool cameraSemBola = (cameraBallAngle == 0) && (cameraBallDist == 0);
-    float anguloCameraVetorial = cameraSemBola
-                                ? calcularAnguloBuscaSemBolaCameraAtacante()
-                                : normalizarAngulo360((float)cameraBallAngle);
-    float anguloCameraComRampa = obterAnguloIrSuavizado(anguloCameraVetorial);
-    seguirDirecaoComGiro(anguloCameraComRampa, aplicarFreioUltrassonicoAtacante(velocidade_maxima), cmdPidAssinado);
+    bool semBolaTempoSuficiente = cameraSemBola &&
+      ((cameraUltimaVezBolaDetetadaMs == 0) || ((millis() - cameraUltimaVezBolaDetetadaMs) > 2000UL));
+    if (cameraSemBola && !semBolaTempoSuficiente) {
+      // Camera online mas sem bola ha menos de 2s: aguarda antes de buscar com ultra
+      pararMotores();
+    } else {
+      float anguloCameraVetorial = semBolaTempoSuficiente
+                                  ? calcularAnguloBuscaSemBolaCameraAtacante()
+                                  : normalizarAngulo360((float)cameraBallAngle);
+      float anguloCameraComRampa = obterAnguloIrSuavizado(anguloCameraVetorial);
+      seguirDirecaoComGiro(anguloCameraComRampa, aplicarFreioUltrassonicoAtacante(velocidade_maxima), cmdPidAssinado);
+    }
   } else if (precisaAlinhar) {
     girarNoEixo(cmdPidAssinado);
   } else {
