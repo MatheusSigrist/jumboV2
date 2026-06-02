@@ -3,32 +3,12 @@ import time
 import math
 import struct
 import machine
-from machine import UART, WDT
-
-try:
-    import pyb
-except ImportError:
-    pyb = None
+from machine import UART
 
 # ===== COMUNICAÇÃO SERIAL COM OLHO =====
 uart_olho = UART(1, 115200, timeout_char=200)
 UART_CMD_MAX_LEN = 16
-UART_ACK_BYTE = 0xAC
-UART_ACK_TIMEOUT_MS = 600
-UART_LINK_RECOVERY_COOLDOWN_MS = 1500
-UART_OFFLINE_RESET_MS = 1000
-WATCHDOG_RESET_PISCADAS = 3
-WATCHDOG_RESET_PISCADA_MS = 80
-OPENMV_WDT_TIMEOUT_MS = 2000
-BOOT_WDT_PISCADAS = 5
-BOOT_WDT_PISCADA_MS = 120
 uart_cmd_buffer = bytearray()
-uart_ultimo_ack_ms = time.ticks_ms()
-uart_ultimo_envio_ms = 0
-uart_ultima_recuperacao_ms = 0
-uart_link_online = False
-uart_ja_conectou = False
-uart_offline_desde_ms = 0
 
 # ===== PROTOCOLO SERIAL =====
 BYTE_INICIA = 0xAA
@@ -45,7 +25,7 @@ cy = 110
 R2 = R * R
 
 DEBUG = True
-center = [174, 129]
+center = [158, 133]
 
 # =========================================================
 # FILTRO ANTI-RUIDO DA BOLA
@@ -296,78 +276,16 @@ def enviar_dados_visao(ball_angle, ball_dist, blue_angle, blue_dist, yellow_angl
     buffer[2:14] = msg
     buffer[14] = BYTE_PARA
 
-    global uart_ultimo_envio_ms
-
     uart_olho.write(buffer)
-    uart_ultimo_envio_ms = time.ticks_ms()
-
-
-def limpar_rx_uart_olho():
-    while uart_olho.any():
-        if uart_olho.read() is None:
-            break
-
-
-def reinicializar_link_uart(motivo):
-    global uart_olho, uart_cmd_buffer, uart_ultima_recuperacao_ms, uart_link_online
-
-    print("UART LINK RECOVERY:", motivo)
-    uart_olho = UART(1, 115200, timeout_char=200)
-    uart_cmd_buffer = bytearray()
-    uart_link_online = False
-    uart_ultima_recuperacao_ms = time.ticks_ms()
-    limpar_rx_uart_olho()
-    atualizar_led_status_comunicacao()
-
-
-def atualizar_led_status_comunicacao():
-    if uart_link_online:
-        led_red.on()
-        led_blue.on()
-    else:
-        led_red.off()
-        led_blue.off()
-
-
-def sinalizar_watchdog_reset():
-    for _ in range(WATCHDOG_RESET_PISCADAS):
-        led_blue.off()
-        led_red.on()
-        time.sleep_ms(WATCHDOG_RESET_PISCADA_MS)
-        led_red.off()
-        time.sleep_ms(WATCHDOG_RESET_PISCADA_MS)
-
-
-def reset_foi_por_watchdog_openmv():
-    try:
-        return machine.reset_cause() == machine.WDT_RESET
-    except AttributeError:
-        return False
-
-
-def sinalizar_reinicio_watchdog_openmv():
-    if not reset_foi_por_watchdog_openmv():
-        return
-
-    for _ in range(BOOT_WDT_PISCADAS):
-        led_red.off()
-        led_blue.on()
-        time.sleep_ms(BOOT_WDT_PISCADA_MS)
-        led_blue.off()
-        time.sleep_ms(BOOT_WDT_PISCADA_MS)
 
 
 def reiniciar_camera_por_uart():
     """
     Executa reset logico solicitado pela placa Olho.
-    O reboot por software e o caminho mais forte de recuperacao.
+    O reboot por software e o caminho mais robusto para recuperar travas da OpenMV.
     """
     print("UART CMD: RESET")
-    sinalizar_watchdog_reset()
-    if pyb is not None:
-        pyb.reset()
-    else:
-        machine.reset()
+    machine.reset()
 
 
 def processar_comandos_uart():
@@ -375,7 +293,7 @@ def processar_comandos_uart():
     Le comandos ASCII vindos do Olho sem interferir no frame binario enviado pela camera.
     Protocolo esperado do watchdog: RESET\r\n
     """
-    global uart_cmd_buffer, uart_ultimo_ack_ms, uart_link_online, uart_ja_conectou, uart_offline_desde_ms
+    global uart_cmd_buffer
 
     if not uart_olho.any():
         return
@@ -385,14 +303,6 @@ def processar_comandos_uart():
         return
 
     for byte in dados:
-        if byte == UART_ACK_BYTE:
-            uart_ultimo_ack_ms = time.ticks_ms()
-            uart_link_online = True
-            uart_ja_conectou = True
-            uart_offline_desde_ms = 0
-            atualizar_led_status_comunicacao()
-            continue
-
         if byte == 10 or byte == 13:
             if not uart_cmd_buffer:
                 continue
@@ -416,35 +326,12 @@ def processar_comandos_uart():
             uart_cmd_buffer = bytearray()
 
 
-def monitorar_link_uart():
-    global uart_link_online, uart_offline_desde_ms
-
-    if uart_ultimo_envio_ms == 0:
-        return
-
-    agora = time.ticks_ms()
-    sem_ack = time.ticks_diff(agora, uart_ultimo_ack_ms)
-    cooldown = time.ticks_diff(agora, uart_ultima_recuperacao_ms)
-
-    if sem_ack <= UART_ACK_TIMEOUT_MS:
-        return
-
-    if uart_link_online:
-        uart_offline_desde_ms = agora
-
-    uart_link_online = False
-    atualizar_led_status_comunicacao()
-
-    if cooldown >= UART_LINK_RECOVERY_COOLDOWN_MS:
-        reinicializar_link_uart("ACK TIMEOUT")
-
-
 # =========================================================
 # THRESHOLDS
 # =========================================================
 
 thresholdb = [15, 20, -11, 15, -20, 0]   # azul
-thresholdy = [47, 50, 8, 20, 45, 5]      # amarelo
+thresholdy = [40, 55, 5, 20, 45, 5]      # amarelo
 thresholdo = [31, 48, -9, 27, 17, 35]    # laranja
 
 # =========================================================
@@ -458,7 +345,7 @@ sensor.skip_frames(time=1000)
 
 sensor.set_auto_whitebal(False, rgb_gain_db=(62, 60, 64))
 sensor.set_auto_exposure(False, exposure_us=25000)
-sensor.set_auto_gain(False, gain_db=10)
+sensor.set_auto_gain(False, gain_db=20)
 
 print("RGB gain:", sensor.get_rgb_gain_db())
 print("Exposure:", sensor.get_exposure_us())
@@ -468,12 +355,6 @@ sensor.skip_frames(time=1000)
 
 clock = time.clock()
 print("Iniciando detecção...")
-from machine import LED
-
-led_blue = LED("LED_BLUE")
-led_red = LED("LED_RED")
-sinalizar_reinicio_watchdog_openmv()
-atualizar_led_status_comunicacao()
 
 # =========================================================
 # LOOP PRINCIPAL
@@ -482,9 +363,6 @@ atualizar_led_status_comunicacao()
 while True:
     clock.tick()
     processar_comandos_uart()
-    monitorar_link_uart()
-    wdt = WDT(timeout=OPENMV_WDT_TIMEOUT_MS)
-    wdt.feed()
     img = sensor.snapshot()
 
     # Máscara quadrada externa
@@ -586,7 +464,6 @@ while True:
 
     # ===== ENVIA DADOS VIA SERIAL =====
     enviar_dados_visao(orange_angle, orange_dist, blue_angle, blue_dist, yellow_angle, yellow_dist)
-    monitorar_link_uart()
 
     # DEBUG NO TERMINAL
     print("FPS: {:.2f} | BALL:{} A:{} D:{} | BLUE:{} A:{} D:{} | YELL:{} A:{} D:{}".format(
@@ -595,5 +472,3 @@ while True:
         blue_found, blue_angle, blue_dist,
         yellow_found, yellow_angle, yellow_dist
     ))
-
-    wdt.feed()

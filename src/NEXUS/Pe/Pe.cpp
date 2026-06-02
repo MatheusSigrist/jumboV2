@@ -285,16 +285,8 @@ PacoteDefensor detectarLinhaDefensorPorZonas() {
   pacote.anguloZonaA = calcularAnguloZona(0, 15, temZonaA);
   pacote.anguloZonaB = calcularAnguloZona(16, 31, temZonaB);
 
-  // Inverte apenas o sentido da Zona B, mantendo a faixa absoluta em 180..360.
-  // Ex.: 360 -> 180, 350 -> 190, 180 -> 360.
-  if (pacote.anguloZonaB >= 0) {
-    float angB = pacote.anguloZonaB / 10.0f;
-    angB = 540.0f - angB;
-    if (angB > 360.0f) {
-      angB -= 360.0f;
-    }
-    pacote.anguloZonaB = (int16_t)round(angB * 10.0f);
-  }
+  // Mantem os angulos absolutos originais de cada zona.
+  // Isso preserva compatibilidade com a logica historica do defensor no Musculo.
 
   pacote.temLinhaZonaA = temZonaA ? 1 : 0;
   pacote.temLinhaZonaB = temZonaB ? 1 : 0;

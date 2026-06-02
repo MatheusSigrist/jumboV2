@@ -121,6 +121,8 @@ bool cameraGolSelecionadoValido = false;
 bool cameraGolSelecionadoAzul = false;
 bool cameraDadosValidos = false;
 unsigned long ultimoRxCameraMs = 0;
+float ultimoAnguloIrValido = -1.0f;
+unsigned long ultimoIrValidoMs = 0;
 // ===== FIM novos dados camera =====
 
 // Status da comunicacao ESP-NOW entre as Cabecas.
@@ -151,9 +153,9 @@ PapelConfigurado papelConfiguradoMenu = PAPEL_CONFIG_AUTO;
 
 // Temporizacao da comunicacao e limites gerais de velocidade.
 const unsigned long INTERVALO_OI_MS = 1000;
-const unsigned long TIMEOUT_COM_MS = 3000;
+const unsigned long TIMEOUT_COM_MS = 5000;
 const unsigned long TIMEOUT_BUSSOLA_MS = 800;
-const unsigned long TIMEOUT_LINHA_MS = 300;
+const unsigned long TIMEOUT_LINHA_MS = 150;
 const unsigned long TIMEOUT_ULTRA_MS = 1000;
 const unsigned long TIMEOUT_CAMERA_MS = 1000;
 const unsigned long TIMEOUT_SENSORES_BRUTOS_MS = 1200;
@@ -165,7 +167,7 @@ const int LIMIAR_LINHA_MAX = 4000;
 const int LIMIAR_LINHA_PASSO = 100;
 const uint8_t BOTAO_MEIO_LONGO = 23;
 // Velocidade Maxima do rob├┤ - Vamos alterar aqui!
-const int velocidade_maxima = 220;
+const int velocidade_maxima = 195;
 const bool MOVIMENTO_BOLA_HABILITADO = false;
 
 
@@ -243,17 +245,18 @@ const int PID_LINHA_GOL_SAIDA_MAX = 220;
 
 // Velocidade dedicada para ataque frontal quando a bola estiver entre 330┬░ e 30┬░.
 const int VELOCIDADE_IR_FRONTAL_PWM = 200;
-const int VELOCIDADE_IR_FAIXA_REDUZIDA_PWM = 140;
+const int VELOCIDADE_IR_FAIXA_REDUZIDA_PWM = 110;
 const int DEFENSOR_VELOCIDADE_AVANCO_IR_FRONTAL_PWM = 255;
 const int PASSO_RAMPA_PWM = 16;
 const unsigned long TRANSICAO_ANGULO_IR_MIN_MS = 50;
 const unsigned long TRANSICAO_ANGULO_IR_MAX_MS = 100;
 const float TRANSICAO_ANGULO_IR_MS_POR_GRAU = 2.0f;
 const float PASSO_ANGULO_IR_GRAUS = 5.0f;
-const float ATACANTE_ULTRA_FREIO_INICIO_CM = 45.0f;
-const float ATACANTE_ULTRA_FREIO_CRITICO_CM = 25.0f;
-const int ATACANTE_ULTRA_FREIO_VELOCIDADE_MIN = 140;
+const float ATACANTE_ULTRA_FREIO_INICIO_CM = 55.0f;
+const float ATACANTE_ULTRA_FREIO_CRITICO_CM = 35.0f;
+const int ATACANTE_ULTRA_FREIO_VELOCIDADE_MIN = 125;
 const int ATACANTE_ULTRA_FREIO_PWM_POR_CM = 3;
+const unsigned long IR_BUFFER_PERDA_MS = 160;
 const unsigned long DEFENSOR_TEMPO_GATILHO_IR_FRONTAL_MS = 3000;
 const unsigned long DEFENSOR_TEMPO_AVANCO_IR_FRONTAL_MS = 2500;
 const float DEFENSOR_TOLERANCIA_IR_FRONTAL_GRAUS = 45.0f;
@@ -805,7 +808,23 @@ int calcularVelocidadeIrPorAngulo(float anguloBolaGraus) {
 // Detecta a faixa frontal do IR em torno de 0┬░, tratando a transicao 360┬░ -> 0┬░.
 bool irNaFaixaFrontal(float anguloBolaGraus) {
   float ang = normalizarAngulo360(anguloBolaGraus);
-  return (ang >= 340.0f || ang <= 20.0f);
+  return (ang >= 335.0f || ang <= 25.0f);
+}
+
+bool obterAnguloIrComBuffer(float &anguloIrSaida) {
+  if (irDetectado && anguloIr >= 0.0f) {
+    anguloIrSaida = normalizarAngulo360(anguloIr);
+    return true;
+  }
+
+  if ((ultimoAnguloIrValido >= 0.0f) &&
+      (ultimoIrValidoMs > 0) &&
+      ((millis() - ultimoIrValidoMs) <= IR_BUFFER_PERDA_MS)) {
+    anguloIrSaida = normalizarAngulo360(ultimoAnguloIrValido);
+    return true;
+  }
+
+  return false;
 }
 
 float calcularAnguloBuscaSemBolaCameraAtacante() {
@@ -830,13 +849,13 @@ float calcularAnguloBuscaSemBolaCameraAtacante() {
 
 int aplicarFreioUltrassonicoAtacante(int velocidadeDesejada) {
   int velocidadeBase = constrain(velocidadeDesejada, 0, 255);
-  bool ultrasRecentes = ultrasValidos && (ultimoRxUltraMs > 0) && ((millis() - ultimoRxUltraMs) <= TIMEOUT_ULTRA_MS);
+  bool ultrasRecentes = (ultimoRxUltraMs > 0) && ((millis() - ultimoRxUltraMs) <= TIMEOUT_ULTRA_MS);
   if (!ultrasRecentes) {
     return velocidadeBase;
   }
 
   float menorUltraCm = -1.0f;
-  float leituras[] = { ultraDcm, ultraEcm, ultraFcm, ultraTcm };
+  float leituras[] = { ultraDcm, ultraEcm };
   for (float leitura : leituras) {
     if (leitura < 0.0f) {
       continue;
@@ -2209,6 +2228,8 @@ void processarMensagemCabeca(String msg) {
       } else {
         irDetectado = true;
         anguloIr = novoAngulo;
+        ultimoAnguloIrValido = normalizarAngulo360(novoAngulo);
+        ultimoIrValidoMs = millis();
       }
     }
 
@@ -2613,7 +2634,7 @@ void setup() {
 
   // Durante alguns segundos, tenta fazer handshake inicial com a Cabeca.
   unsigned long inicio = millis();
-  while ((millis() - inicio) < 3000) {
+  while ((millis() - inicio) < TIMEOUT_COM_MS) {
     if (millis() - ultimoEnvioOi >= 300) {
       Serial1.println("oi");
       ultimoEnvioOi = millis();
@@ -2639,6 +2660,8 @@ void atacante() {
 
   int cmdPidAssinado = 0;
   bool cameraBolaVisivel = cameraTemBolaValida();
+  float anguloIrBufferizado = -1.0f;
+  bool irDisponivel = obterAnguloIrComBuffer(anguloIrBufferizado);
 
   // So gira para alinhar quando o gol estiver visivel na camera e fora da tolerancia.
   bool precisaAlinhar = golVisivelCamera && (fabsf(erroAlinhamentoGraus) > TOLERANCIA_ALINHAMENTO_GRAUS);
@@ -2654,7 +2677,7 @@ void atacante() {
 
   // Se ficar sem IR e com bola na camera por tempo suficiente,
   // a camera assume e a linha e ignorada temporariamente.
-  if (!irDetectado && cameraBolaVisivel) {
+  if (!irDisponivel && cameraBolaVisivel) {
     if (inicioCameraSemIrMs == 0) {
       inicioCameraSemIrMs = millis();
     }
@@ -2685,14 +2708,14 @@ void atacante() {
     
   } else if (erroGrande) {
     girarNoEixo(cmdPidAssinado);
-  } else if (irDetectado) {
-    if (irNaFaixaFrontal(anguloIr)) {
+  } else if (irDisponivel) {
+    if (irNaFaixaFrontal(anguloIrBufferizado)) {
       // Na faixa frontal aplica PWM direto e mantem correcao de alinhamento do gol.
       moverFrenteComGiro(aplicarFreioUltrassonicoAtacante(VELOCIDADE_IR_FRONTAL_PWM), cmdPidAssinado);
     } else {
-      float anguloIrAlvo = mapearAnguloBolaParaMovimento(anguloIr);
+      float anguloIrAlvo = mapearAnguloBolaParaMovimento(anguloIrBufferizado);
       float anguloIrComRampa = obterAnguloIrSuavizado(anguloIrAlvo);
-      int velocidadeIr = aplicarFreioUltrassonicoAtacante(calcularVelocidadeIrPorAngulo(anguloIr));
+      int velocidadeIr = aplicarFreioUltrassonicoAtacante(calcularVelocidadeIrPorAngulo(anguloIrBufferizado));
       seguirDirecaoPorAngulo(anguloIrComRampa, velocidadeIr);
     }
   } else if (cameraBolaVisivel) {
@@ -2961,8 +2984,9 @@ void defensor() {
   bool bolaDisponivel = false;
 
 
-  if (irDetectado) {
-    anguloBola = normalizarAngulo360(anguloIr);
+  float anguloIrBufferizado = -1.0f;
+  if (obterAnguloIrComBuffer(anguloIrBufferizado)) {
+    anguloBola = anguloIrBufferizado;
     bolaDisponivel = true;
   } else if (cameraTemBolaValida()) {
     anguloBola = normalizarAngulo360((float)cameraBallAngle);
