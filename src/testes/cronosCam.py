@@ -25,7 +25,7 @@ cy = 110
 R2 = R * R
 
 DEBUG = True
-center = [158, 133]
+center = [158, 132]
 
 # =========================================================
 # FILTRO ANTI-RUIDO DA BOLA
@@ -55,6 +55,12 @@ BALL_ZONE_OUTER2 = BALL_ZONE_OUTER * BALL_ZONE_OUTER
 # =========================================================
 GOAL_ZONE_OUTER = 120
 GOAL_ZONE_OUTER2 = GOAL_ZONE_OUTER * GOAL_ZONE_OUTER
+
+# =========================================================
+# ZONA DE EXCLUSÃO DA BOLA AO REDOR DO GOL AMARELO
+# =========================================================
+YELLOW_EXCLUSION_MARGIN_X = 5
+YELLOW_EXCLUSION_MARGIN_Y = 5
 
 # =========================================================
 # FUNÇÕES AUXILIARES
@@ -108,8 +114,21 @@ def is_in_goal_zone(x, y):
     return (d2 <= GOAL_ZONE_OUTER2)
 
 
+def is_inside_yellow_exclusion_zone(x, y, yellow_blob, margin_x=25, margin_y=25):
+    if yellow_blob is None:
+        return False
+
+    zx = yellow_blob.x() - margin_x
+    zy = yellow_blob.y() - margin_y
+    zw = yellow_blob.w() + (2 * margin_x)
+    zh = yellow_blob.h() + (2 * margin_y)
+
+    return (x >= zx) and (x <= zx + zw) and (y >= zy) and (y <= zy + zh)
+
+
 def find_best_ball_blob_in_zone(img, threshold, pixels_threshold, area_threshold,
-                                merge, margin, min_pixels=None, max_pixels=None):
+                                merge, margin, yellow_blob=None,
+                                min_pixels=None, max_pixels=None):
     best_blob = None
     best_perimeter = 0
 
@@ -127,6 +146,11 @@ def find_best_ball_blob_in_zone(img, threshold, pixels_threshold, area_threshold
             continue
 
         if not is_in_ball_zone(blob.cx(), blob.cy()):
+            continue
+
+        if is_inside_yellow_exclusion_zone(blob.cx(), blob.cy(), yellow_blob,
+                                           YELLOW_EXCLUSION_MARGIN_X,
+                                           YELLOW_EXCLUSION_MARGIN_Y):
             continue
 
         if blob.perimeter() > best_perimeter:
@@ -383,37 +407,6 @@ while True:
         img.draw_circle(center[0], center[1], BALL_ZONE_OUTER, color=(255, 140, 0))
         img.draw_circle(center[0], center[1], GOAL_ZONE_OUTER, color=(0, 255, 0))
 
-    # BOLA
-    orange_blob = find_best_ball_blob_in_zone(
-        img,
-        threshold=thresholdo,
-        pixels_threshold=10,
-        area_threshold=10,
-        merge=True,
-        margin=3,
-        min_pixels=5,
-        max_pixels=100
-    )
-
-    raw_orange_found = 0
-    raw_orange_angle = 0
-    raw_orange_dist = 0
-
-    if orange_blob is not None:
-        raw_orange_found = 1
-        raw_orange_angle, raw_orange_dist = calc_ball_angle_and_distance(
-            orange_blob.cx(), orange_blob.cy(), center[0], center[1]
-        )
-
-    orange_found, orange_angle, orange_dist = update_ball_filter(
-        raw_orange_found,
-        raw_orange_angle,
-        raw_orange_dist
-    )
-
-    if DEBUG and orange_blob is not None:
-        draw_blob_info(img, orange_blob, (255, 140, 0), "BALL", orange_angle, orange_dist, "FLT")
-
     # GOL AZUL
     blue_blob = find_best_goal_blob_in_zone(
         img,
@@ -461,6 +454,49 @@ while True:
         if DEBUG:
             extra = "ZG:1 PX:{} AR:{}".format(yellow_blob.pixels(), yellow_blob.area())
             draw_blob_info(img, yellow_blob, (255, 255, 0), "YELL", yellow_angle, yellow_dist, extra)
+
+            zx = yellow_blob.x() - YELLOW_EXCLUSION_MARGIN_X
+            zy = yellow_blob.y() - YELLOW_EXCLUSION_MARGIN_Y
+            zw = yellow_blob.w() + (2 * YELLOW_EXCLUSION_MARGIN_X)
+            zh = yellow_blob.h() + (2 * YELLOW_EXCLUSION_MARGIN_Y)
+            img.draw_rectangle(zx, zy, zw, zh, color=(255, 0, 255), thickness=2)
+
+    # BOLA
+    orange_blob = find_best_ball_blob_in_zone(
+        img,
+        threshold=thresholdo,
+        pixels_threshold=10,
+        area_threshold=10,
+        merge=True,
+        margin=3,
+        yellow_blob=yellow_blob,
+        min_pixels=5,
+        max_pixels=100
+    )
+
+    raw_orange_found = 0
+    raw_orange_angle = 0
+    raw_orange_dist = 0
+
+    if orange_blob is not None:
+        raw_orange_found = 1
+        raw_orange_angle, raw_orange_dist = calc_ball_angle_and_distance(
+            orange_blob.cx(), orange_blob.cy(), center[0], center[1]
+        )
+
+    orange_found, orange_angle, orange_dist = update_ball_filter(
+        raw_orange_found,
+        raw_orange_angle,
+        raw_orange_dist
+    )
+
+    if DEBUG and orange_blob is not None:
+        extra = "FLT PX:{} AR:{} PR:{}".format(
+            orange_blob.pixels(),
+            orange_blob.area(),
+            int(orange_blob.perimeter())
+        )
+        draw_blob_info(img, orange_blob, (255, 140, 0), "BALL", orange_angle, orange_dist, extra)
 
     # ===== ENVIA DADOS VIA SERIAL =====
     enviar_dados_visao(orange_angle, orange_dist, blue_angle, blue_dist, yellow_angle, yellow_dist)

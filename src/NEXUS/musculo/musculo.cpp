@@ -166,7 +166,7 @@ const int LIMIAR_LINHA_MAX = 4000;
 const int LIMIAR_LINHA_PASSO = 100;
 const uint8_t BOTAO_MEIO_LONGO = 23;
 // Velocidade Maxima do robô - Vamos alterar aqui!
-const int velocidade_maxima = 195;
+const int velocidade_maxima = 200;
 const bool MOVIMENTO_BOLA_HABILITADO = false;
 
 
@@ -246,7 +246,7 @@ const int PID_LINHA_GOL_SAIDA_MAX = 220;
 
 // Velocidade dedicada para ataque frontal quando a bola estiver entre 330° e 30°.
 const int VELOCIDADE_IR_FRONTAL_PWM = 200;
-const int VELOCIDADE_IR_FAIXA_REDUZIDA_PWM = 120;
+const int VELOCIDADE_IR_FAIXA_REDUZIDA_PWM = 140;
 const int PASSO_RAMPA_PWM = 16;
 const unsigned long TRANSICAO_ANGULO_IR_MIN_MS = 50;
 const unsigned long TRANSICAO_ANGULO_IR_MAX_MS = 100;
@@ -539,6 +539,48 @@ float normalizarAngulo360(float ang) {
   return ang;
 }
 
+// Converte o angulo de gol para o referencial do defensor (inversao de 180 graus).
+// Aplica duas etapas:
+// 1) inverter para tras (+180)
+// 2) espelhar o angulo resultante
+// Ex.: 30 -> 150, 200 -> 340.
+float converterAnguloGolParaDefensor(float anguloGolGraus) {
+  float invertido = normalizarAngulo360(anguloGolGraus + 180.0f);
+  return normalizarAngulo360(360.0f - invertido);
+}
+
+// Calcula o erro angular atual do robo em relacao a referencia salva da bussola.
+float calcularErroAngularCampo() {
+  // A correção do campo vem do mesmo alinhamento usado pelo gol invertido.
+  return erroAlinhamentoGraus;
+}
+
+// Corrige um angulo relativo ao robo para o referencial do campo.
+float corrigirAnguloParaCampo(float anguloLocalGraus, float erroAngularGraus) {
+  return normalizarAngulo360(anguloLocalGraus + erroAngularGraus);
+}
+
+// Regras fixas de deslocamento lateral baseadas no angulo da bola corrigido no campo.
+// Direita real (20..120)  -> comando 90 + erroAngular
+// Esquerda real (240..340)-> comando 270 - erroAngular
+bool calcularComandoLateralPorBolaCorrigida(float anguloBolaCorrigido,
+                                            float erroAngular,
+                                            float &anguloComando) {
+  float ang = normalizarAngulo360(anguloBolaCorrigido);
+
+  if (ang >= 20.0f && ang <= 120.0f) {
+    anguloComando = normalizarAngulo360(120.0f - erroAngular);
+    return true;
+  }
+
+  if (ang >= 240.0f && ang <= 340.0f) {
+    anguloComando = normalizarAngulo360(340.0f + erroAngular);
+    return true;
+  }
+
+  return false;
+}
+
 // Aceita apenas payload numerico simples para evitar toFloat() cair silenciosamente em 0.
 bool payloadNumericoValido(const String &texto) {
   if (texto.length() == 0) {
@@ -732,8 +774,8 @@ extern float anguloLinhaPe;
 float mapearAnguloBolaParaMovimento(float anguloBolaGraus) {
   float ang = normalizarAngulo360(anguloBolaGraus);
 
-  if(ang >= 15.0f && ang < 45.0f) return 100.0f; 
-  if(ang >= 315.0f && ang < 345.0f) return 260.0f; 
+  if(ang >= 15.0f && ang < 45.0f) return 90.0f; //Mudamos 03.06
+  if(ang >= 315.0f && ang < 345.0f) return 270.0f; // Mudamos 03.06
 
 
 

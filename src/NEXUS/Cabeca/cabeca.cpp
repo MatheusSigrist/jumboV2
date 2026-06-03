@@ -40,10 +40,10 @@
 const uint8_t QMC5883P_ADDR = 0x2C;
 
 // Valores de calibracao validados no teste dedicado.
-const float xOffset = 711.50;
-const float yOffset = -1624.00;
-const float xScale  = 1.013703;
-const float yScale  = 0.986663;
+const float xOffset = -1019.50;
+const float yOffset = 804.00;
+const float xScale  = 0.999054;
+const float yScale  = 1.000948;
 
 int head = 0;
 

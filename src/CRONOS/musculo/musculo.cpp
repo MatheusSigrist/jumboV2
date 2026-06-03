@@ -153,7 +153,7 @@ PapelConfigurado papelConfiguradoMenu = PAPEL_CONFIG_AUTO;
 const unsigned long INTERVALO_OI_MS = 1000;
 const unsigned long TIMEOUT_COM_MS = 3000;
 const unsigned long TIMEOUT_BUSSOLA_MS = 800;
-const unsigned long TIMEOUT_LINHA_MS = 300;
+const unsigned long TIMEOUT_LINHA_MS = 150;
 const unsigned long TIMEOUT_ULTRA_MS = 1000;
 const unsigned long TIMEOUT_CAMERA_MS = 1000;
 const unsigned long TIMEOUT_SENSORES_BRUTOS_MS = 1200;
@@ -164,8 +164,8 @@ const int LIMIAR_LINHA_MIN = 100;
 const int LIMIAR_LINHA_MAX = 4000;
 const int LIMIAR_LINHA_PASSO = 100;
 const uint8_t BOTAO_MEIO_LONGO = 23;
-// Velocidade Maxima do rob├┤ - Vamos alterar aqui!
-const int velocidade_maxima = 220;
+// Velocidade Maxima do robô - Vamos alterar aqui!
+const int velocidade_maxima = 200;
 const bool MOVIMENTO_BOLA_HABILITADO = false;
 
 
@@ -244,20 +244,20 @@ const int PID_LINHA_GOL_SAIDA_MAX = 220;
 // Velocidade dedicada para ataque frontal quando a bola estiver entre 330┬░ e 30┬░.
 const int VELOCIDADE_IR_FRONTAL_PWM = 200;
 const int VELOCIDADE_IR_FAIXA_REDUZIDA_PWM = 140;
-const int DEFENSOR_VELOCIDADE_AVANCO_IR_FRONTAL_PWM = 255;
 const int PASSO_RAMPA_PWM = 16;
 const unsigned long TRANSICAO_ANGULO_IR_MIN_MS = 50;
 const unsigned long TRANSICAO_ANGULO_IR_MAX_MS = 100;
 const float TRANSICAO_ANGULO_IR_MS_POR_GRAU = 2.0f;
 const float PASSO_ANGULO_IR_GRAUS = 5.0f;
-const float ATACANTE_ULTRA_FREIO_INICIO_CM = 45.0f;
-const float ATACANTE_ULTRA_FREIO_CRITICO_CM = 25.0f;
-const int ATACANTE_ULTRA_FREIO_VELOCIDADE_MIN = 140;
-const int ATACANTE_ULTRA_FREIO_PWM_POR_CM = 3;
+const int DEFENSOR_VELOCIDADE_AVANCO_IR_FRONTAL_PWM = 255;
 const unsigned long DEFENSOR_TEMPO_GATILHO_IR_FRONTAL_MS = 3000;
 const unsigned long DEFENSOR_TEMPO_AVANCO_IR_FRONTAL_MS = 2500;
 const float DEFENSOR_TOLERANCIA_IR_FRONTAL_GRAUS = 45.0f;
 const float DEFENSOR_TOLERANCIA_ALINHAMENTO_BOLA_GRAUS = 3.0f;
+const float ATACANTE_ULTRA_FREIO_INICIO_CM = 45.0f;
+const float ATACANTE_ULTRA_FREIO_CRITICO_CM = 25.0f;
+const int ATACANTE_ULTRA_FREIO_VELOCIDADE_MIN = 140;
+const int ATACANTE_ULTRA_FREIO_PWM_POR_CM = 3;
 
 // Referencia salva da bussola e estados auxiliares do controle.
 int headingBussolaSalvo = 0;
@@ -548,7 +548,7 @@ float converterAnguloGolParaDefensor(float anguloGolGraus) {
 
 // Calcula o erro angular atual do robo em relacao a referencia salva da bussola.
 float calcularErroAngularCampo() {
-  // A corre├º├úo do campo vem do mesmo alinhamento usado pelo gol invertido.
+  // A correção do campo vem do mesmo alinhamento usado pelo gol invertido.
   return erroAlinhamentoGraus;
 }
 
