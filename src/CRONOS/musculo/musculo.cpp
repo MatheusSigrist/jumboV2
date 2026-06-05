@@ -243,7 +243,7 @@ const int PID_LINHA_GOL_SAIDA_MAX = 220;
 
 // Velocidade dedicada para ataque frontal quando a bola estiver entre 330┬░ e 30┬░.
 const int VELOCIDADE_IR_FRONTAL_PWM = 200;
-const int VELOCIDADE_IR_FAIXA_REDUZIDA_PWM = 140;
+const int VELOCIDADE_IR_FAIXA_REDUZIDA_PWM = 110;
 const int PASSO_RAMPA_PWM = 16;
 const unsigned long TRANSICAO_ANGULO_IR_MIN_MS = 50;
 const unsigned long TRANSICAO_ANGULO_IR_MAX_MS = 100;
@@ -258,6 +258,7 @@ const float ATACANTE_ULTRA_FREIO_INICIO_CM = 45.0f;
 const float ATACANTE_ULTRA_FREIO_CRITICO_CM = 25.0f;
 const int ATACANTE_ULTRA_FREIO_VELOCIDADE_MIN = 140;
 const int ATACANTE_ULTRA_FREIO_PWM_POR_CM = 3;
+const unsigned long TEMPO_SEM_BOLA_PARA_USO_ULTRA_MS = 1000;
 
 // Referencia salva da bussola e estados auxiliares do controle.
 int headingBussolaSalvo = 0;
@@ -280,6 +281,7 @@ float pidLinhaGolIntegral = 0.0f;
 float pidLinhaGolErroAnterior = 0.0f;
 unsigned long pidLinhaGolUltimoMs = 0;
 unsigned long inicioCameraSemIrMs = 0;
+unsigned long ultimaDeteccaoBolaMs = 0;
 
 // Estado da rampa angular para evitar saltos bruscos entre faixas do IR.
 float anguloIrSuaveAtual = 0.0f;
@@ -671,7 +673,9 @@ void atualizarValidadeCamera() {
 }
 
 bool cameraTemBolaValida() {
-  return cameraPacoteRecente() && (cameraBallAngle != -999);
+  return cameraPacoteRecente() &&
+         (cameraBallAngle != -999) &&
+         !((cameraBallAngle == 0) && (cameraBallDist == 0));
 }
 
 // O gol selecionado global segue diretamente a cor escolhida na calibracao.
@@ -772,8 +776,8 @@ extern float anguloLinhaPe;
 float mapearAnguloBolaParaMovimento(float anguloBolaGraus) {
   float ang = normalizarAngulo360(anguloBolaGraus);
 
-  if(ang >= 15.0f && ang < 45.0f) return 100.0f; 
-  if(ang >= 315.0f && ang < 345.0f) return 260.0f; 
+  if(ang >= 15.0f && ang < 45.0f) return 90.0f; 
+  if(ang >= 315.0f && ang < 345.0f) return 270.0f; 
 
 
 
@@ -787,7 +791,7 @@ float mapearAnguloBolaParaMovimento(float anguloBolaGraus) {
 
 
 
-  
+
   return ang;
 }
 
@@ -795,8 +799,8 @@ float mapearAnguloBolaParaMovimento(float anguloBolaGraus) {
 int calcularVelocidadeIrPorAngulo(float anguloBolaGraus) {
   float ang = normalizarAngulo360(anguloBolaGraus);
 
-  if ((ang >= 15.0f && ang < 45.0f) ||
-      (ang >= 315.0f && ang < 345.0f)) {
+  if ((ang >= 25.0f && ang < 45.0f) ||
+      (ang >= 315.0f && ang < 335.0f)) {
     return VELOCIDADE_IR_FAIXA_REDUZIDA_PWM;
   }
 
@@ -827,6 +831,28 @@ float calcularAnguloBuscaSemBolaCameraAtacante() {
   }
 
   return 0.0f;
+}
+
+float calcularAnguloBuscaSemBolaUltraAtacante() {
+  bool ultrasRecentes = ultrasValidos && (ultimoRxUltraMs > 0) && ((millis() - ultimoRxUltraMs) <= TIMEOUT_ULTRA_MS);
+  if (!ultrasRecentes) {
+    return -1.0f;
+  }
+
+  bool direitaPerto = (ultraDcm >= 0.0f) && (ultraDcm < 80.0f);
+  bool esquerdaPerto = (ultraEcm >= 0.0f) && (ultraEcm < 80.0f);
+  bool esquerdaLivre = ultraEcm > 40.0f;
+  bool direitaLivre = ultraDcm > 40.0f;
+
+
+  if (direitaPerto && esquerdaLivre) {
+    return 270.0f;
+  }
+
+  if (esquerdaPerto && direitaLivre) {
+    return 90.0f;
+  }
+
 }
 
 int aplicarFreioUltrassonicoAtacante(int velocidadeDesejada) {
@@ -2210,6 +2236,7 @@ void processarMensagemCabeca(String msg) {
       } else {
         irDetectado = true;
         anguloIr = novoAngulo;
+        ultimaDeteccaoBolaMs = millis();
       }
     }
 
@@ -2474,6 +2501,9 @@ void processarMensagemCabeca(String msg) {
       cameraYellowAngle = (int16_t)sYellA.toInt();
       cameraYellowDist = (uint16_t)sYellD.toInt();
       cameraDadosValidos = (sCamOK == "1");
+      if (!((cameraBallAngle == 0) && (cameraBallDist == 0))) {
+        ultimaDeteccaoBolaMs = millis();
+      }
       ultimoRxCameraMs = millis();
       atualizarValidadeCamera();
 
@@ -2681,7 +2711,7 @@ void atacante() {
     // Prioridade maxima: ao detectar linha, foge no sentido oposto.
     // No NEXUS, o Pe ja envia angulo em modo repulsao quando atacante=true.
     fugindoLinhaAgora = true;
-    anguloFugaLinhaCmd = normalizarAngulo360(anguloLinhaParaFuga);
+    anguloFugaLinhaCmd = normalizarAngulo360(anguloLinhaParaFuga + 180);
     seguirDirecaoPorAngulo(anguloFugaLinhaCmd, aplicarFreioUltrassonicoAtacante(VELOCIDADE_FUGA_LINHA));
     
   } else if (erroGrande) {
@@ -2703,6 +2733,14 @@ void atacante() {
                                 : normalizarAngulo360((float)cameraBallAngle);
     float anguloCameraComRampa = obterAnguloIrSuavizado(anguloCameraVetorial);
     seguirDirecaoComGiro(anguloCameraComRampa, aplicarFreioUltrassonicoAtacante(velocidade_maxima), cmdPidAssinado);
+  } else if ((ultimaDeteccaoBolaMs > 0) && ((millis() - ultimaDeteccaoBolaMs) >= TEMPO_SEM_BOLA_PARA_USO_ULTRA_MS)) {
+    float anguloUltra = calcularAnguloBuscaSemBolaUltraAtacante();
+    if (anguloUltra >= 0.0f) {
+      float anguloUltraComRampa = obterAnguloIrSuavizado(anguloUltra);
+      seguirDirecaoComGiro(anguloUltraComRampa, aplicarFreioUltrassonicoAtacante(velocidade_maxima), cmdPidAssinado);
+    } else {
+      pararMotores();
+    }
   } else if (precisaAlinhar) {
     girarNoEixo(cmdPidAssinado);
   } else {

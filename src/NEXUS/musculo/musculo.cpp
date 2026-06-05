@@ -166,7 +166,7 @@ const int LIMIAR_LINHA_MAX = 4000;
 const int LIMIAR_LINHA_PASSO = 100;
 const uint8_t BOTAO_MEIO_LONGO = 23;
 // Velocidade Maxima do robô - Vamos alterar aqui!
-const int velocidade_maxima = 200;
+const int velocidade_maxima = 180;
 const bool MOVIMENTO_BOLA_HABILITADO = false;
 
 
@@ -796,11 +796,13 @@ float mapearAnguloBolaParaMovimento(float anguloBolaGraus) {
 int calcularVelocidadeIrPorAngulo(float anguloBolaGraus) {
   float ang = normalizarAngulo360(anguloBolaGraus);
 
-  if ((ang >= 15.0f && ang < 45.0f) ||
-      (ang >= 315.0f && ang < 345.0f)) {
+  if ((ang >= 29.0f && ang < 45.0f) ||
+      (ang >= 315.0f && ang < 331.0f)) {
     return VELOCIDADE_IR_FAIXA_REDUZIDA_PWM;
   }
-
+  if (ang >= 140.0f && ang < 220.0f) {
+    return VELOCIDADE_IR_FAIXA_REDUZIDA_PWM;
+  }
   return velocidade_maxima;
 }
 
@@ -839,7 +841,7 @@ int calcularVelocidadeLateralDefensorPorIr(float anguloBolaGraus) {
 // Detecta a faixa frontal do IR em torno de 0°, tratando a transicao 360° -> 0°.
 bool irNaFaixaFrontal(float anguloBolaGraus) {
   float ang = normalizarAngulo360(anguloBolaGraus);
-  return (ang >= 340.0f || ang <= 20.0f);
+  return (ang >= 328.0f || ang <= 32.0f);
 }
 
 float calcularAnguloBuscaSemBolaCameraAtacante() {
@@ -1754,17 +1756,17 @@ void desenharSubmenuCalibracao() {
     
     if (!dataTimeout) {
       // Mostra os 6 dados em formato compacto para caber com fonte maior.
-      display.print("B");
+      display.print("B ");
       display.print(cameraBallAngle);
       display.print("/");
       display.println(cameraBallDist);
       
-      display.print("A");
+      display.print("AZ ");
       display.print(cameraBlueAngle);
       display.print("/");
       display.println(cameraBlueDist);
       
-      display.print("M");
+      display.print("AM ");
       display.print(cameraYellowAngle);
       display.print("/");
       display.println(cameraYellowDist);

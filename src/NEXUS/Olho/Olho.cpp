@@ -65,7 +65,7 @@ float angulos[NUM_SENSORES] = {
 };
 
 const unsigned long JANELA_TEMPO = 15;    // <-- Janela de tempo para contagens de pulso de IR (10ms)
-const int LIMIAR_PULSOS = 8;    // <-- Limiar de pulsos para identificar que é a bola
+const int LIMIAR_PULSOS = 2;    // <-- Limiar de pulsos para identificar que é a bola
 const int NUM_AMOSTRAS_VOTO = 5;          // <-- Qtd de amostras para votacao
 const float TOLERANCIA_VOTO_GRAUS = 45.0f; // <-- Tolerancia para considerar amostras do mesmo grupo
 unsigned int pulsos[NUM_SENSORES];
