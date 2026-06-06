@@ -176,7 +176,7 @@ const int LIMIAR_LINHA_MAX = 4000;
 const int LIMIAR_LINHA_PASSO = 100;
 const uint8_t BOTAO_MEIO_LONGO = 23;
 // Velocidade Maxima do robô - Vamos alterar aqui!
-const int velocidade_maxima = 195;
+const int velocidade_maxima = 180;
 const bool MOVIMENTO_BOLA_HABILITADO = false;
 
 
@@ -244,6 +244,84 @@ const int PID_BUS_SAIDA_MIN = 30;
 const int PID_BUS_SAIDA_MAX = 180;
 const float GANHO_GIRO_MISTO = 0.7f;
 
+// PID exclusivo do atacante para suavizar somente a transicao entre angulos de movimento.
+const float PID_MOVIMENTO_KP = 2.0f;
+const float PID_MOVIMENTO_KI = 0.01f;
+const float PID_MOVIMENTO_KD = 0.5f;
+const float PID_MOVIMENTO_INTEGRAL_MAX = 90.0f;
+const float PID_MOVIMENTO_SAIDA_MAX = 90.0f;
+const float ALPHA_MOVIMENTO = 0.3f;
+const float ALPHA_MOVIMENTO_ALVO = 0.25f;
+const float PASSO_MAX_MOVIMENTO_ALVO_GRAUS = 35.0f;
+const bool DEBUG_FUZZY_PID_MOVIMENTO = false;
+const unsigned long DEBUG_FUZZY_PID_MOVIMENTO_INTERVALO_MS = 120;
+
+constexpr uint8_t FUZZY_CONJUNTOS = 7;
+
+enum FuzzyNivel : uint8_t {
+  FUZZY_MB = 0,   // Muito Baixo
+  FUZZY_B = 1,    // Baixo
+  FUZZY_MBX = 2,  // Medio Baixo
+  FUZZY_M = 3,    // Medio
+  FUZZY_MAX = 4,  // Medio Alto
+  FUZZY_A = 5,    // Alto
+  FUZZY_MA = 6    // Muito Alto
+};
+
+// Centros das funcoes de pertinencia do erro absoluto [0, 180].
+const float FUZZY_ERRO_CENTROS[FUZZY_CONJUNTOS] = {
+  2.5f,   // 0..5
+  9.0f,   // 3..15
+  20.0f,  // 10..30
+  40.0f,  // 20..60
+  67.5f,  // 45..90
+  102.5f, // 75..130
+  145.0f  // 110..180
+};
+
+// Centros das funcoes de pertinencia da variacao do erro [-50, 50].
+const float FUZZY_DERRO_CENTROS[FUZZY_CONJUNTOS] = {
+  -50.0f, -30.0f, -15.0f, 0.0f, 15.0f, 30.0f, 50.0f
+};
+
+// Niveis de saida para os ganhos adaptativos.
+const float FUZZY_KP_NIVEIS[FUZZY_CONJUNTOS] = {0.5f, 0.75f, 1.0f, 1.5f, 2.0f, 2.5f, 3.0f};
+const float FUZZY_KI_NIVEIS[FUZZY_CONJUNTOS] = {0.000f, 0.002f, 0.005f, 0.010f, 0.015f, 0.020f, 0.030f};
+const float FUZZY_KD_NIVEIS[FUZZY_CONJUNTOS] = {0.05f, 0.10f, 0.20f, 0.35f, 0.5f, 0.7f, 0.9f};
+
+// Base completa 7x7 de regras para Kp.
+const uint8_t FUZZY_REGRAS_KP[FUZZY_CONJUNTOS][FUZZY_CONJUNTOS] = {
+  {FUZZY_MB, FUZZY_MB, FUZZY_MB, FUZZY_B,  FUZZY_B,  FUZZY_M,  FUZZY_M},
+  {FUZZY_MB, FUZZY_MB, FUZZY_B,  FUZZY_B,  FUZZY_M,  FUZZY_M,  FUZZY_MA},
+  {FUZZY_MB, FUZZY_B,  FUZZY_B,  FUZZY_M,  FUZZY_M,  FUZZY_MA, FUZZY_A},
+  {FUZZY_B,  FUZZY_B,  FUZZY_M,  FUZZY_M,  FUZZY_MA, FUZZY_A,  FUZZY_A},
+  {FUZZY_B,  FUZZY_M,  FUZZY_M,  FUZZY_MA, FUZZY_A,  FUZZY_A,  FUZZY_MA},
+  {FUZZY_M,  FUZZY_M,  FUZZY_MA, FUZZY_A,  FUZZY_A,  FUZZY_MA, FUZZY_MA},
+  {FUZZY_M,  FUZZY_MA, FUZZY_A,  FUZZY_A,  FUZZY_MA, FUZZY_MA, FUZZY_MA}
+};
+
+// Base completa 7x7 de regras para Kd.
+const uint8_t FUZZY_REGRAS_KD[FUZZY_CONJUNTOS][FUZZY_CONJUNTOS] = {
+  {FUZZY_B,  FUZZY_B,  FUZZY_M,  FUZZY_M,  FUZZY_MA, FUZZY_A,  FUZZY_MA},
+  {FUZZY_B,  FUZZY_M,  FUZZY_M,  FUZZY_MA, FUZZY_A,  FUZZY_MA, FUZZY_MA},
+  {FUZZY_M,  FUZZY_M,  FUZZY_MA, FUZZY_A,  FUZZY_MA, FUZZY_MA, FUZZY_MA},
+  {FUZZY_M,  FUZZY_MA, FUZZY_A,  FUZZY_MA, FUZZY_MA, FUZZY_MA, FUZZY_MA},
+  {FUZZY_MA, FUZZY_A,  FUZZY_MA, FUZZY_MA, FUZZY_MA, FUZZY_MA, FUZZY_MA},
+  {FUZZY_A,  FUZZY_MA, FUZZY_MA, FUZZY_MA, FUZZY_MA, FUZZY_MA, FUZZY_MA},
+  {FUZZY_MA, FUZZY_MA, FUZZY_MA, FUZZY_MA, FUZZY_MA, FUZZY_MA, FUZZY_MA}
+};
+
+// Base completa 7x7 de regras para Ki (conservadora para evitar windup).
+const uint8_t FUZZY_REGRAS_KI[FUZZY_CONJUNTOS][FUZZY_CONJUNTOS] = {
+  {FUZZY_MAX, FUZZY_A,   FUZZY_MA, FUZZY_MA, FUZZY_MA, FUZZY_A,   FUZZY_MAX},
+  {FUZZY_M,   FUZZY_MAX, FUZZY_A,  FUZZY_A,  FUZZY_A,  FUZZY_MAX, FUZZY_M},
+  {FUZZY_MBX, FUZZY_M,   FUZZY_MAX, FUZZY_MAX, FUZZY_MAX, FUZZY_M, FUZZY_MBX},
+  {FUZZY_B,   FUZZY_MBX, FUZZY_MBX, FUZZY_M,   FUZZY_MBX, FUZZY_MBX, FUZZY_B},
+  {FUZZY_MB,  FUZZY_B,   FUZZY_B,   FUZZY_B,   FUZZY_B,   FUZZY_B,   FUZZY_MB},
+  {FUZZY_MB,  FUZZY_MB,  FUZZY_MB,  FUZZY_MB,  FUZZY_MB,  FUZZY_MB,  FUZZY_MB},
+  {FUZZY_MB,  FUZZY_MB,  FUZZY_MB,  FUZZY_MB,  FUZZY_MB,  FUZZY_MB,  FUZZY_MB}
+};
+
 // PID dedicado ao giro do goleiro usando apenas a linha (zonas A e B) como referencia.
 const float PID_LINHA_GOL_KP = 0.9f;
 const float PID_LINHA_GOL_KI = 0.01f;
@@ -256,7 +334,7 @@ const int PID_LINHA_GOL_SAIDA_MAX = 220;
 
 // Velocidade dedicada para ataque frontal quando a bola estiver entre 330° e 30°.
 const int VELOCIDADE_IR_FRONTAL_PWM = 200;
-const int VELOCIDADE_IR_FAIXA_REDUZIDA_PWM = 110;
+const int VELOCIDADE_IR_FAIXA_REDUZIDA_PWM = 140;
 const int PASSO_RAMPA_PWM = 16;
 const unsigned long TRANSICAO_ANGULO_IR_MIN_MS = 50;
 const unsigned long TRANSICAO_ANGULO_IR_MAX_MS = 100;
@@ -294,6 +372,15 @@ unsigned long pidBusUltimoMs = 0;
 float pidLinhaGolIntegral = 0.0f;
 float pidLinhaGolErroAnterior = 0.0f;
 unsigned long pidLinhaGolUltimoMs = 0;
+float pidMovimentoIntegral = 0.0f;
+float pidMovimento = 0.0f;
+float erroMovimento = 0.0f;
+float erroAnteriorMovimento = 0.0f;
+float anguloMovimentoAtual = -1.0f;
+float anguloMovimentoSuavizado = -1.0f;
+float anguloMovimentoDesejadoFiltrado = -1.0f;
+unsigned long ultimoTempoPidMovimento = 0;
+unsigned long ultimoDebugFuzzyPidMovimentoMs = 0;
 unsigned long inicioCameraSemIrMs = 0;
 
 // Estado da rampa angular para evitar saltos bruscos entre faixas do IR.
@@ -551,6 +638,48 @@ float normalizarAngulo360(float ang) {
   return ang;
 }
 
+// Converte o angulo de gol para o referencial do defensor (inversao de 180 graus).
+// Aplica duas etapas:
+// 1) inverter para tras (+180)
+// 2) espelhar o angulo resultante
+// Ex.: 30 -> 150, 200 -> 340.
+float converterAnguloGolParaDefensor(float anguloGolGraus) {
+  float invertido = normalizarAngulo360(anguloGolGraus + 180.0f);
+  return normalizarAngulo360(360.0f - invertido);
+}
+
+// Calcula o erro angular atual do robo em relacao a referencia salva da bussola.
+float calcularErroAngularCampo() {
+  // A correção do campo vem do mesmo alinhamento usado pelo gol invertido.
+  return erroAlinhamentoGraus;
+}
+
+// Corrige um angulo relativo ao robo para o referencial do campo.
+float corrigirAnguloParaCampo(float anguloLocalGraus, float erroAngularGraus) {
+  return normalizarAngulo360(anguloLocalGraus + erroAngularGraus);
+}
+
+// Regras fixas de deslocamento lateral baseadas no angulo da bola corrigido no campo.
+// Direita real (20..120)  -> comando 90 + erroAngular
+// Esquerda real (240..340)-> comando 270 - erroAngular
+bool calcularComandoLateralPorBolaCorrigida(float anguloBolaCorrigido,
+                                            float erroAngular,
+                                            float &anguloComando) {
+  float ang = normalizarAngulo360(anguloBolaCorrigido);
+
+  if (ang >= 20.0f && ang <= 120.0f) {
+    anguloComando = normalizarAngulo360(120.0f - erroAngular);
+    return true;
+  }
+
+  if (ang >= 240.0f && ang <= 340.0f) {
+    anguloComando = normalizarAngulo360(340.0f + erroAngular);
+    return true;
+  }
+
+  return false;
+}
+
 // Aceita apenas payload numerico simples para evitar toFloat() cair silenciosamente em 0.
 bool payloadNumericoValido(const String &texto) {
   if (texto.length() == 0) {
@@ -790,8 +919,8 @@ extern float anguloLinhaPe;
 float mapearAnguloBolaParaMovimento(float anguloBolaGraus) {
   float ang = normalizarAngulo360(anguloBolaGraus);
 
-  if(ang >= 15.0f && ang < 45.0f) return 100.0f; 
-  if(ang >= 315.0f && ang < 345.0f) return 260.0f; 
+  if(ang >= 15.0f && ang < 45.0f) return 90.0f; //Mudamos 03.06
+  if(ang >= 315.0f && ang < 345.0f) return 270.0f; // Mudamos 03.06
 
 
 
@@ -812,11 +941,13 @@ float mapearAnguloBolaParaMovimento(float anguloBolaGraus) {
 int calcularVelocidadeIrPorAngulo(float anguloBolaGraus) {
   float ang = normalizarAngulo360(anguloBolaGraus);
 
-  if ((ang >= 15.0f && ang < 45.0f) ||
-      (ang >= 315.0f && ang < 345.0f)) {
+  if ((ang >= 29.0f && ang < 45.0f) ||
+      (ang >= 315.0f && ang < 331.0f)) {
     return VELOCIDADE_IR_FAIXA_REDUZIDA_PWM;
   }
-
+  if (ang >= 140.0f && ang < 220.0f) {
+    return VELOCIDADE_IR_FAIXA_REDUZIDA_PWM;
+  }
   return velocidade_maxima;
 }
 
@@ -855,7 +986,7 @@ int calcularVelocidadeLateralDefensorPorIr(float anguloBolaGraus) {
 // Detecta a faixa frontal do IR em torno de 0°, tratando a transicao 360° -> 0°.
 bool irNaFaixaFrontal(float anguloBolaGraus) {
   float ang = normalizarAngulo360(anguloBolaGraus);
-  return (ang >= 335.0f || ang <= 25.0f);
+  return (ang >= 328.0f || ang <= 32.0f);
 }
 
 bool ultraLateralCriticoAtacante() {
@@ -1200,6 +1331,195 @@ int calcularSaidaPidLinhaGoleiro(float erroGraus) {
   if (saida > VELOCIDADE_GIRO_ALINHAMENTO) saida = VELOCIDADE_GIRO_ALINHAMENTO;
 
   return (u >= 0.0f) ? saida : -saida;
+}
+
+struct GanhosPidMovimento {
+  float kp;
+  float ki;
+  float kd;
+};
+
+float pertinenciaTriangularComCentros(float valor,
+                                      const float centros[FUZZY_CONJUNTOS],
+                                      uint8_t indice) {
+  if (indice == 0) {
+    float centro = centros[0];
+    float direita = centros[1];
+    if (valor <= centro) return 1.0f;
+    if (valor >= direita) return 0.0f;
+    return (direita - valor) / (direita - centro);
+  }
+
+  if (indice == (FUZZY_CONJUNTOS - 1)) {
+    float esquerda = centros[FUZZY_CONJUNTOS - 2];
+    float centro = centros[FUZZY_CONJUNTOS - 1];
+    if (valor <= esquerda) return 0.0f;
+    if (valor >= centro) return 1.0f;
+    return (valor - esquerda) / (centro - esquerda);
+  }
+
+  float esquerda = centros[indice - 1];
+  float centro = centros[indice];
+  float direita = centros[indice + 1];
+
+  if (valor <= esquerda || valor >= direita) return 0.0f;
+  if (valor < centro) return (valor - esquerda) / (centro - esquerda);
+  return (direita - valor) / (direita - centro);
+}
+
+void calcularPertinenciasFuzzy(float valor,
+                               const float centros[FUZZY_CONJUNTOS],
+                               float saida[FUZZY_CONJUNTOS]) {
+  for (uint8_t i = 0; i < FUZZY_CONJUNTOS; i++) {
+    saida[i] = pertinenciaTriangularComCentros(valor, centros, i);
+  }
+}
+
+GanhosPidMovimento calcularGanhosFuzzyMovimento(float erroAbs, float dErro) {
+  float erroNormalizado = constrain(erroAbs, 0.0f, 180.0f);
+  float dErroNormalizado = constrain(dErro, -50.0f, 50.0f);
+
+  float muErro[FUZZY_CONJUNTOS] = {0.0f};
+  float muDErro[FUZZY_CONJUNTOS] = {0.0f};
+  calcularPertinenciasFuzzy(erroNormalizado, FUZZY_ERRO_CENTROS, muErro);
+  calcularPertinenciasFuzzy(dErroNormalizado, FUZZY_DERRO_CENTROS, muDErro);
+
+  float somaPesos = 0.0f;
+  float somaKp = 0.0f;
+  float somaKi = 0.0f;
+  float somaKd = 0.0f;
+
+  for (uint8_t i = 0; i < FUZZY_CONJUNTOS; i++) {
+    for (uint8_t j = 0; j < FUZZY_CONJUNTOS; j++) {
+      float pesoRegra = min(muErro[i], muDErro[j]);
+      if (pesoRegra <= 0.0f) {
+        continue;
+      }
+
+      somaPesos += pesoRegra;
+      somaKp += pesoRegra * FUZZY_KP_NIVEIS[FUZZY_REGRAS_KP[i][j]];
+      somaKi += pesoRegra * FUZZY_KI_NIVEIS[FUZZY_REGRAS_KI[i][j]];
+      somaKd += pesoRegra * FUZZY_KD_NIVEIS[FUZZY_REGRAS_KD[i][j]];
+    }
+  }
+
+  GanhosPidMovimento ganhos;
+  if (somaPesos > 0.0001f) {
+    ganhos.kp = somaKp / somaPesos;
+    ganhos.ki = somaKi / somaPesos;
+    ganhos.kd = somaKd / somaPesos;
+  } else {
+    ganhos.kp = PID_MOVIMENTO_KP;
+    ganhos.ki = PID_MOVIMENTO_KI;
+    ganhos.kd = PID_MOVIMENTO_KD;
+  }
+
+  return ganhos;
+}
+
+// Zera o controlador angular do atacante sem alterar a logica que escolhe o destino.
+void resetControleMovimentoAtacante() {
+  pidMovimentoIntegral = 0.0f;
+  pidMovimento = 0.0f;
+  erroMovimento = 0.0f;
+  erroAnteriorMovimento = 0.0f;
+  anguloMovimentoAtual = -1.0f;
+  anguloMovimentoSuavizado = -1.0f;
+  anguloMovimentoDesejadoFiltrado = -1.0f;
+  ultimoTempoPidMovimento = 0;
+}
+
+// PID dedicado ao atacante: controla apenas a transicao entre o angulo desejado e o ultimo angulo enviado.
+float calcularPidMovimento(float erro) {
+  unsigned long agora = millis();
+  float dt = 0.02f;
+
+  if (ultimoTempoPidMovimento != 0) {
+    dt = (agora - ultimoTempoPidMovimento) / 1000.0f;
+    if (dt < 0.005f) dt = 0.005f;
+    if (dt > 0.2f) dt = 0.2f;
+  }
+  ultimoTempoPidMovimento = agora;
+
+  float dErro = erro - erroAnteriorMovimento;
+  GanhosPidMovimento ganhosAdaptativos = calcularGanhosFuzzyMovimento(fabsf(erro), dErro);
+
+  pidMovimentoIntegral += erro * dt;
+  if (pidMovimentoIntegral > PID_MOVIMENTO_INTEGRAL_MAX) pidMovimentoIntegral = PID_MOVIMENTO_INTEGRAL_MAX;
+  if (pidMovimentoIntegral < -PID_MOVIMENTO_INTEGRAL_MAX) pidMovimentoIntegral = -PID_MOVIMENTO_INTEGRAL_MAX;
+
+  float derivada = (erro - erroAnteriorMovimento) / dt;
+  erroAnteriorMovimento = erro;
+
+  pidMovimento = ganhosAdaptativos.kp * erro +
+                 ganhosAdaptativos.ki * pidMovimentoIntegral +
+                 ganhosAdaptativos.kd * derivada;
+  if (pidMovimento > PID_MOVIMENTO_SAIDA_MAX) pidMovimento = PID_MOVIMENTO_SAIDA_MAX;
+  if (pidMovimento < -PID_MOVIMENTO_SAIDA_MAX) pidMovimento = -PID_MOVIMENTO_SAIDA_MAX;
+
+  // Evita o comportamento de "vou e nao vou" perto do alvo por microcorrecoes.
+  if (fabsf(erro) < 2.0f) {
+    pidMovimento = 0.0f;
+  }
+
+  if (DEBUG_FUZZY_PID_MOVIMENTO &&
+      ((agora - ultimoDebugFuzzyPidMovimentoMs) >= DEBUG_FUZZY_PID_MOVIMENTO_INTERVALO_MS)) {
+    Serial.print("FUZZY MOV | E=");
+    Serial.print(erro, 2);
+    Serial.print(" dE=");
+    Serial.print(dErro, 2);
+    Serial.print(" KP=");
+    Serial.print(ganhosAdaptativos.kp, 3);
+    Serial.print(" KI=");
+    Serial.print(ganhosAdaptativos.ki, 4);
+    Serial.print(" KD=");
+    Serial.print(ganhosAdaptativos.kd, 3);
+    Serial.print(" PID=");
+    Serial.println(pidMovimento, 3);
+    ultimoDebugFuzzyPidMovimentoMs = agora;
+  }
+
+  return -pidMovimento;
+}
+
+// Aplica a suavizacao exponencial circular depois do PID para evitar saltos bruscos de direcao.
+float suavizarAnguloMovimentoAtacante(float anguloMovimentoDesejado) {
+  // O atacante passa a trabalhar em um referencial deslocado de 180 graus:
+  // o que era 0 passa a ser 180, e o que era 180 passa a ser 0.
+  float alvoBruto = normalizarAngulo360(anguloMovimentoDesejado + 180.0f);
+
+  if ((anguloMovimentoAtual < 0.0f) || (anguloMovimentoSuavizado < 0.0f)) {
+    anguloMovimentoAtual = alvoBruto;
+    anguloMovimentoSuavizado = alvoBruto;
+    anguloMovimentoDesejadoFiltrado = alvoBruto;
+    erroMovimento = 0.0f;
+    erroAnteriorMovimento = 0.0f;
+    pidMovimentoIntegral = 0.0f;
+    pidMovimento = 0.0f;
+    ultimoTempoPidMovimento = 0;
+    return anguloMovimentoSuavizado;
+  }
+
+  // Primeiro estabiliza o alvo angular em modo circular para evitar salto abrupto (ex.: 90 para 270).
+  float deltaAlvo = normalizarErro180(alvoBruto - anguloMovimentoDesejadoFiltrado);
+  deltaAlvo = constrain(deltaAlvo, -PASSO_MAX_MOVIMENTO_ALVO_GRAUS, PASSO_MAX_MOVIMENTO_ALVO_GRAUS);
+  anguloMovimentoDesejadoFiltrado = normalizarAngulo360(anguloMovimentoDesejadoFiltrado + deltaAlvo);
+  anguloMovimentoDesejadoFiltrado = normalizarAngulo360(
+      anguloMovimentoDesejadoFiltrado +
+      ALPHA_MOVIMENTO_ALVO * normalizarErro180(alvoBruto - anguloMovimentoDesejadoFiltrado));
+
+  // Erro usando a ultima direcao realmente comandada como realimentacao.
+  erroMovimento = normalizarErro180(anguloMovimentoDesejadoFiltrado - anguloMovimentoAtual);
+  pidMovimento = calcularPidMovimento(erroMovimento);
+
+  anguloMovimentoAtual += pidMovimento;
+  anguloMovimentoAtual = normalizarAngulo360(anguloMovimentoAtual);
+
+  anguloMovimentoSuavizado = anguloMovimentoSuavizado +
+                              ALPHA_MOVIMENTO *
+                              normalizarErro180(anguloMovimentoAtual - anguloMovimentoSuavizado);
+  anguloMovimentoSuavizado = normalizarAngulo360(anguloMovimentoSuavizado);
+  return anguloMovimentoSuavizado;
 }
 
 // Telemetria de gol/linha.
@@ -1793,17 +2113,17 @@ void desenharSubmenuCalibracao() {
     
     if (!dataTimeout) {
       // Mostra os 6 dados em formato compacto para caber com fonte maior.
-      display.print("B");
+      display.print("B ");
       display.print(cameraBallAngle);
       display.print("/");
       display.println(cameraBallDist);
       
-      display.print("A");
+      display.print("AZ ");
       display.print(cameraBlueAngle);
       display.print("/");
       display.println(cameraBlueDist);
       
-      display.print("M");
+      display.print("AM ");
       display.print(cameraYellowAngle);
       display.print("/");
       display.println(cameraYellowDist);
@@ -2774,7 +3094,9 @@ void atacante() {
         float anguloIrAlvo = mapearAnguloBolaParaMovimento(anguloIrBufferizado);
         float anguloIrComRampa = obterAnguloIrSuavizado(anguloIrAlvo);
         int velocidadeIr = aplicarFreioUltrassonicoAtacante(calcularVelocidadeIrPorAngulo(anguloIrBufferizado));
-        seguirDirecaoPorAngulo(anguloIrComRampa, velocidadeIr);
+        // A decisao continua igual; apenas a transicao angular passa pelo controlador novo.
+        float anguloMovimentoComControle = suavizarAnguloMovimentoAtacante(anguloIrComRampa);
+        seguirDirecaoPorAngulo(anguloMovimentoComControle, velocidadeIr);
       }
       return;
     }
@@ -2783,7 +3105,9 @@ void atacante() {
     // No NEXUS, o Pe ja envia angulo em modo repulsao quando atacante=true.
     fugindoLinhaAgora = true;
     anguloFugaLinhaCmd = normalizarAngulo360(anguloLinhaParaFuga);
-    seguirDirecaoPorAngulo(anguloFugaLinhaCmd, aplicarFreioUltrassonicoAtacante(VELOCIDADE_FUGA_LINHA));
+    // A fuga continua vindo da mesma logica; o que muda e apenas a suavizacao do angulo final.
+    float anguloFugaSuavizado = suavizarAnguloMovimentoAtacante(anguloFugaLinhaCmd);
+    seguirDirecaoPorAngulo(anguloFugaSuavizado, aplicarFreioUltrassonicoAtacante(VELOCIDADE_FUGA_LINHA));
     
   } else if (erroGrande) {
     girarNoEixo(cmdPidAssinado);
@@ -2795,7 +3119,8 @@ void atacante() {
       float anguloIrAlvo = mapearAnguloBolaParaMovimento(anguloIrBufferizado);
       float anguloIrComRampa = obterAnguloIrSuavizado(anguloIrAlvo);
       int velocidadeIr = aplicarFreioUltrassonicoAtacante(calcularVelocidadeIrPorAngulo(anguloIrBufferizado));
-      seguirDirecaoPorAngulo(anguloIrComRampa, velocidadeIr);
+      float anguloMovimentoComControle = suavizarAnguloMovimentoAtacante(anguloIrComRampa);
+      seguirDirecaoPorAngulo(anguloMovimentoComControle, velocidadeIr);
     }
   } else if (cameraBolaFiltradaVisivel) {
     bool semBolaTempoSuficiente =
@@ -2807,7 +3132,8 @@ void atacante() {
                                 ? calcularAnguloBuscaSemBolaCameraAtacante()
                                 : anguloCameraBolaFiltrado;
     float anguloCameraComRampa = obterAnguloIrSuavizado(anguloCameraVetorial);
-    seguirDirecaoComGiro(anguloCameraComRampa, aplicarFreioUltrassonicoAtacante(velocidade_maxima), cmdPidAssinado);
+    float anguloMovimentoComControle = suavizarAnguloMovimentoAtacante(anguloCameraComRampa);
+    seguirDirecaoComGiro(anguloMovimentoComControle, aplicarFreioUltrassonicoAtacante(velocidade_maxima), cmdPidAssinado);
   } else if (precisaAlinhar) {
     girarNoEixo(cmdPidAssinado);
   } else {
@@ -3236,6 +3562,12 @@ void loop() {
   }
 
   if (estadoAtual == INICIAR && comunicacaoCabecaOK) {
+    if (papelAtacante != papelAtacanteAnterior) {
+      // Reinicia a transicao angular quando o papel muda para nao carregar estado antigo entre modos.
+      resetControleMovimentoAtacante();
+      papelAtacanteAnterior = papelAtacante;
+    }
+
     if (papelAtacante) {
       atacante();
     } else {
@@ -3245,6 +3577,7 @@ void loop() {
     // Fora do modo de jogo, zera controle e mantem a base parada.
     alinhandoAgora = false;
     fugindoLinhaAgora = false;
+    resetControleMovimentoAtacante();
     resetPidBussola();
     pararMotores();
   }
