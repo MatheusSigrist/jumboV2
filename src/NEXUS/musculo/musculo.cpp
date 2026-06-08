@@ -247,80 +247,12 @@ const float GANHO_GIRO_MISTO = 0.7f;
 // PID exclusivo do atacante para suavizar somente a transicao entre angulos de movimento.
 const float PID_MOVIMENTO_KP = 2.0f;
 const float PID_MOVIMENTO_KI = 0.01f;
-const float PID_MOVIMENTO_KD = 0.5f;
+const float PID_MOVIMENTO_KD = 0.8f;
 const float PID_MOVIMENTO_INTEGRAL_MAX = 90.0f;
-const float PID_MOVIMENTO_SAIDA_MAX = 90.0f;
-const float ALPHA_MOVIMENTO = 0.3f;
-const float ALPHA_MOVIMENTO_ALVO = 0.25f;
-const float PASSO_MAX_MOVIMENTO_ALVO_GRAUS = 35.0f;
-const bool DEBUG_FUZZY_PID_MOVIMENTO = false;
-const unsigned long DEBUG_FUZZY_PID_MOVIMENTO_INTERVALO_MS = 120;
-
-constexpr uint8_t FUZZY_CONJUNTOS = 7;
-
-enum FuzzyNivel : uint8_t {
-  FUZZY_MB = 0,   // Muito Baixo
-  FUZZY_B = 1,    // Baixo
-  FUZZY_MBX = 2,  // Medio Baixo
-  FUZZY_M = 3,    // Medio
-  FUZZY_MAX = 4,  // Medio Alto
-  FUZZY_A = 5,    // Alto
-  FUZZY_MA = 6    // Muito Alto
-};
-
-// Centros das funcoes de pertinencia do erro absoluto [0, 180].
-const float FUZZY_ERRO_CENTROS[FUZZY_CONJUNTOS] = {
-  2.5f,   // 0..5
-  9.0f,   // 3..15
-  20.0f,  // 10..30
-  40.0f,  // 20..60
-  67.5f,  // 45..90
-  102.5f, // 75..130
-  145.0f  // 110..180
-};
-
-// Centros das funcoes de pertinencia da variacao do erro [-50, 50].
-const float FUZZY_DERRO_CENTROS[FUZZY_CONJUNTOS] = {
-  -50.0f, -30.0f, -15.0f, 0.0f, 15.0f, 30.0f, 50.0f
-};
-
-// Niveis de saida para os ganhos adaptativos.
-const float FUZZY_KP_NIVEIS[FUZZY_CONJUNTOS] = {0.5f, 0.75f, 1.0f, 1.5f, 2.0f, 2.5f, 3.0f};
-const float FUZZY_KI_NIVEIS[FUZZY_CONJUNTOS] = {0.000f, 0.002f, 0.005f, 0.010f, 0.015f, 0.020f, 0.030f};
-const float FUZZY_KD_NIVEIS[FUZZY_CONJUNTOS] = {0.05f, 0.10f, 0.20f, 0.35f, 0.5f, 0.7f, 0.9f};
-
-// Base completa 7x7 de regras para Kp.
-const uint8_t FUZZY_REGRAS_KP[FUZZY_CONJUNTOS][FUZZY_CONJUNTOS] = {
-  {FUZZY_MB, FUZZY_MB, FUZZY_MB, FUZZY_B,  FUZZY_B,  FUZZY_M,  FUZZY_M},
-  {FUZZY_MB, FUZZY_MB, FUZZY_B,  FUZZY_B,  FUZZY_M,  FUZZY_M,  FUZZY_MA},
-  {FUZZY_MB, FUZZY_B,  FUZZY_B,  FUZZY_M,  FUZZY_M,  FUZZY_MA, FUZZY_A},
-  {FUZZY_B,  FUZZY_B,  FUZZY_M,  FUZZY_M,  FUZZY_MA, FUZZY_A,  FUZZY_A},
-  {FUZZY_B,  FUZZY_M,  FUZZY_M,  FUZZY_MA, FUZZY_A,  FUZZY_A,  FUZZY_MA},
-  {FUZZY_M,  FUZZY_M,  FUZZY_MA, FUZZY_A,  FUZZY_A,  FUZZY_MA, FUZZY_MA},
-  {FUZZY_M,  FUZZY_MA, FUZZY_A,  FUZZY_A,  FUZZY_MA, FUZZY_MA, FUZZY_MA}
-};
-
-// Base completa 7x7 de regras para Kd.
-const uint8_t FUZZY_REGRAS_KD[FUZZY_CONJUNTOS][FUZZY_CONJUNTOS] = {
-  {FUZZY_B,  FUZZY_B,  FUZZY_M,  FUZZY_M,  FUZZY_MA, FUZZY_A,  FUZZY_MA},
-  {FUZZY_B,  FUZZY_M,  FUZZY_M,  FUZZY_MA, FUZZY_A,  FUZZY_MA, FUZZY_MA},
-  {FUZZY_M,  FUZZY_M,  FUZZY_MA, FUZZY_A,  FUZZY_MA, FUZZY_MA, FUZZY_MA},
-  {FUZZY_M,  FUZZY_MA, FUZZY_A,  FUZZY_MA, FUZZY_MA, FUZZY_MA, FUZZY_MA},
-  {FUZZY_MA, FUZZY_A,  FUZZY_MA, FUZZY_MA, FUZZY_MA, FUZZY_MA, FUZZY_MA},
-  {FUZZY_A,  FUZZY_MA, FUZZY_MA, FUZZY_MA, FUZZY_MA, FUZZY_MA, FUZZY_MA},
-  {FUZZY_MA, FUZZY_MA, FUZZY_MA, FUZZY_MA, FUZZY_MA, FUZZY_MA, FUZZY_MA}
-};
-
-// Base completa 7x7 de regras para Ki (conservadora para evitar windup).
-const uint8_t FUZZY_REGRAS_KI[FUZZY_CONJUNTOS][FUZZY_CONJUNTOS] = {
-  {FUZZY_MAX, FUZZY_A,   FUZZY_MA, FUZZY_MA, FUZZY_MA, FUZZY_A,   FUZZY_MAX},
-  {FUZZY_M,   FUZZY_MAX, FUZZY_A,  FUZZY_A,  FUZZY_A,  FUZZY_MAX, FUZZY_M},
-  {FUZZY_MBX, FUZZY_M,   FUZZY_MAX, FUZZY_MAX, FUZZY_MAX, FUZZY_M, FUZZY_MBX},
-  {FUZZY_B,   FUZZY_MBX, FUZZY_MBX, FUZZY_M,   FUZZY_MBX, FUZZY_MBX, FUZZY_B},
-  {FUZZY_MB,  FUZZY_B,   FUZZY_B,   FUZZY_B,   FUZZY_B,   FUZZY_B,   FUZZY_MB},
-  {FUZZY_MB,  FUZZY_MB,  FUZZY_MB,  FUZZY_MB,  FUZZY_MB,  FUZZY_MB,  FUZZY_MB},
-  {FUZZY_MB,  FUZZY_MB,  FUZZY_MB,  FUZZY_MB,  FUZZY_MB,  FUZZY_MB,  FUZZY_MB}
-};
+const float PID_MOVIMENTO_SAIDA_MAX = 15.0f;
+const float ALPHA_MOVIMENTO = 0.15f;
+const float ALPHA_MOVIMENTO_ALVO = 0.11f;
+const float PASSO_MAX_MOVIMENTO_ALVO_GRAUS = 18.0f;
 
 // PID dedicado ao giro do goleiro usando apenas a linha (zonas A e B) como referencia.
 const float PID_LINHA_GOL_KP = 0.9f;
@@ -380,7 +312,6 @@ float anguloMovimentoAtual = -1.0f;
 float anguloMovimentoSuavizado = -1.0f;
 float anguloMovimentoDesejadoFiltrado = -1.0f;
 unsigned long ultimoTempoPidMovimento = 0;
-unsigned long ultimoDebugFuzzyPidMovimentoMs = 0;
 unsigned long inicioCameraSemIrMs = 0;
 
 // Estado da rampa angular para evitar saltos bruscos entre faixas do IR.
@@ -1333,90 +1264,6 @@ int calcularSaidaPidLinhaGoleiro(float erroGraus) {
   return (u >= 0.0f) ? saida : -saida;
 }
 
-struct GanhosPidMovimento {
-  float kp;
-  float ki;
-  float kd;
-};
-
-float pertinenciaTriangularComCentros(float valor,
-                                      const float centros[FUZZY_CONJUNTOS],
-                                      uint8_t indice) {
-  if (indice == 0) {
-    float centro = centros[0];
-    float direita = centros[1];
-    if (valor <= centro) return 1.0f;
-    if (valor >= direita) return 0.0f;
-    return (direita - valor) / (direita - centro);
-  }
-
-  if (indice == (FUZZY_CONJUNTOS - 1)) {
-    float esquerda = centros[FUZZY_CONJUNTOS - 2];
-    float centro = centros[FUZZY_CONJUNTOS - 1];
-    if (valor <= esquerda) return 0.0f;
-    if (valor >= centro) return 1.0f;
-    return (valor - esquerda) / (centro - esquerda);
-  }
-
-  float esquerda = centros[indice - 1];
-  float centro = centros[indice];
-  float direita = centros[indice + 1];
-
-  if (valor <= esquerda || valor >= direita) return 0.0f;
-  if (valor < centro) return (valor - esquerda) / (centro - esquerda);
-  return (direita - valor) / (direita - centro);
-}
-
-void calcularPertinenciasFuzzy(float valor,
-                               const float centros[FUZZY_CONJUNTOS],
-                               float saida[FUZZY_CONJUNTOS]) {
-  for (uint8_t i = 0; i < FUZZY_CONJUNTOS; i++) {
-    saida[i] = pertinenciaTriangularComCentros(valor, centros, i);
-  }
-}
-
-GanhosPidMovimento calcularGanhosFuzzyMovimento(float erroAbs, float dErro) {
-  float erroNormalizado = constrain(erroAbs, 0.0f, 180.0f);
-  float dErroNormalizado = constrain(dErro, -50.0f, 50.0f);
-
-  float muErro[FUZZY_CONJUNTOS] = {0.0f};
-  float muDErro[FUZZY_CONJUNTOS] = {0.0f};
-  calcularPertinenciasFuzzy(erroNormalizado, FUZZY_ERRO_CENTROS, muErro);
-  calcularPertinenciasFuzzy(dErroNormalizado, FUZZY_DERRO_CENTROS, muDErro);
-
-  float somaPesos = 0.0f;
-  float somaKp = 0.0f;
-  float somaKi = 0.0f;
-  float somaKd = 0.0f;
-
-  for (uint8_t i = 0; i < FUZZY_CONJUNTOS; i++) {
-    for (uint8_t j = 0; j < FUZZY_CONJUNTOS; j++) {
-      float pesoRegra = min(muErro[i], muDErro[j]);
-      if (pesoRegra <= 0.0f) {
-        continue;
-      }
-
-      somaPesos += pesoRegra;
-      somaKp += pesoRegra * FUZZY_KP_NIVEIS[FUZZY_REGRAS_KP[i][j]];
-      somaKi += pesoRegra * FUZZY_KI_NIVEIS[FUZZY_REGRAS_KI[i][j]];
-      somaKd += pesoRegra * FUZZY_KD_NIVEIS[FUZZY_REGRAS_KD[i][j]];
-    }
-  }
-
-  GanhosPidMovimento ganhos;
-  if (somaPesos > 0.0001f) {
-    ganhos.kp = somaKp / somaPesos;
-    ganhos.ki = somaKi / somaPesos;
-    ganhos.kd = somaKd / somaPesos;
-  } else {
-    ganhos.kp = PID_MOVIMENTO_KP;
-    ganhos.ki = PID_MOVIMENTO_KI;
-    ganhos.kd = PID_MOVIMENTO_KD;
-  }
-
-  return ganhos;
-}
-
 // Zera o controlador angular do atacante sem alterar a logica que escolhe o destino.
 void resetControleMovimentoAtacante() {
   pidMovimentoIntegral = 0.0f;
@@ -1441,9 +1288,6 @@ float calcularPidMovimento(float erro) {
   }
   ultimoTempoPidMovimento = agora;
 
-  float dErro = erro - erroAnteriorMovimento;
-  GanhosPidMovimento ganhosAdaptativos = calcularGanhosFuzzyMovimento(fabsf(erro), dErro);
-
   pidMovimentoIntegral += erro * dt;
   if (pidMovimentoIntegral > PID_MOVIMENTO_INTEGRAL_MAX) pidMovimentoIntegral = PID_MOVIMENTO_INTEGRAL_MAX;
   if (pidMovimentoIntegral < -PID_MOVIMENTO_INTEGRAL_MAX) pidMovimentoIntegral = -PID_MOVIMENTO_INTEGRAL_MAX;
@@ -1451,32 +1295,13 @@ float calcularPidMovimento(float erro) {
   float derivada = (erro - erroAnteriorMovimento) / dt;
   erroAnteriorMovimento = erro;
 
-  pidMovimento = ganhosAdaptativos.kp * erro +
-                 ganhosAdaptativos.ki * pidMovimentoIntegral +
-                 ganhosAdaptativos.kd * derivada;
+  pidMovimento = PID_MOVIMENTO_KP * erro + PID_MOVIMENTO_KI * pidMovimentoIntegral + PID_MOVIMENTO_KD * derivada;
   if (pidMovimento > PID_MOVIMENTO_SAIDA_MAX) pidMovimento = PID_MOVIMENTO_SAIDA_MAX;
   if (pidMovimento < -PID_MOVIMENTO_SAIDA_MAX) pidMovimento = -PID_MOVIMENTO_SAIDA_MAX;
 
   // Evita o comportamento de "vou e nao vou" perto do alvo por microcorrecoes.
   if (fabsf(erro) < 2.0f) {
     pidMovimento = 0.0f;
-  }
-
-  if (DEBUG_FUZZY_PID_MOVIMENTO &&
-      ((agora - ultimoDebugFuzzyPidMovimentoMs) >= DEBUG_FUZZY_PID_MOVIMENTO_INTERVALO_MS)) {
-    Serial.print("FUZZY MOV | E=");
-    Serial.print(erro, 2);
-    Serial.print(" dE=");
-    Serial.print(dErro, 2);
-    Serial.print(" KP=");
-    Serial.print(ganhosAdaptativos.kp, 3);
-    Serial.print(" KI=");
-    Serial.print(ganhosAdaptativos.ki, 4);
-    Serial.print(" KD=");
-    Serial.print(ganhosAdaptativos.kd, 3);
-    Serial.print(" PID=");
-    Serial.println(pidMovimento, 3);
-    ultimoDebugFuzzyPidMovimentoMs = agora;
   }
 
   return -pidMovimento;
