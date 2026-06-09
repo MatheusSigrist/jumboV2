@@ -850,16 +850,16 @@ extern float anguloLinhaPe;
 float mapearAnguloBolaParaMovimento(float anguloBolaGraus) {
   float ang = normalizarAngulo360(anguloBolaGraus);
 
-  if(ang >= 15.0f && ang < 45.0f) return 90.0f; //Mudamos 03.06
-  if(ang >= 315.0f && ang < 345.0f) return 270.0f; // Mudamos 03.06
+  if(ang >= 32.0f && ang <= 60.0f) return 90.0f; //Mudamos 03.06
+  if(ang >= 300.0f && ang <= 328.0f) return 270.0f; // Mudamos 03.06
 
 
 
 
-  if(ang >= 45.0f && ang < 90.0f) return 135.0f;//ok
-  if(ang >= 90.0f && ang < 135.0f) return 180.0f;
-  if(ang >= 270.0f && ang < 315.0f) return 225.0f;
-  if(ang >= 225.0f && ang < 270.0f) return 180.0f;
+  if(ang > 60.0f && ang < 90.0f) return 135.0f; //////////// confuso
+  if(ang >= 90.0f && ang < 135.0f) return 180.0f; 
+  if(ang >= 270.0f && ang < 300.0f) return 225.0f;  ////////// confuso
+  if(ang >= 225.0f && ang < 270.0f) return 180.0f; 
   if(ang >= 180.0f && ang < 225.0f) return 135.0f;
   if(ang >= 135.0f && ang < 180.0f) return 225.0f;
 
@@ -917,7 +917,7 @@ int calcularVelocidadeLateralDefensorPorIr(float anguloBolaGraus) {
 // Detecta a faixa frontal do IR em torno de 0°, tratando a transicao 360° -> 0°.
 bool irNaFaixaFrontal(float anguloBolaGraus) {
   float ang = normalizarAngulo360(anguloBolaGraus);
-  return (ang >= 328.0f || ang <= 32.0f);
+  return (ang > 328.0f || ang < 32.0f);
 }
 
 bool ultraLateralCriticoAtacante() {
