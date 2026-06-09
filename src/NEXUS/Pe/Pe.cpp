@@ -22,8 +22,7 @@
 #define INTERVALO_DEBUG_MS 250
 #define BAUD_PE_CABECA 115200
 #define DEBUG_LINHA 0
-#define DELAY_LOOP_MS 2
-
+#define DELAY_LOOP_MS 0
 uint8_t mapaSensores[NUM_SENSORES] = {
   0,  1,  2,  3,
   4,  5,  6,  7,

@@ -164,7 +164,7 @@ PapelConfigurado papelConfiguradoMenu = PAPEL_CONFIG_AUTO;
 const unsigned long INTERVALO_OI_MS = 1000;
 const unsigned long TIMEOUT_COM_MS = 5000;
 const unsigned long TIMEOUT_BUSSOLA_MS = 800;
-const unsigned long TIMEOUT_LINHA_MS = 150;
+const unsigned long TIMEOUT_LINHA_MS = 1;
 const unsigned long TIMEOUT_ULTRA_MS = 1000;
 const unsigned long TIMEOUT_CAMERA_MS = 1000;
 const unsigned long TIMEOUT_SENSORES_BRUTOS_MS = 1200;
@@ -228,13 +228,13 @@ void carregarCorGolEEPROM() {
   }
   corGolAzul = (corGolSalva == 1);
 }
-
+////////////// AQUI
 // Parametros do alinhamento por camera + bussola.
-const float TOLERANCIA_ALINHAMENTO_GRAUS = 10.0f;
+const float TOLERANCIA_ALINHAMENTO_GRAUS = 8.0f;
 const float JANELA_FUZZY_ALINHAMENTO_GRAUS = 30.0f;
 const int VELOCIDADE_GIRO_ALINHAMENTO = VELOCIDADE_GIRO;
 const int SINAL_GIRO_PID = SINAL_GIRO;
-
+///////////// AQUI
 // Ganhos e saturacoes do PID usado para girar rumo ao gol.
 const float PID_BUS_KP = 0.8f;
 const float PID_BUS_KI = 0.01f;
@@ -243,7 +243,7 @@ const float PID_BUS_INTEGRAL_MAX = 120.0f;
 const int PID_BUS_SAIDA_MIN = 30;
 const int PID_BUS_SAIDA_MAX = 180;
 const float GANHO_GIRO_MISTO = 0.7f;
-
+////////////// AQUI
 // PID exclusivo do atacante para suavizar somente a transicao entre angulos de movimento.
 const float PID_MOVIMENTO_KP = 2.0f;
 const float PID_MOVIMENTO_KI = 0.01f;
@@ -850,15 +850,15 @@ extern float anguloLinhaPe;
 float mapearAnguloBolaParaMovimento(float anguloBolaGraus) {
   float ang = normalizarAngulo360(anguloBolaGraus);
 
-  if(ang >= 32.0f && ang <= 60.0f) return 90.0f; //Mudamos 03.06
-  if(ang >= 300.0f && ang <= 328.0f) return 270.0f; // Mudamos 03.06
+  if(ang >= 32.0f && ang <= 60.0f) return 100.0f; //Mudamos 03.06
+  if(ang >= 300.0f && ang <= 328.0f) return 260.0f; // Mudamos 03.06
 
 
 
 
-  if(ang > 60.0f && ang < 90.0f) return 135.0f; //////////// confuso
+  if(ang > 60.0f && ang < 90.0f) return 135.0f; //////////// AQUI
   if(ang >= 90.0f && ang < 135.0f) return 180.0f; 
-  if(ang >= 270.0f && ang < 300.0f) return 225.0f;  ////////// confuso
+  if(ang >= 270.0f && ang < 300.0f) return 225.0f;  ////////// AQUI
   if(ang >= 225.0f && ang < 270.0f) return 180.0f; 
   if(ang >= 180.0f && ang < 225.0f) return 135.0f;
   if(ang >= 135.0f && ang < 180.0f) return 225.0f;
@@ -872,8 +872,8 @@ float mapearAnguloBolaParaMovimento(float anguloBolaGraus) {
 int calcularVelocidadeIrPorAngulo(float anguloBolaGraus) {
   float ang = normalizarAngulo360(anguloBolaGraus);
 
-  if ((ang >= 29.0f && ang < 45.0f) ||
-      (ang >= 315.0f && ang < 331.0f)) {
+  if ((ang >= 33.0f && ang <= 60.0f) ||
+      (ang >= 300.0f && ang <= 328.0f)) {
     return VELOCIDADE_IR_FAIXA_REDUZIDA_PWM;
   }
   if (ang >= 140.0f && ang < 220.0f) {
@@ -961,6 +961,47 @@ float calcularAnguloBuscaSemBolaCameraAtacante() {
 
   return 0.0f;
 }
+
+int aplicarFreioUltrassonicoAtacanteFrente(int velocidadeDesejada) {
+  int velocidadeBase = constrain(velocidadeDesejada, 0, 255);
+  bool ultrasRecentes = (ultimoRxUltraMs > 0) && ((millis() - ultimoRxUltraMs) <= TIMEOUT_ULTRA_MS);
+  if (!ultrasRecentes) {
+    return velocidadeBase;
+  }
+
+  float menorUltraCm = -1.0f;
+  // Usa apenas laterais para o freio do atacante: direita (D) e esquerda (E).
+  float leituras[] = { ultraFcm};
+  for (float leitura : leituras) {
+    if (leitura < 0.0f) {
+      continue;
+    }
+    if(ultraTcm > 150){
+    if ((menorUltraCm < 0.0f) || (leitura < menorUltraCm)) {
+      menorUltraCm = leitura;
+    }
+  }
+
+  if ((menorUltraCm < 0.0f) || (menorUltraCm > ATACANTE_ULTRA_FREIO_INICIO_CM)) {
+    return velocidadeBase;
+  }
+
+  int velocidadeLimite = ATACANTE_ULTRA_FREIO_VELOCIDADE_MIN;
+  if (menorUltraCm > ATACANTE_ULTRA_FREIO_CRITICO_CM) {
+    velocidadeLimite += (int)((menorUltraCm - ATACANTE_ULTRA_FREIO_CRITICO_CM) * ATACANTE_ULTRA_FREIO_PWM_POR_CM);
+  }
+
+  if (velocidadeLimite > velocidade_maxima) {
+    velocidadeLimite = velocidade_maxima;
+  }
+
+  return min(velocidadeBase, velocidadeLimite);
+}
+}
+
+
+
+
 
 int aplicarFreioUltrassonicoAtacante(int velocidadeDesejada) {
   int velocidadeBase = constrain(velocidadeDesejada, 0, 255);
@@ -2914,7 +2955,12 @@ void atacante() {
   if (linhaValida) {
     if (irDiretoAtivo) {
       if (irNaFaixaFrontal(anguloIrBufferizado)) {
-        moverFrenteComGiro(aplicarFreioUltrassonicoAtacante(VELOCIDADE_IR_FRONTAL_PWM), cmdPidAssinado);
+        if(ultraTcm > 150){
+        moverFrenteComGiro(aplicarFreioUltrassonicoAtacanteFrente(VELOCIDADE_IR_FRONTAL_PWM), cmdPidAssinado);
+        }else{
+          moverFrenteComGiro(aplicarFreioUltrassonicoAtacante(VELOCIDADE_IR_FRONTAL_PWM), cmdPidAssinado);
+        }
+
       } else {
         float anguloIrAlvo = mapearAnguloBolaParaMovimento(anguloIrBufferizado);
         float anguloIrComRampa = obterAnguloIrSuavizado(anguloIrAlvo);
@@ -2939,9 +2985,14 @@ void atacante() {
   } else if (irDisponivel) {
     if (irNaFaixaFrontal(anguloIrBufferizado)) {
       // Na faixa frontal aplica PWM direto e mantem correcao de alinhamento do gol.
-      moverFrenteComGiro(aplicarFreioUltrassonicoAtacante(VELOCIDADE_IR_FRONTAL_PWM), cmdPidAssinado);
+      if(ultraTcm > 150){
+       moverFrenteComGiro(aplicarFreioUltrassonicoAtacanteFrente(VELOCIDADE_IR_FRONTAL_PWM), cmdPidAssinado);
+      }else{
+       moverFrenteComGiro(aplicarFreioUltrassonicoAtacante(VELOCIDADE_IR_FRONTAL_PWM), cmdPidAssinado);
+      }
+   
     } else {
-      float anguloIrAlvo = mapearAnguloBolaParaMovimento(anguloIrBufferizado);
+      float anguloIrAlvo = normalizarAngulo360(mapearAnguloBolaParaMovimento(anguloIrBufferizado) + (erroAlinhamentoGraus * 2));
       float anguloIrComRampa = obterAnguloIrSuavizado(anguloIrAlvo);
       int velocidadeIr = aplicarFreioUltrassonicoAtacante(calcularVelocidadeIrPorAngulo(anguloIrBufferizado));
       float anguloMovimentoComControle = suavizarAnguloMovimentoAtacante(anguloIrComRampa);

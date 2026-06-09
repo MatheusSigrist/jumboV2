@@ -307,7 +307,7 @@ void prepararTrocaPapelPe() {
 const unsigned long INTERVALO_ENVIO_IR_MS = 120;
 const unsigned long INTERVALO_ENVIO_BUSSOLA_MS = 120;
 const unsigned long INTERVALO_ENVIO_GOL_MS = 120;
-const unsigned long INTERVALO_ENVIO_LINHA_MS = 20;
+const unsigned long INTERVALO_ENVIO_LINHA_MS = 2;
 const unsigned long INTERVALO_ENVIO_INT_MS = 120;
 const unsigned long INTERVALO_ENVIO_ULTRA_MS = 120;
 const unsigned long INTERVALO_ENVIO_KICKER_MS = 120;
@@ -1270,5 +1270,5 @@ void loop() {
   enviarEstadoParaPlacas();
   atualizarEspNow();
 
-  delay(5);
+  delay(1);
 }
