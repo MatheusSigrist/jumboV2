@@ -211,7 +211,7 @@ float  ultimoAnguloLinhaZonaAValido       = -1.0f;
 float  ultimoAnguloLinhaZonaBValido       = -1.0f;
 unsigned long ultimoRxLinhaZonaAMs        = 0;
 unsigned long ultimoRxLinhaZonaBMs        = 0;
-const unsigned long TIMEOUT_LINHA_MS      = 1;
+const unsigned long TIMEOUT_LINHA_MS      = 50;
 
 // --- Cor do gol de referência e envio pendente à Cabeça ---
 bool corGolAzul             = false;
@@ -2377,6 +2377,14 @@ void atacante() {
 
   // PRIORIDADE 4: IR disponível = segue bola pelo IR
   } else if (irDisponivel) {
+    // Verifica linha antes de qualquer movimento de IR
+    if (linhaDetectada && anguloLinhaPe >= 0.0f) {
+      fugindoLinhaAgora  = true;
+      anguloFugaLinhaCmd = normalizarAngulo360(anguloLinhaPe);
+      float anguloFugaSuavizado = suavizarAnguloMovimentoAtacante(anguloFugaLinhaCmd);
+      seguirDirecaoPorAngulo(anguloFugaSuavizado, aplicarFreioUltrassonicoAtacante(VELOCIDADE_FUGA_LINHA));
+      return;
+    }
     if (irNaFaixaFrontal(anguloIrBufferizado)) {
       if (ultraTcm > 150) moverFrenteComGiro(aplicarFreioUltrassonicoAtacanteFrente(VELOCIDADE_IR_FRONTAL_PWM), cmdPidAssinado);
       else                 moverFrenteComGiro(aplicarFreioUltrassonicoAtacante(VELOCIDADE_IR_FRONTAL_PWM), cmdPidAssinado);
