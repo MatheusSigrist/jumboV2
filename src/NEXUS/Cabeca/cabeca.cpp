@@ -39,7 +39,7 @@
 // Inicializacao e configuracao da bussola.
 const uint8_t QMC5883P_ADDR = 0x2C;
 
-// Valores de calibracao validados no teste dedicado.
+// Valores de calibração validados no teste dedicado.
 const float xOffset = -1223.00;
 const float yOffset = 409.50;
 const float xScale  = 0.983442;
