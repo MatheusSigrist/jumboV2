@@ -1,3 +1,6 @@
+
+
+
 // =============================================================================
 // MUSCULO.CPP — Placa de Atuadores e Estratégias do Cronos
 // =============================================================================
@@ -2476,8 +2479,8 @@ const unsigned long DEFENSOR_TEMPO_AVANCO_IR_FRONTAL_MS       = 2500;
 // --- Controle proporcional lateral do defensor por IR ---
 int calcularVelocidadeLateralDefensorPorIr(float anguloBolaGraus) {
   const float ANG_DIREITA_MIN  = 20.0f;
-  const float ANG_DIREITA_MAX  = 160.0f;
-  const float ANG_ESQUERDA_MIN = 200.0f;
+  const float ANG_DIREITA_MAX  = 160.0f;  /// 
+  const float ANG_ESQUERDA_MIN = 200.0f;  /// 
   const float ANG_ESQUERDA_MAX = 340.0f;
   const int   VEL_MIN = 130;
   const int   VEL_MAX = 255;

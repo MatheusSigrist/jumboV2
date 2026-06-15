@@ -18,7 +18,7 @@
 //   • Pulso do kicker (solenoide)
 //   • Telas de status no display OLED 128x64
 // =============================================================================
-
+// SECAO 19 — ESTRATEGIA DO ATACANTE\\
 #include <Arduino.h>
 #include <Wire.h>
 #include <EEPROM.h>
@@ -2054,11 +2054,11 @@ const unsigned long ATACANTE_ESPERA_SEM_BOLA_CAMERA_MS = 2000UL;
 // *** AJUSTE AQUI para suavizar ou tornar mais responsiva a transição de direção ***
 const float PID_MOVIMENTO_KP           = 2.0f;
 const float PID_MOVIMENTO_KI           = 0.01f;
-const float PID_MOVIMENTO_KD           = 0.8f;
+const float PID_MOVIMENTO_KD           = 1.2f;
 const float PID_MOVIMENTO_INTEGRAL_MAX = 90.0f;
 const float PID_MOVIMENTO_SAIDA_MAX    = 15.0f;
 const float ALPHA_MOVIMENTO            = 0.15f;   // Suavização exponencial do ângulo atual
-const float ALPHA_MOVIMENTO_ALVO       = 0.11f;   // Suavização exponencial do ângulo alvo
+const float ALPHA_MOVIMENTO_ALVO       = 0.11f;   // Suavização exponencial do ângulo aIFlvo
 const float PASSO_MAX_MOVIMENTO_ALVO_GRAUS = 18.0f; // Passo máximo por ciclo no alvo filtrado
 
 // Estado interno do PID de movimento do atacante
@@ -2310,6 +2310,13 @@ void atacante() {
   float anguloIrBufferizado        = -1.0f;
   bool irDisponivel               = obterAnguloIrComBuffer(anguloIrBufferizado);
 
+      if (linhaDetectada && anguloLinhaPe >= 0.0f) {
+      fugindoLinhaAgora  = true;
+      anguloFugaLinhaCmd = normalizarAngulo360(anguloLinhaPe);
+      float anguloFugaSuavizado = suavizarAnguloMovimentoAtacante(anguloFugaLinhaCmd);
+      seguirDirecaoPorAngulo(anguloFugaSuavizado, aplicarFreioUltrassonicoAtacante(VELOCIDADE_FUGA_LINHA));
+      return;
+    }
   // Decide se precisa girar para alinhar ao gol
   bool precisaAlinhar = golVisivelCamera && (fabsf(erroAlinhamentoGraus) > TOLERANCIA_ALINHAMENTO_GRAUS);
   bool erroGrande     = golVisivelCamera && (fabsf(erroAlinhamentoGraus) > 40.0f);
