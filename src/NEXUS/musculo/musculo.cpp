@@ -86,10 +86,12 @@ float ultraRemotoDcm = -1.0f;
 float ultraRemotoEcm = -1.0f;
 float ultraRemotoFcm = -1.0f;
 float ultraRemotoTcm = -1.0f;
+float intensidadeIrRecebida = -1.0f;
 bool ultrasValidos = false;
 bool ultrasRemotosValidos = false;
 unsigned long ultimoRxUltraMs = 0;
 unsigned long ultimoRxUltraRemotoMs = 0;
+unsigned long ultimoRxIntensidadeIrMs = 0;
 bool kickerRecebido = false;
 bool kickerAtivado = false;  // true quando chave acionada (valor 0 vindo da cabeca)
 bool pulsoKickerAtivo = false;
@@ -503,15 +505,11 @@ extern float anguloLinhaPe;
 float mapearAnguloBolaParaMovimento(float anguloBolaGraus) {
   float ang = normalizarAngulo360(anguloBolaGraus);
 
-  if(ang >= 15.0f && ang < 45.0f) return 100.0f; 
-  if(ang >= 315.0f && ang < 345.0f) return 260.0f; 
-
-
-
-
-  if(ang >= 45.0f && ang < 90.0f) return 135.0f;//ok
+  if(ang >= 15.0f && ang < 45.0f) return 90.0f; 
+  if(ang >= 315.0f && ang < 345.0f) return 270.0f; 
+    if(ang >= 45.0f && ang < 90.0f) return 120.0f;//ok
   if(ang >= 90.0f && ang < 135.0f) return 180.0f;
-  if(ang >= 270.0f && ang < 315.0f) return 225.0f;
+  if(ang >= 270.0f && ang < 315.0f) return 240.0f;
   if(ang >= 225.0f && ang < 270.0f) return 180.0f;
   if(ang >= 180.0f && ang < 225.0f) return 135.0f;
   if(ang >= 135.0f && ang < 180.0f) return 225.0f;
@@ -531,6 +529,30 @@ int calcularVelocidadeIrPorAngulo(float anguloBolaGraus) {
   }
 
   return velocidade_maxima;
+}
+
+// Mapeia intensidade IR para velocidade: 8 -> 110 e 38 -> velocidade maxima.
+int calcularVelocidadePorIntensidadeIr(int velocidadeMaximaRef) {
+  const float INTENSIDADE_MIN_REF = 8.0f;
+  const float INTENSIDADE_MAX_REF = 38.0f;
+  const int VELOCIDADE_MIN_REF = 110;
+  const unsigned long TIMEOUT_INTENSIDADE_MS = 700;
+
+  int velocidadeMaximaAjustada = constrain(velocidadeMaximaRef, VELOCIDADE_MIN_REF, velocidade_maxima);
+  bool intensidadeRecente = (ultimoRxIntensidadeIrMs > 0) &&
+                            ((millis() - ultimoRxIntensidadeIrMs) <= TIMEOUT_INTENSIDADE_MS);
+
+  if (!intensidadeRecente || intensidadeIrRecebida < 0.0f) {
+    return velocidadeMaximaAjustada;
+  }
+
+  float intensidadeClamped = intensidadeIrRecebida;
+  if (intensidadeClamped < INTENSIDADE_MIN_REF) intensidadeClamped = INTENSIDADE_MIN_REF;
+  if (intensidadeClamped > INTENSIDADE_MAX_REF) intensidadeClamped = INTENSIDADE_MAX_REF;
+
+  float t = (intensidadeClamped - INTENSIDADE_MIN_REF) / (INTENSIDADE_MAX_REF - INTENSIDADE_MIN_REF);
+  int velocidade = (int)roundf((float)VELOCIDADE_MIN_REF + t * (float)(velocidadeMaximaAjustada - VELOCIDADE_MIN_REF));
+  return constrain(velocidade, VELOCIDADE_MIN_REF, velocidadeMaximaAjustada);
 }
 
 // Controle proporcional da velocidade lateral do defensor pelo angulo do IR.
@@ -1593,8 +1615,19 @@ void processarMensagemCabeca(String msg) {
     return;
   }
 
+  // Intensidade IR em formato textual (fallback/compatibilidade).
+  if (msg.startsWith("INT:")) {
+    String sInt = msg.substring(4);
+    sInt.trim();
+    intensidadeIrRecebida = sInt.toFloat();
+    ultimoRxIntensidadeIrMs = millis();
+    comunicacaoCabecaOK = true;
+    ultimoRxCabeca = millis();
+    return;
+  }
+
   // ===== NOVO: dados de camera (bola + 2 gols) =====
-  // CAM:ballAngle,ballDist,blueAngle,blueDist,yellowAngle,yellowDist,cameraOK
+  // CAM:ballAngle,ballDist,blueAngle,blueDist,yellowAngle,yellowDist,cameraOK[,irIntensity]
   if (msg.startsWith("CAM:")) {
     String payload = msg.substring(4);
     int p1 = payload.indexOf(',');
@@ -1603,6 +1636,7 @@ void processarMensagemCabeca(String msg) {
     int p4 = payload.indexOf(',', p3 + 1);
     int p5 = payload.indexOf(',', p4 + 1);
     int p6 = payload.indexOf(',', p5 + 1);
+    int p7 = payload.indexOf(',', p6 + 1);
     
     if (p1 > 0 && p2 > p1 && p3 > p2 && p4 > p3 && p5 > p4 && p6 > p5) {
       String sBallA = payload.substring(0, p1);
@@ -1611,7 +1645,8 @@ void processarMensagemCabeca(String msg) {
       String sBlueD = payload.substring(p3 + 1, p4);
       String sYellA = payload.substring(p4 + 1, p5);
       String sYellD = payload.substring(p5 + 1, p6);
-      String sCamOK = payload.substring(p6 + 1);
+      String sCamOK = (p7 > p6) ? payload.substring(p6 + 1, p7) : payload.substring(p6 + 1);
+      String sInt = (p7 > p6) ? payload.substring(p7 + 1) : "";
       
       sBallA.trim();
       sBallD.trim();
@@ -1620,6 +1655,7 @@ void processarMensagemCabeca(String msg) {
       sYellA.trim();
       sYellD.trim();
       sCamOK.trim();
+      sInt.trim();
 
       cameraBallAngle = (int16_t)sBallA.toInt();
       cameraBallDist = (uint16_t)sBallD.toInt();
@@ -1628,6 +1664,10 @@ void processarMensagemCabeca(String msg) {
       cameraYellowAngle = (int16_t)sYellA.toInt();
       cameraYellowDist = (uint16_t)sYellD.toInt();
       cameraDadosValidos = (sCamOK == "1");
+      if (sInt.length() > 0) {
+        intensidadeIrRecebida = sInt.toFloat();
+        ultimoRxIntensidadeIrMs = millis();
+      }
       ultimoRxCameraMs = millis();
 
       comunicacaoCabecaOK = true;
@@ -1749,6 +1789,7 @@ void atacante() {
 
   int cmdPidAssinado = 0;
   bool cameraBolaVisivel = cameraTemBolaValida();
+  int velocidadeMaximaIr = calcularVelocidadePorIntensidadeIr(velocidade_maxima);
 
   // So gira para alinhar quando o gol estiver visivel na camera e fora da tolerancia.
   bool precisaAlinhar = golVisivelCamera && (fabsf(erroAlinhamentoGraus) > TOLERANCIA_ALINHAMENTO_GRAUS);
@@ -1798,17 +1839,17 @@ void atacante() {
   } else if (irDetectado) {
     if (irNaFaixaFrontal(anguloIr)) {
       // Na faixa frontal aplica PWM direto e mantem correcao de alinhamento do gol.
-      moverFrenteComGiro(VELOCIDADE_IR_FRONTAL_PWM, cmdPidAssinado);
+      moverFrenteComGiro(min(VELOCIDADE_IR_FRONTAL_PWM, velocidadeMaximaIr), cmdPidAssinado);
     } else {
       float anguloIrAlvo = mapearAnguloBolaParaMovimento(anguloIr);
       float anguloIrComRampa = obterAnguloIrSuavizado(anguloIrAlvo);
-      int velocidadeIr = calcularVelocidadeIrPorAngulo(anguloIr);
+      int velocidadeIr = min(calcularVelocidadeIrPorAngulo(anguloIr), velocidadeMaximaIr);
       seguirDirecaoPorAngulo(anguloIrComRampa, velocidadeIr);
     }
   } else if (cameraBolaVisivel) {
     float anguloCameraVetorial = normalizarAngulo360((float)cameraBallAngle);
     float anguloCameraComRampa = obterAnguloIrSuavizado(anguloCameraVetorial);
-    seguirDirecaoComGiro(anguloCameraComRampa, velocidade_maxima, cmdPidAssinado);
+    seguirDirecaoComGiro(anguloCameraComRampa, velocidadeMaximaIr, cmdPidAssinado);
   } else if (precisaAlinhar) {
     girarNoEixo(cmdPidAssinado);
   } else {
@@ -1923,7 +1964,8 @@ void defensor() {
   bool bolaDireita = irDetectado && (anguloIr >= FAIXA_BOLA_DIREITA_MIN) && (anguloIr <= FAIXA_BOLA_DIREITA_MAX);
   bool bolaEsquerda = irDetectado && (anguloIr >= FAIXA_BOLA_ESQUERDA_MIN) && (anguloIr <= FAIXA_BOLA_ESQUERDA_MAX);
   bool bolaCameraSemIr = !irDetectado && cameraTemBolaValida() && (cameraBallDist < DISTANCIA_MAX_BOLA_CAMERA_DEFENSOR);
-  int velocidadeLateralIr = irDetectado ? calcularVelocidadeLateralDefensorPorIr(anguloIr) : 0;
+  int velocidadeMaximaIr = calcularVelocidadePorIntensidadeIr(velocidade_maxima);
+  int velocidadeLateralIr = irDetectado ? min(calcularVelocidadeLateralDefensorPorIr(anguloIr), velocidadeMaximaIr) : 0;
 
   float erroA = temZonaA ? normalizarErro180(anguloLinhaZonaA - REFERENCIA_ZONA_A) : 0.0f;
   float erroB = temZonaB ? normalizarErro180(anguloLinhaZonaB - REFERENCIA_ZONA_B) : 0.0f;
@@ -1998,7 +2040,7 @@ void defensor() {
     anguloVetor = normalizarAngulo360(anguloVetor);
 
     int velocidadeVetor = (int)moduloVetor;
-    velocidadeVetor = constrain(velocidadeVetor, 0, velocidade_maxima);
+    velocidadeVetor = constrain(velocidadeVetor, 0, velocidadeMaximaIr);
 
     seguirDirecaoComGiro(anguloVetor, velocidadeVetor, cmdPidAssinado);
     return;
@@ -2006,7 +2048,7 @@ void defensor() {
 
   if (bolaCameraSemIr) {
     float anguloCameraMovimento = mapearAnguloBolaParaMovimento((float)cameraBallAngle);
-    seguirDirecaoComGiro(anguloCameraMovimento, VELOCIDADE_DEFENSOR, cmdPidAssinado);
+    seguirDirecaoComGiro(anguloCameraMovimento, min(VELOCIDADE_DEFENSOR, velocidadeMaximaIr), cmdPidAssinado);
     return;
   }
 
