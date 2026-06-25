@@ -176,59 +176,49 @@ float ultraRemotoFcm = -1.0f;
 float ultraRemotoTcm = -1.0f;
 bool  ultrasRemotosValidos    = false;
 unsigned long ultimoRxUltraRemotoMs = 0;
-
-// --- Sensores brutos de linha (LDR do Pé) ---
-int sensorBruto1  = -1;
-int sensorBruto9  = -1;
+int sensorBruto1 = -1;
+int sensorBruto9 = -1;
 int sensorBruto17 = -1;
 int sensorBruto25 = -1;
-unsigned long ultimoRxSensoresBrutosMs   = 0;
-unsigned long ultimoReqSensoresBrutosMs  = 0;
-const unsigned long TIMEOUT_SENSORES_BRUTOS_MS        = 1200;
-const unsigned long INTERVALO_REQ_SENSORES_BRUTOS_MS  = 250;
-
-// --- Limiar de linha (compartilhado entre Músculo e Pé) ---
-int  limiarLinhaEditado          = 2500;
-bool limiarLinhaSincronizado     = false;
-unsigned long ultimoReqLimiarLinhaMs     = 0;
-unsigned long entradaTelaLimiarMs        = 0;
-const int  LIMIAR_LINHA_MIN              = 100;
-const int  LIMIAR_LINHA_MAX              = 4000;
-const int  LIMIAR_LINHA_PASSO            = 100;
-const unsigned long INTERVALO_REQ_LIMIAR_LINHA_MS = 400;
-
-// --- Linha (atacante: ângulo único; defensor: zonas A e B) ---
-float  anguloLinhaPe        = -1.0f;
-bool   linhaDetectada       = false;
-float  anguloLinhaZonaA     = -1.0f;
-float  anguloLinhaZonaB     = -1.0f;
-bool   linhaZonaAValida     = false;
-bool   linhaZonaBValida     = false;
-unsigned long ultimoRxLinhaMs             = 0;
-unsigned long ultimoComandoLinhaMs        = 0;
-float  ultimoAnguloLinhaValido            = -1.0f;
-float  ultimoAnguloLinhaZonaAValido       = -1.0f;
-float  ultimoAnguloLinhaZonaBValido       = -1.0f;
-unsigned long ultimoRxLinhaZonaAMs        = 0;
-unsigned long ultimoRxLinhaZonaBMs        = 0;
-const unsigned long TIMEOUT_LINHA_MS      = 50;
-
-// --- Cor do gol de referência e envio pendente à Cabeça ---
-bool corGolAzul             = false;
-bool corGolPendenteEnvio    = true;
-unsigned long ultimoEnvioCorGolMs         = 0;
-const unsigned long INTERVALO_ENVIO_COR_GOL_MS = 500;
-
-// --- Kicker ---
-bool kickerRecebido         = false;
-bool kickerAtivado          = false;   // true quando chave acionada (valor 0 vindo da Cabeça)
-bool pulsoKickerAtivo       = false;
+unsigned long ultimoRxSensoresBrutosMs = 0;
+unsigned long ultimoReqSensoresBrutosMs = 0;
+int limiarLinhaEditado = 2500;
+unsigned long ultimoReqLimiarLinhaMs = 0;
+bool limiarLinhaSincronizado = false;
+unsigned long entradaTelaLimiarMs = 0;
+bool kickerRecebido = false;
+bool kickerAtivado = false;  // true quando chave acionada (valor 0 vindo da cabeca)
+bool pulsoKickerAtivo = false;
 bool pulsoKickerManualAtivo = false;
-bool pedidoChuteManual      = false;
-unsigned long inicioPulsoKickerMs   = 0;
+bool pedidoChuteManual = false;
+unsigned long inicioPulsoKickerMs = 0;
 unsigned long ultimoDisparoKickerMs = 0;
 
-// --- ESP-NOW (comunicação entre as Cabeças) ---
+// ===== NOVOS: dados de camera (bola + 2 gols) =====
+int16_t cameraBallAngle = -999;
+uint16_t cameraBallDist = 0;
+int16_t cameraBlueAngle = -999;
+uint16_t cameraBlueDist = 0;
+int16_t cameraYellowAngle = -999;
+uint16_t cameraYellowDist = 0;
+int16_t cameraGolSelecionadoAngle = -999;
+uint16_t cameraGolSelecionadoDist = 0;
+bool cameraGolSelecionadoValido = false;
+bool cameraGolSelecionadoAzul = false;
+bool cameraDadosValidos = false;
+unsigned long ultimoRxCameraMs = 0;
+unsigned long cameraUltimaVezBolaDetetadaMs = 0;  // Ultima vez que a camera detectou a bola
+unsigned long cameraSemBolaBrutaInicioMs = 0;
+const uint8_t CAMERA_BOLA_BUFFER_TAM = 3;
+const float CAMERA_BOLA_PESO_PREVISAO = 0.65f;
+const float CAMERA_BOLA_DELTA_PREVISAO_MAX_GRAUS = 35.0f;
+const unsigned long ATACANTE_ESPERA_SEM_BOLA_CAMERA_MS = 2000UL;
+float cameraBallBufferAngulos[CAMERA_BOLA_BUFFER_TAM] = {0.0f, 0.0f, 0.0f};
+uint8_t cameraBallBufferIndice = 0;
+uint8_t cameraBallBufferQuantidade = 0;
+// ===== FIM novos dados camera =====
+
+// Status da comunicacao ESP-NOW entre as Cabecas.
 bool espnowOK = false;
 bool sozinho  = true;
 unsigned long ultimoRxEspnowMs = 0;
@@ -319,30 +309,29 @@ enum SubMenuCalibracao {
 SubMenuCalibracao subMenuCalibracao = SUBMENU_PRINCIPAL;
 int itemSubMenu = 0;
 
-// Submenus de função
-enum SubMenuFuncao {
-  SUBFUNCAO_PRINCIPAL,
-  SUBFUNCAO_PAPEIS,
-  SUBFUNCAO_SENSORES,
-  SUBFUNCAO_LIMIAR_LINHA,
-  SUBFUNCAO_KICKER
-};
-SubMenuFuncao subMenuFuncao     = SUBFUNCAO_PRINCIPAL;
-int           itemSubMenuFuncao = 0;
+// PID exclusivo do atacante para suavizar somente a transicao entre angulos de movimento.
+const float PID_MOVIMENTO_KP = 2.0f;
+const float PID_MOVIMENTO_KI = 0.01f;
+const float PID_MOVIMENTO_KD = 0.8f;
+const float PID_MOVIMENTO_INTEGRAL_MAX = 90.0f;
+const float PID_MOVIMENTO_SAIDA_MAX = 15.0f;
+const float ALPHA_MOVIMENTO = 0.15f;
+const float ALPHA_MOVIMENTO_ALVO = 0.11f;
+const float PASSO_MAX_MOVIMENTO_ALVO_GRAUS = 18.0f;
+
+// PID dedicado ao giro do goleiro usando apenas a linha (zonas A e B) como referencia.
+const float PID_LINHA_GOL_KP = 0.9f;
+const float PID_LINHA_GOL_KI = 0.01f;
+const float PID_LINHA_GOL_KD = 0.55f;
+const float PID_LINHA_GOL_INTEGRAL_MAX = 90.0f;
+const int PID_LINHA_GOL_SAIDA_MIN = 60;
+const int PID_LINHA_GOL_SAIDA_MAX = 220;
 
 
-// =============================================================================
-// SECAO 6 — CONTROLE DE MOVIMENTO: PARAMETROS GERAIS
-// =============================================================================
 
-// --- Velocidade máxima global dos motores (0–255) ---
-// *** AJUSTE AQUI para alterar a velocidade máxima do robô ***
-const int velocidade_maxima = 180;
-
-// --- Habilita/desabilita o movimento baseado em bola (teste) ---
-const bool MOVIMENTO_BOLA_HABILITADO = false;
-
-// --- Rampa de aceleração PWM (suaviza variações bruscas de comando) ---
+// Velocidade dedicada para ataque frontal quando a bola estiver entre 330° e 30°.
+const int VELOCIDADE_IR_FRONTAL_PWM = 200;
+const int VELOCIDADE_IR_FAIXA_REDUZIDA_PWM = 140;
 const int PASSO_RAMPA_PWM = 16;
 
 // --- Configuração de giro no eixo (sentido e velocidade padrão) ---
@@ -388,26 +377,25 @@ const int   SINAL_GIRO_PID                 = SINAL_GIRO;
 const unsigned long RETENCAO_FUGA_LINHA_MS          = 250;
 const unsigned long RETENCAO_ZONA_LINHA_DEFENSOR_MS  = 300;
 const unsigned long TEMPO_CAMERA_SEM_IR_PARA_IGNORAR_LINHA_MS = 1000;
+const unsigned long RETENCAO_FUGA_LINHA_MS = 250;
+const unsigned long RETENCAO_ZONA_LINHA_DEFENSOR_MS = 300;
 
-
-// =============================================================================
-// SECAO 7 — PID GERAL DE ALINHAMENTO (BUSSOLA)
-//            Usado por ATACANTE e DEFENSOR para alinhar com o gol via câmera
-// =============================================================================
-
-// Ganhos e saturações do PID de alinhamento bússola/câmera
-// *** AJUSTE AQUI para afinação do giro de alinhamento com o gol ***
-const float PID_BUS_KP            = 0.8f;
-const float PID_BUS_KI            = 0.01f;
-const float PID_BUS_KD            = 0.5f;
-const float PID_BUS_INTEGRAL_MAX  = 120.0f;
-const int   PID_BUS_SAIDA_MIN     = 30;
-const int   PID_BUS_SAIDA_MAX     = 180;
-
-// Estado interno do PID de bússola (entre iterações do loop)
-float        pidBusIntegral      = 0.0f;
-float        pidBusErroAnterior  = 0.0f;
-unsigned long pidBusUltimoMs     = 0;
+// Estado interno do PID entre iteracoes do loop.
+float pidBusIntegral = 0.0f;
+float pidBusErroAnterior = 0.0f;
+unsigned long pidBusUltimoMs = 0;
+float pidLinhaGolIntegral = 0.0f;
+float pidLinhaGolErroAnterior = 0.0f;
+unsigned long pidLinhaGolUltimoMs = 0;
+float pidMovimentoIntegral = 0.0f;
+float pidMovimento = 0.0f;
+float erroMovimento = 0.0f;
+float erroAnteriorMovimento = 0.0f;
+float anguloMovimentoAtual = -1.0f;
+float anguloMovimentoSuavizado = -1.0f;
+float anguloMovimentoDesejadoFiltrado = -1.0f;
+unsigned long ultimoTempoPidMovimento = 0;
+unsigned long inicioCameraSemIrMs = 0;
 
 // --- Zera o PID de bússola ---
 void resetPidBussola() {
@@ -668,77 +656,39 @@ void moverFrenteComGiro(int velocidadePwm, int cmdGiro) {
   float v3 = -(float)pwmBase;
   float v4 = -(float)pwmBase;
 
-  // Mesmo sentido de compensação de giro do restante da locomoção
-  float termoGiro = -GANHO_GIRO_MISTO * (float)cmdGiro;
-  v1 += termoGiro; v2 += termoGiro; v3 += termoGiro; v4 += termoGiro;
-
-  aplicarComandoMotoresComRampa((int)v1, (int)v2, (int)v3, (int)v4);
+  // Coloca todas as entradas da ponte em neutro para evitar arrasto eletrico.
+  digitalWrite(IN1_1_A, LOW);
+  digitalWrite(IN2_1_A, LOW);
+  digitalWrite(IN1_2_A, LOW);
+  digitalWrite(IN2_2_A, LOW);
+  digitalWrite(IN1_1_B, LOW);
+  digitalWrite(IN2_1_B, LOW);
+  digitalWrite(IN1_2_B, LOW);
+  digitalWrite(IN2_2_B, LOW);
 }
 
+// Gira o robo no proprio eixo usando o mesmo comando de giro para as rodas.
+void girarNoEixo(int velocidade) {
+  int vel = constrain(velocidade, -velocidade_maxima, velocidade_maxima);
 
-// =============================================================================
-// SECAO 10 — KICKER (SOLENOIDE)
-// =============================================================================
-
-// Solicita chute manual pelo submenu kicker
-void solicitarChuteManualkicker() {
-  pedidoChuteManual = true;
+  // Mapeamento de giro da base:
+  // horario: M1/M2 frente e M3/M4 tras
+  // anti-horario: inverso
+  aplicarComandoMotoresComRampa(-vel, -vel, -vel, -vel);
 }
 
-// Controla o pulso do kicker com tempo mínimo e intervalo entre disparos
-void atualizarKicker() {
-  unsigned long agora = millis();
-
-  // Finaliza o pulso após o tempo mínimo energizado
-  if (pulsoKickerAtivo && (agora - inicioPulsoKickerMs) >= KICK_PULSE_MS) {
-    digitalWrite(KICKER_PIN, LOW);
-    pulsoKickerAtivo       = false;
-    pulsoKickerManualAtivo = false;
-  }
-
-  // Disparo manual solicitado pelo submenu kicker
-  if (pedidoChuteManual && !pulsoKickerAtivo) {
-    digitalWrite(KICKER_PIN, HIGH);
-    inicioPulsoKickerMs    = agora;
-    ultimoDisparoKickerMs  = agora;
-    pulsoKickerAtivo       = true;
-    pulsoKickerManualAtivo = true;
-    pedidoChuteManual      = false;
-    Serial.println("Chute manual");
-    return;
-  }
-  pedidoChuteManual = false;
-
-  // Só permite chute automático durante o jogo, com comunicação válida e chave acionada
-  bool podeChutar = (estadoAtual == INICIAR) && comunicacaoCabecaOK && kickerRecebido && kickerAtivado;
-  if (!podeChutar) {
-    // Desliga imediatamente apenas o pulso automático
-    if (pulsoKickerAtivo && !pulsoKickerManualAtivo) {
-      digitalWrite(KICKER_PIN, LOW);
-      pulsoKickerAtivo = false;
-    }
-    return;
-  }
-
-  // Dispara novo pulso respeitando o intervalo mínimo entre chutes
-  if (!pulsoKickerAtivo && (agora - ultimoDisparoKickerMs) >= KICK_INTERVAL_MS) {
-    digitalWrite(KICKER_PIN, HIGH);
-    inicioPulsoKickerMs   = agora;
-    ultimoDisparoKickerMs = agora;
-    pulsoKickerAtivo      = true;
-    pulsoKickerManualAtivo = false;
-    Serial.println("Chutei");
-  }
+// Normaliza um erro angular para a faixa [-180, 180].
+float normalizarErro180(float erro) {
+  while (erro > 180.0f) erro -= 360.0f;
+  while (erro < -180.0f) erro += 360.0f;
+  return erro;
 }
 
-
-// =============================================================================
-// SECAO 11 — FUNCOES DE GOL, BUSSOLA E ANGULO DE CAMPO (compartilhadas)
-// =============================================================================
-
-// Retorna true se o gol selecionado é o azul
-bool golReferenciaAzulEfetiva() {
-  return corGolAzul;
+// Normaliza um angulo absoluto para a faixa [0, 360).
+float normalizarAngulo360(float ang) {
+  while (ang >= 360.0f) ang -= 360.0f;
+  while (ang < 0.0f) ang += 360.0f;
+  return ang;
 }
 
 // Converte ângulo de gol para o referencial do defensor (inversão de 180°)
@@ -753,73 +703,110 @@ float calcularErroGolEspelhadoDefensor(float anguloGolGraus) {
   return normalizarErro180(anguloGolGraus - 180.0f);
 }
 
-// Retorna o erro de alinhamento com o gol conforme o papel atual
-float calcularErroGolPorPapel(float anguloGolGraus) {
-  if (papelAtacante) {
-    return normalizarErro180(anguloGolGraus);
+// Corrige um angulo relativo ao robo para o referencial do campo.
+float corrigirAnguloParaCampo(float anguloLocalGraus, float erroAngularGraus) {
+  return normalizarAngulo360(anguloLocalGraus + erroAngularGraus);
+}
+
+// Regras fixas de deslocamento lateral baseadas no angulo da bola corrigido no campo.
+// Direita real (20..120)  -> comando 90 + erroAngular
+// Esquerda real (240..340)-> comando 270 - erroAngular
+bool calcularComandoLateralPorBolaCorrigida(float anguloBolaCorrigido,
+                                            float erroAngular,
+                                            float &anguloComando) {
+  float ang = normalizarAngulo360(anguloBolaCorrigido);
+
+  if (ang >= 20.0f && ang <= 120.0f) {
+    anguloComando = normalizarAngulo360(120.0f - erroAngular);
+    return true;
   }
-  return calcularErroGolEspelhadoDefensor(anguloGolGraus);
-}
 
-// Calcula o erro angular atual em relação à referência salva da bússola
-float calcularErroReferenciaBussola() {
-  if (!bussolaValida) {
-    return 0.0f;
+  if (ang >= 240.0f && ang <= 340.0f) {
+    anguloComando = normalizarAngulo360(340.0f + erroAngular);
+    return true;
   }
-  return normalizarErro180((float)headingBussolaSalvo - (float)headingBussolaTeste);
+
+  return false;
 }
 
-// Gera ângulo local de translação para voltar ao gol pela bússola
-float calcularAnguloRetornoGolPorBussola() {
-  return normalizarAngulo360(180.0f + calcularErroReferenciaBussola());
+// Aceita apenas payload numerico simples para evitar toFloat() cair silenciosamente em 0.
+bool payloadNumericoValido(const String &texto) {
+  if (texto.length() == 0) {
+    return false;
+  }
+
+  bool encontrouDigito = false;
+  bool encontrouPonto = false;
+  for (size_t i = 0; i < texto.length(); i++) {
+    char c = texto.charAt(i);
+    if (c >= '0' && c <= '9') {
+      encontrouDigito = true;
+      continue;
+    }
+    if (c == '.' && !encontrouPonto) {
+      encontrouPonto = true;
+      continue;
+    }
+    if ((c == '+' || c == '-') && i == 0) {
+      continue;
+    }
+    return false;
+  }
+
+  return encontrouDigito;
 }
 
-// Retorna true se a bússola possui referência válida
-bool bussolaTemReferenciaValida() {
-  return bussolaValida;
-}
-
-// Atualiza validade da bússola por timeout
 void atualizarValidadeBussola() {
   if (bussolaValida && (millis() - ultimoRxBussolaMs) > TIMEOUT_BUSSOLA_MS) {
     bussolaValida = false;
   }
 }
 
-// Calcula o erro do campo (mesma base do gol invertido)
-float calcularErroAngularCampo() {
-  return erroAlinhamentoGraus;
+bool espnowConectadoRecente() {
+  return espnowOK && (ultimoRxEspnowMs > 0) && ((millis() - ultimoRxEspnowMs) <= TIMEOUT_COM_MS);
 }
 
-// Corrige ângulo local para o referencial do campo
-float corrigirAnguloParaCampo(float anguloLocalGraus, float erroAngularGraus) {
-  return normalizarAngulo360(anguloLocalGraus + erroAngularGraus);
-}
-
-// Regras de deslocamento lateral pela bola corrigida no campo
-// Direita real (20..120) -> 120 - erroAngular
-// Esquerda real (240..340) -> 340 + erroAngular
-bool calcularComandoLateralPorBolaCorrigida(float anguloBolaCorrigido,
-                                            float erroAngular,
-                                            float &anguloComando) {
-  float ang = normalizarAngulo360(anguloBolaCorrigido);
-  if (ang >= 20.0f && ang <= 120.0f) {
-    anguloComando = normalizarAngulo360(120.0f - erroAngular);
-    return true;
+void atualizarSozinhoLocal() {
+  if (estadoAtual == INICIAR) {
+    sozinho = !espnowConectadoRecente();
   }
-  if (ang >= 240.0f && ang <= 340.0f) {
-    anguloComando = normalizarAngulo360(340.0f + erroAngular);
-    return true;
-  }
-  return false;
 }
 
+void enviarEstadoJogoParaCabeca(bool forcar = false) {
+  bool emJogo = (estadoAtual == INICIAR);
+  unsigned long agora = millis();
 
-// =============================================================================
-// SECAO 12 — FUNCOES DE CAMERA (compartilhadas)
-// =============================================================================
+  if (!forcar &&
+      emJogo == estadoJogoCabecaEnviado &&
+      (agora - ultimoEnvioEstadoJogoCabecaMs) < INTERVALO_ENVIO_ESTADO_JOGO_MS) {
+    return;
+  }
 
-// Retorna true se o pacote de câmera está dentro do timeout
+  Serial1.print("RUN:");
+  Serial1.println(emJogo ? 1 : 0);
+  estadoJogoCabecaEnviado = emJogo;
+  ultimoEnvioEstadoJogoCabecaMs = agora;
+}
+
+bool bussolaTemReferenciaValida() {
+  return bussolaValida;
+}
+
+// Converte a leitura absoluta da bussola no erro local em relacao ao norte salvo.
+float calcularErroReferenciaBussola() {
+  if (!bussolaTemReferenciaValida()) {
+    return 0.0f;
+  }
+  return normalizarErro180((float)headingBussolaSalvo - (float)headingBussolaTeste);
+}
+
+// Gera o angulo local de translacao para voltar ao gol mantendo a referencia do campo.
+float calcularAnguloRetornoGolPorBussola() {
+  return normalizarAngulo360(180.0f + calcularErroReferenciaBussola());
+}
+
+// Mantem um snapshot universal da camera: a serial atualiza os campos e este helper
+// decide apenas se o pacote ainda esta recente para qualquer tela ou logica.
 bool cameraPacoteRecente() {
   return (ultimoRxCameraMs > 0) && ((millis() - ultimoRxCameraMs) <= TIMEOUT_CAMERA_MS);
 }
@@ -1920,7 +1907,8 @@ void processarMensagemCabeca(String msg) {
         if (novoValor != papelAtacante) { Serial0.print("ATCFB:"); Serial0.println(papelAtacante ? 1 : 0); }
       }
       papelAtacanteAnterior = papelAtacante;
-      comunicacaoCabecaOK = true; ultimoRxCabeca = millis();
+      comunicacaoCabecaOK = true;
+      ultimoRxCabeca = millis();
     }
     return;
   }
@@ -1953,30 +1941,44 @@ void processarMensagemCabeca(String msg) {
       cameraYellowAngle = (int16_t)sYellA.toInt();
       cameraYellowDist  = (uint16_t)sYellD.toInt();
       cameraDadosValidos = (sCamOK == "1");
-      ultimoRxCameraMs  = millis();
+      ultimoRxCameraMs = millis();
       atualizarValidadeCamera();
-      comunicacaoCabecaOK = true; ultimoRxCabeca = millis();
+
+      comunicacaoCabecaOK = true;
+      ultimoRxCabeca = millis();
     }
     return;
   }
+  // ===== FIM dados camera =====
 
-  // Sensores brutos do Pé: SENS:S1,S9,S17,S25
   if (msg.startsWith("SENS:")) {
     String payload = msg.substring(5);
-    int p1=payload.indexOf(','), p2=payload.indexOf(',',p1+1), p3=payload.indexOf(',',p2+1);
-    if (p1>0 && p2>p1 && p3>p2) {
-      String s1=payload.substring(0,p1), s9=payload.substring(p1+1,p2);
-      String s17=payload.substring(p2+1,p3), s25=payload.substring(p3+1);
-      s1.trim(); s9.trim(); s17.trim(); s25.trim();
-      sensorBruto1 = s1.toInt(); sensorBruto9 = s9.toInt();
-      sensorBruto17 = s17.toInt(); sensorBruto25 = s25.toInt();
+    int p1 = payload.indexOf(',');
+    int p2 = payload.indexOf(',', p1 + 1);
+    int p3 = payload.indexOf(',', p2 + 1);
+    if (p1 > 0 && p2 > p1 && p3 > p2) {
+      String s1 = payload.substring(0, p1);
+      String s9 = payload.substring(p1 + 1, p2);
+      String s17 = payload.substring(p2 + 1, p3);
+      String s25 = payload.substring(p3 + 1);
+
+      s1.trim();
+      s9.trim();
+      s17.trim();
+      s25.trim();
+
+      sensorBruto1 = s1.toInt();
+      sensorBruto9 = s9.toInt();
+      sensorBruto17 = s17.toInt();
+      sensorBruto25 = s25.toInt();
       ultimoRxSensoresBrutosMs = millis();
-      comunicacaoCabecaOK = true; ultimoRxCabeca = millis();
+
+      comunicacaoCabecaOK = true;
+      ultimoRxCabeca = millis();
     }
     return;
   }
 
-  // Limiar de linha recebido do Pé: LIM:valor
   if (msg.startsWith("LIM:")) {
     String valor = msg.substring(4); valor.trim();
     int recebido = valor.toInt();
@@ -2015,266 +2017,74 @@ void lerSerialCabeca() {
   }
 }
 
+// Inicializa perifericos, faz handshake inicial e prepara o estado de operacao.
+void setup() {
+  Serial.begin(115200);
+  Serial1.begin(115200, SERIAL_8N1, RX_CABECA, TX_CABECA);
 
-// =============================================================================
-// SECAO 19 — ESTRATEGIA DO ATACANTE\\
-// =============================================================================
-//
-// Responsabilidades:
-//   • Alinhar o robô ao gol via câmera (PID de bússola)
-//   • Seguir a bola por IR com rampa angular suave
-//   • Usar câmera como fallback quando IR está ausente
-//   • Fugir da linha branca com prioridade máxima
-//   • Frear ao se aproximar de paredes (ultrassônicos)
-//   • Chutar ao se alinhar (kicker automático via atualizarKicker)
-//
-// Parâmetros de ajuste — *** ALTERE APENAS AQUI para tunar o atacante ***
-// =============================================================================
-
-// --- Velocidades do atacante ---
-const int VELOCIDADE_IR_FRONTAL_PWM       = 200;   // PWM na faixa frontal do IR (±32°)
-const int VELOCIDADE_IR_FAIXA_REDUZIDA_PWM = 140;  // PWM em faixas laterais do IR
-
-// --- Freio ultrassônico do atacante (laterais) ---
-const float ATACANTE_ULTRA_FREIO_INICIO_CM    = 55.0f;   // Distância onde o freio começa
-const float ATACANTE_ULTRA_FREIO_CRITICO_CM   = 35.0f;   // Distância de freio máximo
-const int   ATACANTE_ULTRA_FREIO_VELOCIDADE_MIN = 125;   // Velocidade mínima com freio
-const int   ATACANTE_ULTRA_FREIO_PWM_POR_CM   = 3;       // Incremento de PWM por cm
-
-// --- Buffer de perda de sinal IR ---
-const unsigned long IR_BUFFER_PERDA_MS = 160; // Tempo que o último ângulo IR é mantido após perda
-
-// --- Confirmação de linha + parede (evita falso positivo único) ---
-const uint8_t ATACANTE_LINHA_PAREDE_CONFIRMACAO = 3;
-
-// --- Tempo mínimo sem bola na câmera para iniciar busca ---
-const unsigned long ATACANTE_ESPERA_SEM_BOLA_CAMERA_MS = 2000UL;
-
-// --- PID de suavização angular do atacante (transição entre ângulos de movimento) ---
-// *** AJUSTE AQUI para suavizar ou tornar mais responsiva a transição de direção ***
-const float PID_MOVIMENTO_KP           = 2.0f;
-const float PID_MOVIMENTO_KI           = 0.01f;
-const float PID_MOVIMENTO_KD           = 1.2f;
-const float PID_MOVIMENTO_INTEGRAL_MAX = 90.0f;
-const float PID_MOVIMENTO_SAIDA_MAX    = 15.0f;
-const float ALPHA_MOVIMENTO            = 0.15f;   // Suavização exponencial do ângulo atual
-const float ALPHA_MOVIMENTO_ALVO       = 0.11f;   // Suavização exponencial do ângulo aIFlvo
-const float PASSO_MAX_MOVIMENTO_ALVO_GRAUS = 18.0f; // Passo máximo por ciclo no alvo filtrado
-
-// Estado interno do PID de movimento do atacante
-float        pidMovimentoIntegral              = 0.0f;
-float        pidMovimento                      = 0.0f;
-float        erroMovimento                     = 0.0f;
-float        erroAnteriorMovimento             = 0.0f;
-float        anguloMovimentoAtual              = -1.0f;
-float        anguloMovimentoSuavizado          = -1.0f;
-float        anguloMovimentoDesejadoFiltrado   = -1.0f;
-unsigned long ultimoTempoPidMovimento          = 0;
-unsigned long inicioCameraSemIrMs              = 0;
-
-// Zera o controlador angular do atacante
-void resetControleMovimentoAtacante() {
-  pidMovimentoIntegral            = 0.0f;
-  pidMovimento                    = 0.0f;
-  erroMovimento                   = 0.0f;
-  erroAnteriorMovimento           = 0.0f;
-  anguloMovimentoAtual            = -1.0f;
-  anguloMovimentoSuavizado        = -1.0f;
-  anguloMovimentoDesejadoFiltrado = -1.0f;
-  ultimoTempoPidMovimento         = 0;
-}
-
-// PID de transição angular do atacante (suaviza ângulo de movimento)
-float calcularPidMovimento(float erro) {
-  unsigned long agora = millis();
-  float dt = 0.02f;
-  if (ultimoTempoPidMovimento != 0) {
-    dt = (agora - ultimoTempoPidMovimento) / 1000.0f;
-    if (dt < 0.005f) dt = 0.005f;
-    if (dt > 0.2f)   dt = 0.2f;
+  // Recupera da EEPROM o heading salvo como referencia de calibracao.
+  EEPROM.begin(EEPROM_SIZE);
+  EEPROM.get(EEPROM_ADDR_BUSSOLA, headingBussolaSalvo);
+  if (headingBussolaSalvo < 0 || headingBussolaSalvo >= 360) {
+    headingBussolaSalvo = 0;
   }
-  ultimoTempoPidMovimento = agora;
+  carregarPapelConfiguradoEEPROM();
+  carregarCorGolEEPROM();
 
-  pidMovimentoIntegral += erro * dt;
-  if (pidMovimentoIntegral >  PID_MOVIMENTO_INTEGRAL_MAX) pidMovimentoIntegral =  PID_MOVIMENTO_INTEGRAL_MAX;
-  if (pidMovimentoIntegral < -PID_MOVIMENTO_INTEGRAL_MAX) pidMovimentoIntegral = -PID_MOVIMENTO_INTEGRAL_MAX;
+  // Configura todas as saidas da ponte H e o pino do kicker.
+  pinMode(IN1_1_A, OUTPUT);
+  pinMode(IN2_1_A, OUTPUT);
+  pinMode(IN1_2_A, OUTPUT);
+  pinMode(IN2_2_A, OUTPUT);
+  pinMode(IN1_1_B, OUTPUT);
+  pinMode(IN2_1_B, OUTPUT);
+  pinMode(IN1_2_B, OUTPUT);
+  pinMode(IN2_2_B, OUTPUT);
+  pinMode(KICKER_PIN, OUTPUT);
+  digitalWrite(KICKER_PIN, LOW);
 
-  float derivada = (erro - erroAnteriorMovimento) / dt;
-  erroAnteriorMovimento = erro;
+  // Associa cada pino PWM ao seu respectivo canal do ESP32.
+  ledcSetup(PWM_CH1, PWM_FREQ, PWM_RES);
+  ledcAttachPin(PWM_1_A, PWM_CH1);
+  ledcSetup(PWM_CH2, PWM_FREQ, PWM_RES);
+  ledcAttachPin(PWM_2_A, PWM_CH2);
+  ledcSetup(PWM_CH3, PWM_FREQ, PWM_RES);
+  ledcAttachPin(PWM_1_B, PWM_CH3);
+  ledcSetup(PWM_CH4, PWM_FREQ, PWM_RES);
+  ledcAttachPin(PWM_2_B, PWM_CH4);
+  pararMotores();
 
-  pidMovimento = PID_MOVIMENTO_KP * erro + PID_MOVIMENTO_KI * pidMovimentoIntegral + PID_MOVIMENTO_KD * derivada;
-  if (pidMovimento >  PID_MOVIMENTO_SAIDA_MAX) pidMovimento =  PID_MOVIMENTO_SAIDA_MAX;
-  if (pidMovimento < -PID_MOVIMENTO_SAIDA_MAX) pidMovimento = -PID_MOVIMENTO_SAIDA_MAX;
-
-  // Evita microcorreções perto do alvo
-  if (fabsf(erro) < 2.0f) pidMovimento = 0.0f;
-
-  return -pidMovimento;
-}
-
-// Aplica suavização exponencial circular ao ângulo de movimento do atacante
-float suavizarAnguloMovimentoAtacante(float anguloMovimentoDesejado) {
-  // Referencial deslocado 180°: o que era 0 passa a ser 180 e vice-versa
-  float alvoBruto = normalizarAngulo360(anguloMovimentoDesejado + 180.0f);
-
-  if ((anguloMovimentoAtual < 0.0f) || (anguloMovimentoSuavizado < 0.0f)) {
-    anguloMovimentoAtual            = alvoBruto;
-    anguloMovimentoSuavizado        = alvoBruto;
-    anguloMovimentoDesejadoFiltrado = alvoBruto;
-    erroMovimento = erroAnteriorMovimento = pidMovimentoIntegral = pidMovimento = 0.0f;
-    ultimoTempoPidMovimento = 0;
-    return anguloMovimentoSuavizado;
-  }
-
-  // Estabiliza o alvo em modo circular para evitar saltos (ex.: 90° para 270°)
-  float deltaAlvo = normalizarErro180(alvoBruto - anguloMovimentoDesejadoFiltrado);
-  deltaAlvo = constrain(deltaAlvo, -PASSO_MAX_MOVIMENTO_ALVO_GRAUS, PASSO_MAX_MOVIMENTO_ALVO_GRAUS);
-  anguloMovimentoDesejadoFiltrado = normalizarAngulo360(anguloMovimentoDesejadoFiltrado + deltaAlvo);
-  anguloMovimentoDesejadoFiltrado = normalizarAngulo360(
-      anguloMovimentoDesejadoFiltrado +
-      ALPHA_MOVIMENTO_ALVO * normalizarErro180(alvoBruto - anguloMovimentoDesejadoFiltrado));
-
-  // Erro: última direção realmente comandada como realimentação
-  erroMovimento = normalizarErro180(anguloMovimentoDesejadoFiltrado - anguloMovimentoAtual);
-  pidMovimento  = calcularPidMovimento(erroMovimento);
-
-  anguloMovimentoAtual = normalizarAngulo360(anguloMovimentoAtual + pidMovimento);
-  anguloMovimentoSuavizado = anguloMovimentoSuavizado +
-                             ALPHA_MOVIMENTO * normalizarErro180(anguloMovimentoAtual - anguloMovimentoSuavizado);
-  anguloMovimentoSuavizado = normalizarAngulo360(anguloMovimentoSuavizado);
-  return anguloMovimentoSuavizado;
-}
-
-// Faz rampa angular curta (100–300 ms) entre faixas do IR
-float obterAnguloIrSuavizado(float anguloAlvoGraus) {
-  float alvo  = normalizarAngulo360(anguloAlvoGraus);
-  unsigned long agora = millis();
-
-  if (!anguloIrSuaveInicializado) {
-    anguloIrSuaveAtual = anguloIrSuaveInicio = anguloIrSuaveAlvo = alvo;
-    inicioTransicaoIrMs = agora; duracaoTransicaoIrMs = TRANSICAO_ANGULO_IR_MIN_MS;
-    anguloIrSuaveInicializado = true;
-    return quantizarAnguloPasso(anguloIrSuaveAtual, PASSO_ANGULO_IR_GRAUS);
-  }
-
-  float erroNovoAlvo = fabsf(normalizarErro180(alvo - anguloIrSuaveAlvo));
-  if (erroNovoAlvo >= 1.0f) {
-    anguloIrSuaveInicio = anguloIrSuaveAtual;
-    anguloIrSuaveAlvo   = alvo;
-    inicioTransicaoIrMs = agora;
-    float delta             = fabsf(normalizarErro180(anguloIrSuaveAlvo - anguloIrSuaveInicio));
-    unsigned long duracaoCalculada = (unsigned long)(delta * TRANSICAO_ANGULO_IR_MS_POR_GRAU);
-    if (duracaoCalculada < TRANSICAO_ANGULO_IR_MIN_MS) duracaoCalculada = TRANSICAO_ANGULO_IR_MIN_MS;
-    if (duracaoCalculada > TRANSICAO_ANGULO_IR_MAX_MS) duracaoCalculada = TRANSICAO_ANGULO_IR_MAX_MS;
-    duracaoTransicaoIrMs = duracaoCalculada;
-  }
-
-  unsigned long decorridoMs = agora - inicioTransicaoIrMs;
-  if (decorridoMs >= duracaoTransicaoIrMs) {
-    anguloIrSuaveAtual = anguloIrSuaveAlvo;
-  } else {
-    float progresso = (float)decorridoMs / (float)duracaoTransicaoIrMs;
-    float delta     = normalizarErro180(anguloIrSuaveAlvo - anguloIrSuaveInicio);
-    anguloIrSuaveAtual = normalizarAngulo360(anguloIrSuaveInicio + delta * progresso);
-  }
-
-  return quantizarAnguloPasso(anguloIrSuaveAtual, PASSO_ANGULO_IR_GRAUS);
-}
-
-// Detecta faixa frontal do IR em torno de 0° (±32°), tratando wrap 360°->0°
-bool irNaFaixaFrontal(float anguloBolaGraus) {
-  float ang = normalizarAngulo360(anguloBolaGraus);
-  return (ang > 328.0f || ang < 32.0f);
-}
-
-// Retorna true e ângulo do IR (com buffer de retenção após perda de sinal)
-bool obterAnguloIrComBuffer(float &anguloIrSaida) {
-  if (irDetectado && anguloIr >= 0.0f) {
-    anguloIrSaida = normalizarAngulo360(anguloIr); return true;
-  }
-  if ((ultimoAnguloIrValido >= 0.0f) && (ultimoIrValidoMs > 0) &&
-      ((millis() - ultimoIrValidoMs) <= IR_BUFFER_PERDA_MS)) {
-    anguloIrSaida = normalizarAngulo360(ultimoAnguloIrValido); return true;
-  }
-  return false;
-}
-
-// Retorna true se algum ultrassônico lateral do atacante está em nível crítico
-bool ultraLateralCriticoAtacante() {
-  bool ultraDireitoCritico  = (ultraDcm >= 0.0f) && (ultraDcm <= ATACANTE_ULTRA_FREIO_CRITICO_CM);
-  bool ultraEsquerdoCritico = (ultraEcm >= 0.0f) && (ultraEcm <= ATACANTE_ULTRA_FREIO_CRITICO_CM);
-  return ultraDireitoCritico || ultraEsquerdoCritico;
-}
-
-// Limita velocidade por freio ultrassônico frontal (frente do robô)
-int aplicarFreioUltrassonicoAtacanteFrente(int velocidadeDesejada) {
-  int velocidadeBase = constrain(velocidadeDesejada, 0, 255);
-  bool ultrasRecentes = (ultimoRxUltraMs > 0) && ((millis() - ultimoRxUltraMs) <= TIMEOUT_ULTRA_MS);
-  if (!ultrasRecentes) return velocidadeBase;
-
-  float menorUltraCm = -1.0f;
-  // Usa apenas ultraF para o freio frontal; ultraT é ignorado se estiver próximo
-  float leituras[] = { ultraFcm };
-  for (float leitura : leituras) {
-    if (leitura < 0.0f) continue;
-    if (ultraTcm > 150) {
-      if ((menorUltraCm < 0.0f) || (leitura < menorUltraCm)) menorUltraCm = leitura;
+  // Inicializa I2C e display antes de mostrar qualquer feedback ao operador.
+  Wire.begin(SDA_PIN, SCL_PIN);
+  if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR)) {
+    while (1) {
+      delay(100);
     }
-    if ((menorUltraCm < 0.0f) || (menorUltraCm > ATACANTE_ULTRA_FREIO_INICIO_CM)) return velocidadeBase;
-    int velocidadeLimite = ATACANTE_ULTRA_FREIO_VELOCIDADE_MIN;
-    if (menorUltraCm > ATACANTE_ULTRA_FREIO_CRITICO_CM)
-      velocidadeLimite += (int)((menorUltraCm - ATACANTE_ULTRA_FREIO_CRITICO_CM) * ATACANTE_ULTRA_FREIO_PWM_POR_CM);
-    if (velocidadeLimite > velocidade_maxima) velocidadeLimite = velocidade_maxima;
-    return min(velocidadeBase, velocidadeLimite);
   }
-  return velocidadeBase;
-}
 
-// Limita velocidade por freio ultrassônico lateral do atacante (D e E)
-int aplicarFreioUltrassonicoAtacante(int velocidadeDesejada) {
-  int velocidadeBase = constrain(velocidadeDesejada, 0, 255);
-  bool ultrasRecentes = (ultimoRxUltraMs > 0) && ((millis() - ultimoRxUltraMs) <= TIMEOUT_ULTRA_MS);
-  if (!ultrasRecentes) return velocidadeBase;
+  display.clearDisplay();
+  display.setTextSize(2);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(20, 25);
+  display.println("TESTANDO...");
+  display.display();
 
-  float menorUltraCm = -1.0f;
-  float leituras[] = { ultraDcm, ultraEcm };
-  for (float leitura : leituras) {
-    if (leitura < 0.0f) continue;
-    if ((menorUltraCm < 0.0f) || (leitura < menorUltraCm)) menorUltraCm = leitura;
+  // Durante alguns segundos, tenta fazer handshake inicial com a Cabeca.
+  unsigned long inicio = millis();
+  while ((millis() - inicio) < TIMEOUT_COM_MS) {
+    if (millis() - ultimoEnvioOi >= 300) {
+      Serial1.println("oi");
+      ultimoEnvioOi = millis();
+    }
+    lerSerialCabeca();
+    if (comunicacaoCabecaOK) {
+      break;
+    }
+    delay(10);
   }
-  if ((menorUltraCm < 0.0f) || (menorUltraCm > ATACANTE_ULTRA_FREIO_INICIO_CM)) return velocidadeBase;
 
-  int velocidadeLimite = ATACANTE_ULTRA_FREIO_VELOCIDADE_MIN;
-  if (menorUltraCm > ATACANTE_ULTRA_FREIO_CRITICO_CM)
-    velocidadeLimite += (int)((menorUltraCm - ATACANTE_ULTRA_FREIO_CRITICO_CM) * ATACANTE_ULTRA_FREIO_PWM_POR_CM);
-  if (velocidadeLimite > velocidade_maxima) velocidadeLimite = velocidade_maxima;
-  return min(velocidadeBase, velocidadeLimite);
-}
-
-// Ajusta o ângulo da bola para o ângulo de comando de movimento (mapeamento por faixas)
-// *** ALTERE AQUI para modificar o comportamento de contorno da bola pelo atacante ***
-float mapearAnguloBolaParaMovimento(float anguloBolaGraus) {
-  float ang = normalizarAngulo360(anguloBolaGraus);
-
-  if(ang >= 32.0f && ang <= 60.0f)   return 100.0f; // Faixa diagonal direita-frente
-  if(ang >= 300.0f && ang <= 328.0f) return 260.0f; // Faixa diagonal esquerda-frente
-
-  if(ang > 60.0f  && ang < 90.0f)   return 135.0f;
-  if(ang >= 90.0f && ang < 135.0f)  return 180.0f;
-  if(ang >= 270.0f && ang < 300.0f) return 225.0f;
-  if(ang >= 225.0f && ang < 270.0f) return 180.0f;
-  if(ang >= 180.0f && ang < 225.0f) return 135.0f;
-  if(ang >= 135.0f && ang < 180.0f) return 225.0f;
-
-  return ang;
-}
-
-// Reduz velocidade em faixas próximas do frontal para melhorar controle lateral
-int calcularVelocidadeIrPorAngulo(float anguloBolaGraus) {
-  float ang = normalizarAngulo360(anguloBolaGraus);
-  if ((ang >= 33.0f && ang <= 60.0f) || (ang >= 300.0f && ang <= 328.0f)) return VELOCIDADE_IR_FAIXA_REDUZIDA_PWM;
-  if (ang >= 140.0f && ang < 220.0f) return VELOCIDADE_IR_FAIXA_REDUZIDA_PWM;
-  return velocidade_maxima;
+  enviarEstadoJogoParaCabeca(true);
+  desenharTelaAtual();
 }
 
 // Calcula ângulo de busca quando a câmera perdeu a bola (usa ultrassônicos laterais)
@@ -2294,38 +2104,33 @@ float calcularAnguloBuscaSemBolaCameraAtacante() {
 // *** FUNCAO PRINCIPAL DO ATACANTE ***
 // Alinha ao gol, segue bola por IR/câmera, foge da linha e chuta quando alinhado
 void atacante() {
+  // O pacote da camera e mantido universalmente; no INICIAR apenas consumimos o ultimo snapshot.
   int16_t anguloGolCamera = -999;
   bool golVisivelCamera = cameraTemGolSelecionadoValido(anguloGolCamera);
   erroAlinhamentoGraus = golVisivelCamera ? calcularErroGolPorPapel((float)anguloGolCamera) : 0.0f;
-  fugindoLinhaAgora    = false;
-  anguloFugaLinhaCmd   = 0.0f;
+  fugindoLinhaAgora = false;
+  anguloFugaLinhaCmd = 0.0f;
 
-  static uint8_t confirmacoesLinhaParede  = 0;
-  static bool    forcarIrDiretoAposLinha  = false;
+  static uint8_t confirmacoesLinhaParede = 0;
+  static bool forcarIrDiretoAposLinha = false;
 
-  int  cmdPidAssinado         = 0;
+  int cmdPidAssinado = 0;
   bool cameraBolaBrutaVisivel = cameraTemBolaValida();
-  float anguloCameraBolaFiltrado  = -1.0f;
-  bool cameraBolaFiltradaVisivel  = obterAnguloCameraBolaFiltrado(anguloCameraBolaFiltrado);
-  float anguloIrBufferizado        = -1.0f;
-  bool irDisponivel               = obterAnguloIrComBuffer(anguloIrBufferizado);
+  float anguloCameraBolaFiltrado = -1.0f;
+  bool cameraBolaFiltradaVisivel = obterAnguloCameraBolaFiltrado(anguloCameraBolaFiltrado);
+  float anguloIrBufferizado = -1.0f;
+  bool irDisponivel = obterAnguloIrComBuffer(anguloIrBufferizado);
 
-      if (linhaDetectada && anguloLinhaPe >= 0.0f) {
-      fugindoLinhaAgora  = true;
-      anguloFugaLinhaCmd = normalizarAngulo360(anguloLinhaPe);
-      float anguloFugaSuavizado = suavizarAnguloMovimentoAtacante(anguloFugaLinhaCmd);
-      seguirDirecaoPorAngulo(anguloFugaSuavizado, aplicarFreioUltrassonicoAtacante(VELOCIDADE_FUGA_LINHA));
-      return;
-    }
-  // Decide se precisa girar para alinhar ao gol
+  // So gira para alinhar quando o gol estiver visivel na camera e fora da tolerancia.
   bool precisaAlinhar = golVisivelCamera && (fabsf(erroAlinhamentoGraus) > TOLERANCIA_ALINHAMENTO_GRAUS);
-  bool erroGrande     = golVisivelCamera && (fabsf(erroAlinhamentoGraus) > 40.0f);
+  bool erroGrande = golVisivelCamera && (fabsf(erroAlinhamentoGraus) > 40.0f);
   if (precisaAlinhar) {
     alinhandoAgora = true;
-    int cmdPid    = calcularSaidaPidBussola(erroAlinhamentoGraus);
+    int cmdPid = calcularSaidaPidBussola(erroAlinhamentoGraus);
     cmdPidAssinado = -SINAL_GIRO_PID * cmdPid;
   } else {
-    alinhandoAgora = false; resetPidBussola();
+    alinhandoAgora = false;
+    resetPidBussola();
   }
 
   // Câmera assume o controle se o IR falhar por tempo suficiente
@@ -2359,9 +2164,13 @@ void atacante() {
   // PRIORIDADE 1: linha + parede = IR direto (ignora linha)
   if (linhaValida) {
     if (irDiretoAtivo) {
+      int cmdPidAssinadoIr = 0;
+      if (cameraPrecisaCorrecaoIr) {
+        int cmdPidCamera = calcularSaidaPidBussola(erroMovimento);
+        cmdPidAssinadoIr = -SINAL_GIRO_PID * cmdPidCamera;
+      }
       if (irNaFaixaFrontal(anguloIrBufferizado)) {
-        if (ultraTcm > 150) moverFrenteComGiro(aplicarFreioUltrassonicoAtacanteFrente(VELOCIDADE_IR_FRONTAL_PWM), cmdPidAssinado);
-        else                 moverFrenteComGiro(aplicarFreioUltrassonicoAtacante(VELOCIDADE_IR_FRONTAL_PWM), cmdPidAssinado);
+        moverFrenteComGiro(aplicarFreioUltrassonicoAtacante(VELOCIDADE_IR_FRONTAL_PWM), cmdPidAssinado);
       } else {
         float anguloIrAlvo           = mapearAnguloBolaParaMovimento(anguloIrBufferizado);
         float anguloIrComRampa       = obterAnguloIrSuavizado(anguloIrAlvo);
@@ -2381,43 +2190,31 @@ void atacante() {
   // PRIORIDADE 3: erro grande de alinhamento = giro puro
   } else if (erroGrande) {
     girarNoEixo(cmdPidAssinado);
-
-  // PRIORIDADE 4: IR disponível = segue bola pelo IR
   } else if (irDisponivel) {
-    // Verifica linha antes de qualquer movimento de IR
-    if (linhaDetectada && anguloLinhaPe >= 0.0f) {
-      fugindoLinhaAgora  = true;
-      anguloFugaLinhaCmd = normalizarAngulo360(anguloLinhaPe);
-      float anguloFugaSuavizado = suavizarAnguloMovimentoAtacante(anguloFugaLinhaCmd);
-      seguirDirecaoPorAngulo(anguloFugaSuavizado, aplicarFreioUltrassonicoAtacante(VELOCIDADE_FUGA_LINHA));
-      return;
-    }
     if (irNaFaixaFrontal(anguloIrBufferizado)) {
-      if (ultraTcm > 150) moverFrenteComGiro(aplicarFreioUltrassonicoAtacanteFrente(VELOCIDADE_IR_FRONTAL_PWM), cmdPidAssinado);
-      else                 moverFrenteComGiro(aplicarFreioUltrassonicoAtacante(VELOCIDADE_IR_FRONTAL_PWM), cmdPidAssinado);
+      // Na faixa frontal aplica PWM direto e mantem correcao de alinhamento do gol.
+      moverFrenteComGiro(aplicarFreioUltrassonicoAtacante(VELOCIDADE_IR_FRONTAL_PWM), cmdPidAssinado);
     } else {
-      float anguloIrAlvo           = normalizarAngulo360(mapearAnguloBolaParaMovimento(anguloIrBufferizado) + (erroAlinhamentoGraus * 2));
-      float anguloIrComRampa       = obterAnguloIrSuavizado(anguloIrAlvo);
-      int   velocidadeIr           = aplicarFreioUltrassonicoAtacante(calcularVelocidadeIrPorAngulo(anguloIrBufferizado));
+      float anguloIrAlvo = mapearAnguloBolaParaMovimento(anguloIrBufferizado);
+      float anguloIrComRampa = obterAnguloIrSuavizado(anguloIrAlvo);
+      int velocidadeIr = aplicarFreioUltrassonicoAtacante(calcularVelocidadeIrPorAngulo(anguloIrBufferizado));
       float anguloMovimentoComControle = suavizarAnguloMovimentoAtacante(anguloIrComRampa);
       seguirDirecaoPorAngulo(anguloMovimentoComControle, velocidadeIr);
     }
-
-  // PRIORIDADE 5: câmera como fallback de bola
   } else if (cameraBolaFiltradaVisivel) {
-    bool semBolaTempoSuficiente = !cameraBolaBrutaVisivel &&
-                                  (cameraSemBolaBrutaInicioMs > 0) &&
-                                  ((millis() - cameraSemBolaBrutaInicioMs) >= ATACANTE_ESPERA_SEM_BOLA_CAMERA_MS);
-    float anguloCameraVetorial   = semBolaTempoSuficiente ? calcularAnguloBuscaSemBolaCameraAtacante() : anguloCameraBolaFiltrado;
-    float anguloCameraComRampa   = obterAnguloIrSuavizado(anguloCameraVetorial);
+    bool semBolaTempoSuficiente =
+        !cameraBolaBrutaVisivel &&
+        (cameraSemBolaBrutaInicioMs > 0) &&
+        ((millis() - cameraSemBolaBrutaInicioMs) >= ATACANTE_ESPERA_SEM_BOLA_CAMERA_MS);
+
+    float anguloCameraVetorial = semBolaTempoSuficiente
+                                ? calcularAnguloBuscaSemBolaCameraAtacante()
+                                : anguloCameraBolaFiltrado;
+    float anguloCameraComRampa = obterAnguloIrSuavizado(anguloCameraVetorial);
     float anguloMovimentoComControle = suavizarAnguloMovimentoAtacante(anguloCameraComRampa);
     seguirDirecaoComGiro(anguloMovimentoComControle, aplicarFreioUltrassonicoAtacante(velocidade_maxima), cmdPidAssinado);
-
-  // PRIORIDADE 6: apenas alinhamento (sem bola)
   } else if (precisaAlinhar) {
     girarNoEixo(cmdPidAssinado);
-
-  // Sem informações: para
   } else {
     pararMotores(); delay(10);
   }
@@ -2619,92 +2416,28 @@ float comporAnguloRetornoBussolaComUltraLaterais(float anguloRetornoBase, bool u
   float vetorY = cosf(anguloBaseRad) * DEFENSOR_VELOCIDADE_RETORNO_GOL_PWM;
 
   if (ultrasRecentes) {
-    if ((ultraDcm >= 0.0f) && (ultraDcm < DEFENSOR_ULTRA_LATERAL_ATIVO_CM) && (ultraEcm > DEFENSOR_ULTRA_LATERAL_CONFIRMADOR_CM))
-      vetorX -= mapearFaixaClamped(ultraDcm, DEFENSOR_ULTRA_LATERAL_ATIVO_CM, DEFENSOR_ULTRA_LATERAL_CRITICO_CM, 0.0f, DEFENSOR_PESO_MAX_ULTRA);
-    if ((ultraEcm >= 0.0f) && (ultraEcm < DEFENSOR_ULTRA_LATERAL_ATIVO_CM) && (ultraDcm > DEFENSOR_ULTRA_LATERAL_CONFIRMADOR_CM))
-      vetorX += mapearFaixaClamped(ultraEcm, DEFENSOR_ULTRA_LATERAL_ATIVO_CM, DEFENSOR_ULTRA_LATERAL_CRITICO_CM, 0.0f, DEFENSOR_PESO_MAX_ULTRA);
+    if ((ultraDcm >= 0.0f) && (ultraDcm < DEFENSOR_ULTRA_LATERAL_ATIVO_CM) &&
+        (ultraEcm > DEFENSOR_ULTRA_LATERAL_CONFIRMADOR_CM)) {
+      vetorX -= mapearFaixaClamped(ultraDcm,
+                                   DEFENSOR_ULTRA_LATERAL_ATIVO_CM,
+                                   DEFENSOR_ULTRA_LATERAL_CRITICO_CM,
+                                   0.0f,
+                                   DEFENSOR_PESO_MAX_ULTRA);
+    }
+
+    if ((ultraEcm >= 0.0f) && (ultraEcm < DEFENSOR_ULTRA_LATERAL_ATIVO_CM) &&
+        (ultraDcm > DEFENSOR_ULTRA_LATERAL_CONFIRMADOR_CM)) {
+      vetorX += mapearFaixaClamped(ultraEcm,
+                                   DEFENSOR_ULTRA_LATERAL_ATIVO_CM,
+                                   DEFENSOR_ULTRA_LATERAL_CRITICO_CM,
+                                   0.0f,
+                                   DEFENSOR_PESO_MAX_ULTRA);
+    }
   }
+
   return calcularAnguloVetorDefensor(vetorX, vetorY);
 }
 
-// Executa avanço frontal temporizado quando a bola fica na frente por tempo suficiente
-bool executarAvancoFrontalTemporizadoDefensor(unsigned long agora,
-                                              float &vetorXSuave,
-                                              float &vetorYSuave,
-                                              float &cmdGiroSuave) {
-  static unsigned long inicioDeteccaoIrFrontalMs  = 0;
-  static unsigned long inicioAvancoIrFrontalMs    = 0;
-  static bool avancoIrFrontalAtivo                = false;
-  static bool alinhamentoIrFrontalAtivo           = false;
-  static bool aguardarSaidaJanelaIrFrontal        = false;
-  static float ultimoAnguloAvancoIrFrontal        = 0.0f;
-
-  bool irFrontalAtivo = irDetectado &&
-                        (fabsf(normalizarErro180(anguloIr)) <= DEFENSOR_TOLERANCIA_IR_FRONTAL_GRAUS);
-
-  // Executa avanço enquanto dentro do tempo
-  if (avancoIrFrontalAtivo) {
-    if ((agora - inicioAvancoIrFrontalMs) < DEFENSOR_TEMPO_AVANCO_IR_FRONTAL_MS) {
-      if (irDetectado) ultimoAnguloAvancoIrFrontal = normalizarAngulo360(anguloIr);
-      alinhandoAgora = false; erroAlinhamentoGraus = 0.0f;
-      resetPidBussola(); resetPidLinhaGoleiro();
-      vetorXSuave = vetorYSuave = cmdGiroSuave = 0.0f;
-      seguirDirecaoPorAngulo(ultimoAnguloAvancoIrFrontal, DEFENSOR_VELOCIDADE_AVANCO_IR_FRONTAL_PWM);
-      return true;
-    }
-    avancoIrFrontalAtivo = false; inicioAvancoIrFrontalMs = inicioDeteccaoIrFrontalMs = 0;
-  }
-
-  // Alinha ao ângulo da bola antes de avançar
-  if (alinhamentoIrFrontalAtivo) {
-    if (!irDetectado) {
-      alinhamentoIrFrontalAtivo = false; inicioDeteccaoIrFrontalMs = 0;
-      aguardarSaidaJanelaIrFrontal = false; resetPidBussola(); return false;
-    }
-    float erroAlinhamentoBola    = normalizarErro180(anguloIr);
-    ultimoAnguloAvancoIrFrontal  = normalizarAngulo360(anguloIr);
-    erroAlinhamentoGraus         = erroAlinhamentoBola;
-    if (fabsf(erroAlinhamentoBola) > DEFENSOR_TOLERANCIA_ALINHAMENTO_BOLA_GRAUS) {
-      alinhandoAgora = true; resetPidLinhaGoleiro();
-      vetorXSuave = vetorYSuave = cmdGiroSuave = 0.0f;
-      int cmdPidBola  = calcularSaidaPidBussola(erroAlinhamentoBola);
-      int cmdGiroBola = -SINAL_GIRO_PID * cmdPidBola;
-      girarNoEixo(-cmdGiroBola); return true;
-    }
-    alinhamentoIrFrontalAtivo = false; avancoIrFrontalAtivo = true;
-    inicioAvancoIrFrontalMs   = agora;
-    alinhandoAgora = false; erroAlinhamentoGraus = 0.0f;
-    resetPidBussola(); resetPidLinhaGoleiro();
-    vetorXSuave = vetorYSuave = cmdGiroSuave = 0.0f;
-    seguirDirecaoPorAngulo(ultimoAnguloAvancoIrFrontal, DEFENSOR_VELOCIDADE_AVANCO_IR_FRONTAL_PWM);
-    return true;
-  }
-
-  // Aguarda bola sair da janela frontal antes de nova detecção
-  if (!irFrontalAtivo) { inicioDeteccaoIrFrontalMs = 0; aguardarSaidaJanelaIrFrontal = false; return false; }
-  if (aguardarSaidaJanelaIrFrontal) return false;
-
-  // Cronometra tempo com bola frontal
-  if (inicioDeteccaoIrFrontalMs == 0) { inicioDeteccaoIrFrontalMs = agora; return false; }
-  if ((agora - inicioDeteccaoIrFrontalMs) < DEFENSOR_TEMPO_GATILHO_IR_FRONTAL_MS) return false;
-
-  // Gatilho atingido: inicia alinhamento antes do avanço
-  alinhamentoIrFrontalAtivo    = true;
-  aguardarSaidaJanelaIrFrontal = true;
-  ultimoAnguloAvancoIrFrontal  = normalizarAngulo360(anguloIr);
-  alinhandoAgora = false; erroAlinhamentoGraus = 0.0f;
-  resetPidBussola(); resetPidLinhaGoleiro();
-  vetorXSuave = vetorYSuave = cmdGiroSuave = 0.0f;
-  return false;
-}
-
-// Placeholder para nova lógica de ultrassônico específica do defensor
-bool ultrassonico_defensor() {
-  return false;
-}
-
-// *** FUNCAO PRINCIPAL DO DEFENSOR ***
-// Mantém posição no gol usando linha, bola e ultrassônicos como entradas do vetor de movimento
 void defensor() {
   int16_t anguloGolSelecionadoMenu = -999;
   uint16_t distanciaGolSelecionadoMenu = 0;
@@ -2724,8 +2457,6 @@ void defensor() {
     Serial.println(golSelecionadoMenuVisivel ? 1 : 0);
     ultimoPrintGolSelecionadoMs = millis();
   }
-
-
 
   static float vetorXSuave = 0.0f;
   static float vetorYSuave = 0.0f;
@@ -2757,15 +2488,21 @@ void defensor() {
   bool temZonaA = temZonaAAtual || temZonaARetida;
   bool temZonaB = temZonaBAtual || temZonaBRetida;
   bool linhaDefensorDisponivel = temZonaA || temZonaB;
+  const float TOLERANCIA_ZERO_GRAUS = 8.0f;
+  const float ERRO_MAX_VEL_LINHA_GRAUS = 80.0f;
+  const int VELOCIDADE_LINHA_MIN = 90;
+  const int VELOCIDADE_LINHA_MAX = 150;
 
   alinhandoAgora = false;
   fugindoLinhaAgora = false;
 
+  float erroA = temZonaA ? normalizarErro180(anguloZonaAUsado - DEFENSOR_REFERENCIA_ZONA_A) : 0.0f;
+  float erroB = temZonaB ? normalizarErro180(anguloZonaBUsado - DEFENSOR_REFERENCIA_ZONA_B) : 0.0f;
   float erroAngularLinha = 0.0f;
   int quantidadeErros = 0;
 
   if (temZonaA) {
-    erroAngularLinha += normalizarErro180(anguloZonaAUsado - DEFENSOR_REFERENCIA_ZONA_A);
+    erroAngularLinha += erroA;
     quantidadeErros++;
   }
 
@@ -2814,54 +2551,41 @@ void defensor() {
     return;
   }
 
-  if (!linhaDefensorDisponivel && retornoDefensorPorBussolaValido) {
-    if (!retornoAoGolPorBussolaAtivo) {
-      retornoAoGolPorBussolaAtivo = true;
-      alinhamentoAntesRetornoBussolaPendente = true;
-      alinhamentoUnicoBussolaPendente = true;
-      inicioAlinhamentoAntesRetornoBussolaMs = 0;
-      inicioAlinhamentoUnicoBussolaMs = 0;
-      erroAlinhamentoGraus = 0.0f;
-      alinhandoAgora = false;
-      resetPidLinhaGoleiro();
-      resetPidBussola();
-      vetorXSuave = 0.0f;
-      vetorYSuave = 0.0f;
-      cmdGiroSuave = 0.0f;
-    }
+  // Combina linha (frente/tras) com lateral (direita/esquerda) em um unico vetor.
+  float vxCmd = 0.0f;  // +x direita, -x esquerda
+  float vyCmd = 0.0f;  // +y frente (0 graus), -y tras (180 graus)
+  bool linhaAtivaNoVetor = (direcaoLinha != 0 && velocidadeLinha > 0);
+  float pesoLinha = linhaAtivaNoVetor ? PESO_LINHA_COM_LINHA_ATIVA : 1.0f;
+  float pesoLateral = linhaAtivaNoVetor ? PESO_LATERAL_COM_LINHA_ATIVA : PESO_LATERAL_SEM_LINHA;
 
-    if (alinhamentoAntesRetornoBussolaPendente) {
-      if (inicioAlinhamentoAntesRetornoBussolaMs == 0) {
-        inicioAlinhamentoAntesRetornoBussolaMs = agora;
-      }
+  if (linhaAtivaNoVetor) {
+    vyCmd += (direcaoLinha > 0) ? -((float)velocidadeLinha * pesoLinha)
+                                : ((float)velocidadeLinha * pesoLinha);
+  }
 
-      float erroBussolaRetorno = calcularErroReferenciaBussola();
-      erroAlinhamentoGraus = erroBussolaRetorno;
-      bool tempoAlinhamentoAtivo = (agora - inicioAlinhamentoAntesRetornoBussolaMs) < TEMPO_MAX_ALINHAMENTO_UNICO_BUSSOLA_MS;
+  if (bolaDireita && velocidadeLateralIr > 0) {
+    vxCmd += (float)velocidadeLateralIr * pesoLateral;
+  }
 
-      if (tempoAlinhamentoAtivo && (fabsf(erroBussolaRetorno) > TOLERANCIA_ALINHAMENTO_GRAUS)) {
-        alinhandoAgora = true;
-        resetPidLinhaGoleiro();
-        vetorXSuave = 0.0f;
-        vetorYSuave = 0.0f;
-        cmdGiroSuave = 0.0f;
+  if (bolaEsquerda && velocidadeLateralIr > 0) {
+    vxCmd -= (float)velocidadeLateralIr * pesoLateral;
+  }
 
-        int cmdPidBussola = calcularSaidaPidBussola(erroBussolaRetorno);
-        int cmdGiroBussola = SINAL_GIRO_PID * cmdPidBussola;
-        girarNoEixo(cmdGiroBussola);
-        return;
-      }
+  float moduloVetor = sqrtf(vxCmd * vxCmd + vyCmd * vyCmd);
+  if (moduloVetor > 0.5f) {
+    float anguloVetor = atan2f(vxCmd, vyCmd) * 180.0f / PI;
+    anguloVetor = normalizarAngulo360(anguloVetor);
 
-      alinhamentoAntesRetornoBussolaPendente = false;
-      inicioAlinhamentoAntesRetornoBussolaMs = 0;
-      resetPidBussola();
-    }
+    int velocidadeVetor = (int)moduloVetor;
+    velocidadeVetor = constrain(velocidadeVetor, 0, velocidade_maxima);
 
-    erroAlinhamentoGraus = 0.0f;
-    alinhandoAgora = false;
-    float anguloRetornoComUltra = comporAnguloRetornoBussolaComUltraLaterais(anguloRetornoDefensor, ultrasRecentes);
-    seguirDirecaoPorAngulo(anguloRetornoComUltra,
-                           (int)DEFENSOR_VELOCIDADE_RETORNO_GOL_PWM);
+    seguirDirecaoComGiro(anguloVetor, velocidadeVetor, cmdPidAssinado);
+    return;
+  }
+
+  if (bolaCameraSemIr) {
+    float anguloCameraMovimento = mapearAnguloBolaParaMovimento((float)cameraBallAngle);
+    seguirDirecaoComGiro(anguloCameraMovimento, VELOCIDADE_DEFENSOR, cmdPidAssinado);
     return;
   }
 

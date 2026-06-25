@@ -776,7 +776,7 @@ void enviarBussolaParaMusculo() {
   ultimoEnvioBussolaMusculoMs = millis();
 }
 
-// Publica bola e gols (ângulo e distância) detectados pela camera para o Musculo.
+// Publica bola, gols e intensidade IR para o Musculo.
 void enviarCameraParaMusculo() {
   if ((millis() - ultimoEnvioGolMusculoMs) < INTERVALO_ENVIO_GOL_MS) {
     return;
@@ -795,7 +795,9 @@ void enviarCameraParaMusculo() {
   SerialMusculo.print(",");
   SerialMusculo.print(ultimoYellowDist);
   SerialMusculo.print(",");
-  SerialMusculo.println(cameraOlhoOK ? 1 : 0);
+  SerialMusculo.print(cameraOlhoOK ? 1 : 0);
+  SerialMusculo.print(",");
+  SerialMusculo.println(ultimaIntensidadeIrX10 / 10.0f, 1);
   ultimoEnvioGolMusculoMs = millis();
 }
 
