@@ -1,3 +1,4 @@
+
 // Arquivo principal da placa Cabeca.
 // Funcao: concentrador de comunicacao entre Musculo, Olho e Pe,
 // leitura de botoes e bussola, e repasse de dados para o Musculo.
@@ -11,7 +12,7 @@
 
 // ===================== ESP-NOW - ALTERE O MAC AQUI =====================
 // MAC da Cabeca do outro robo (CRONOS). Use o ambiente descobridor_mac para encontrar.
-#define ESPNOW_TARGET_MAC_STR "AC:A7:04:2B:9B:60"
+#define ESPNOW_TARGET_MAC_STR "90:70:69:07:40:E8"
 // =======================================================================
 
 #define RX_MUSCULO 44
@@ -177,6 +178,7 @@ int calcularHead(int16_t xRaw, int16_t yRaw) {
 // Fim das configuracoes da bussola.
 
 const unsigned long DEBOUNCE_BOTAO_MS = 180;
+const unsigned long BOTAO_MEIO_LONGO_MS = 2000;
 const unsigned long INTERVALO_OI_MS = 1000;
 const unsigned long INTERVALO_BUSSOLA_MS = 50;
 
@@ -237,6 +239,8 @@ unsigned long ultimoEnvioKickerMusculoMs = 0;
 bool botao1Anterior = HIGH;
 bool botao2Anterior = HIGH;
 bool botao3Anterior = HIGH;
+unsigned long botao3PressionadoDesdeMs = 0;
+bool botao3LongoEnviado = false;
 bool comunicacaoMusculoOK = false;
 bool comunicacaoOlhoOK = false;
 bool comunicacaoPeOK = false;
@@ -244,6 +248,7 @@ bool comunicacaoPeOK = false;
 bool atacanteCfg = false;
 //==============================//
 bool corGolAzulCfg = false;
+bool jogoEmExecucao = false;
 
 String bufferOlho = "";
 String bufferPe = "";
@@ -263,9 +268,14 @@ int16_t ultimoUltraRemotoTX10 = -10;
 int16_t ultimoAnguloLinhaX10 = -10;
 int16_t ultimoAnguloLinhaZonaAX10 = -10;
 int16_t ultimoAnguloLinhaZonaBX10 = -10;
+int sensorPeBruto1 = -1;
+int sensorPeBruto9 = -1;
+int sensorPeBruto17 = -1;
+int sensorPeBruto25 = -1;
 bool linhaZonaAValida = false;
 bool linhaZonaBValida = false;
 unsigned long ultimoRxUltraRemotoMs = 0;
+unsigned long ignorarPacotesPeAteMs = 0;
 
 // ===== NOVOS: dados de camera (bola + 2 gols) =====
 int16_t ultimoBallAngle = -999;
@@ -283,6 +293,18 @@ int ultimoKickerEnviado = -1;
 float ultimoHeadingBussola = 0.0f;
 bool bussolaOK = false;
 
+void prepararTrocaPapelPe() {
+  // Durante a troca de papel, o Pe ainda pode emitir alguns frames no formato anterior.
+  // Ignoramos essa janela curta para nao misturar pacotes de tamanhos diferentes.
+  while (SerialPe.available() > 0) SerialPe.read();
+  ignorarPacotesPeAteMs = millis() + 40;
+  ultimoAnguloLinhaX10 = -10;
+  ultimoAnguloLinhaZonaAX10 = -10;
+  ultimoAnguloLinhaZonaBX10 = -10;
+  linhaZonaAValida = false;
+  linhaZonaBValida = false;
+}
+
 const unsigned long INTERVALO_ENVIO_IR_MS = 120;
 const unsigned long INTERVALO_ENVIO_BUSSOLA_MS = 120;
 const unsigned long INTERVALO_ENVIO_GOL_MS = 120;
@@ -294,6 +316,17 @@ const unsigned long INTERVALO_ENVIO_ESTADO_OLHO_MS = 700;
 const int16_t INTENSIDADE_MINIMA_IR_X10 = 80;  // 8.0
 const unsigned long TIMEOUT_DADO_OLHO_MS = 500;
 unsigned long ultimoEnvioUltraRemotoMusculoMs = 0;
+
+void enviarSensoresPeParaMusculo() {
+  SerialMusculo.print("SENS:");
+  SerialMusculo.print(sensorPeBruto1);
+  SerialMusculo.print(",");
+  SerialMusculo.print(sensorPeBruto9);
+  SerialMusculo.print(",");
+  SerialMusculo.print(sensorPeBruto17);
+  SerialMusculo.print(",");
+  SerialMusculo.println(sensorPeBruto25);
+}
 
 // --- ESP-NOW ---
 enum EspNowMsgTipo : uint8_t { ESPNOW_MSG_ULTRA_REQ = 1, ESPNOW_MSG_ULTRA_RESP = 2 };
@@ -334,12 +367,46 @@ static bool macEq(const uint8_t* a, const uint8_t* b) {
   return true;
 }
 
+static void atualizarParceiroEspNow(const uint8_t* mac) {
+  if (macEq(mac, espnowTargetMac)) {
+    return;
+  }
+
+  for (int i = 0; i < 6; i++) {
+    espnowTargetMac[i] = mac[i];
+  }
+
+  esp_now_peer_info_t peer;
+  memset(&peer, 0, sizeof(peer));
+  memcpy(peer.peer_addr, espnowTargetMac, 6);
+  peer.channel = 0;
+  peer.encrypt = false;
+
+  if (!esp_now_is_peer_exist(espnowTargetMac)) {
+    esp_now_add_peer(&peer);
+  }
+
+  Serial.printf("[ESPNOW] Parceiro aprendido: %02X:%02X:%02X:%02X:%02X:%02X\n",
+                espnowTargetMac[0], espnowTargetMac[1], espnowTargetMac[2],
+                espnowTargetMac[3], espnowTargetMac[4], espnowTargetMac[5]);
+}
+
 static bool ultrasLocaisRecentes() {
   return (ultimoRxOlhoMs > 0) && ((millis() - ultimoRxOlhoMs) < TIMEOUT_DADO_OLHO_MS);
 }
 
 // Declaracao forward para processar mudancas de papel
 void enviarEstadoParaPeSemDelay();
+void enviarEstadoParaPlacas();
+
+bool calcularSozinhoEmJogo() {
+  if (!jogoEmExecucao) {
+    return false;
+  }
+
+  bool espnowRecente = (espnowUltimoRxMs > 0) && ((millis() - espnowUltimoRxMs) < ESPNOW_TIMEOUT_MS);
+  return (!espnowComOK) || (!espnowRecente);
+}
 
 void enviarPacoteUltraEspNow(bool resposta) {
   if (!espnowInicializado) {
@@ -376,10 +443,6 @@ void onEspNowSent(const uint8_t* mac, esp_now_send_status_t st) {
 }
 
 void onEspNowRecv(const uint8_t* mac, const uint8_t* data, int len) {
-  if (!macEq(mac, espnowTargetMac)) return;
-  espnowUltimoRxMs = millis();
-  espnowComOK = true;
-
   EspNowMsg rx;
   memset(&rx, 0, sizeof(rx));
   int clen = len < (int)sizeof(rx) ? len : (int)sizeof(rx);
@@ -388,16 +451,22 @@ void onEspNowRecv(const uint8_t* mac, const uint8_t* data, int len) {
   bool ehReq = (rx.tipo == ESPNOW_MSG_ULTRA_REQ) || (strncmp(rx.text, "ULTRA_REQ", 9) == 0);
   bool ehResp = (rx.tipo == ESPNOW_MSG_ULTRA_RESP) || (strncmp(rx.text, "ULTRA_RESP", 10) == 0);
 
-  if (ehReq || ehResp) {
-    ultimoUltraRemotoDX10 = rx.uD;
-    ultimoUltraRemotoEX10 = rx.uE;
-    ultimoUltraRemotoFX10 = rx.uF;
-    ultimoUltraRemotoTX10 = rx.uT;
-    ultimoRxUltraRemotoMs = millis();
+  if (!ehReq && !ehResp) {
+    return;
+  }
 
-    if (ehReq) {
-      enviarPacoteUltraEspNow(true);
-    }
+  atualizarParceiroEspNow(mac);
+  espnowUltimoRxMs = millis();
+  espnowComOK = true;
+
+  ultimoUltraRemotoDX10 = rx.uD;
+  ultimoUltraRemotoEX10 = rx.uE;
+  ultimoUltraRemotoFX10 = rx.uF;
+  ultimoUltraRemotoTX10 = rx.uT;
+  ultimoRxUltraRemotoMs = millis();
+
+  if (ehReq) {
+    enviarPacoteUltraEspNow(true);
   }
 }
 
@@ -569,12 +638,31 @@ void processarMensagem(String msg) {
       bool novoAtacante = (v == "1");
       if (novoAtacante != atacanteCfg) {
         atacanteCfg = novoAtacante;
+        prepararTrocaPapelPe();
         Serial.print("Papel mudou para: ");
         Serial.println(atacanteCfg ? "ATACANTE" : "DEFENSOR");
         // Envia imediatamente para Pe (sem wait de 700ms)
         enviarEstadoParaPeSemDelay();
       }
     }
+  } else if (msg.startsWith("run:")) {
+    String v = msg.substring(4);
+    v.trim();
+    if (v == "0" || v == "1") {
+      bool novoJogoEmExecucao = (v == "1");
+      if (novoJogoEmExecucao != jogoEmExecucao) {
+        jogoEmExecucao = novoJogoEmExecucao;
+        ultimoEnvioEstadoOlhoMs = 0;
+        enviarEstadoParaPlacas();
+      }
+    }
+  } else if (msg == "req:sens") {
+    SerialPe.println("REQ:SENS");
+  } else if (msg == "req:lim") {
+    SerialPe.println("REQ:LIM");
+  } else if (msg.startsWith("setlim:")) {
+    SerialPe.print("SETLIM:");
+    SerialPe.println(msg.substring(7));
   } else if (msg.length() > 0) {
     Serial.print("Recebido do musculo: ");
     Serial.println(msg);
@@ -606,10 +694,8 @@ void enviarEstadoParaPeSemDelay() {
   // Descarta buffer serial da Pe para evitar dessincronia de tamanho de pacote
   while (SerialPe.available() > 0) SerialPe.read();
 
-  bool espnowRecente = (espnowUltimoRxMs > 0) && ((millis() - espnowUltimoRxMs) < ESPNOW_TIMEOUT_MS);
-
   PacoteEstado estado;
-  estado.sozinho = (!espnowComOK) || (!espnowRecente);
+  estado.sozinho = calcularSozinhoEmJogo();
   estado.atacante = atacanteCfg;
   estado.corGolAzul = corGolAzulCfg;
 
@@ -632,10 +718,8 @@ void enviarEstadoParaPlacas() {
     return;
   }
 
-  bool espnowRecente = (espnowUltimoRxMs > 0) && ((millis() - espnowUltimoRxMs) < ESPNOW_TIMEOUT_MS);
-
   PacoteEstado estado;
-  estado.sozinho = (!espnowComOK) || (!espnowRecente);
+  estado.sozinho = calcularSozinhoEmJogo();
   estado.atacante = atacanteCfg;
   estado.corGolAzul = corGolAzulCfg;
 
@@ -834,6 +918,61 @@ void processarTextoResposta(String &buffer, bool &flagResposta) {
   buffer = "";
 }
 
+bool processarLinhaSensoresPe(String &buffer) {
+  String linha = buffer;
+  linha.trim();
+  linha.toUpperCase();
+
+  if (!linha.startsWith("SENS:")) {
+    return false;
+  }
+
+  String payload = linha.substring(5);
+  int p1 = payload.indexOf(',');
+  int p2 = payload.indexOf(',', p1 + 1);
+  int p3 = payload.indexOf(',', p2 + 1);
+  if (p1 <= 0 || p2 <= p1 || p3 <= p2) {
+    return true;
+  }
+
+  String s1 = payload.substring(0, p1);
+  String s9 = payload.substring(p1 + 1, p2);
+  String s17 = payload.substring(p2 + 1, p3);
+  String s25 = payload.substring(p3 + 1);
+  s1.trim();
+  s9.trim();
+  s17.trim();
+  s25.trim();
+
+  sensorPeBruto1 = s1.toInt();
+  sensorPeBruto9 = s9.toInt();
+  sensorPeBruto17 = s17.toInt();
+  sensorPeBruto25 = s25.toInt();
+  comunicacaoPeOK = true;
+  enviarSensoresPeParaMusculo();
+  return true;
+}
+
+bool processarLinhaLimiarPe(String &buffer) {
+  String linha = buffer;
+  linha.trim();
+  linha.toUpperCase();
+
+  if (!linha.startsWith("LIM:")) {
+    return false;
+  }
+
+  String valor = linha.substring(4);
+  valor.trim();
+  int limiar = valor.toInt();
+  if (limiar > 0) {
+    SerialMusculo.print("LIM:");
+    SerialMusculo.println(limiar);
+    comunicacaoPeOK = true;
+  }
+  return true;
+}
+
 // Le serial da placa Olho, decodifica pacote binario e fallback textual.
 void lerRespostaOlho() {
   while (SerialOlho.available() > 0) {
@@ -891,6 +1030,15 @@ void lerRespostaOlho() {
 
 // Le serial da placa Pe, decodifica pacote binario e fallback textual.
 void lerRespostaPe() {
+  if (ignorarPacotesPeAteMs > 0) {
+    long restanteMs = (long)(ignorarPacotesPeAteMs - millis());
+    if (restanteMs > 0) {
+      while (SerialPe.available() > 0) SerialPe.read();
+      return;
+    }
+    ignorarPacotesPeAteMs = 0;
+  }
+
   while (SerialPe.available() > 0) {
     if (SerialPe.peek() == BYTE_INICIA) {
       SerialPe.read();
@@ -948,12 +1096,15 @@ void lerRespostaPe() {
     char c = (char)SerialPe.read();
     if (c == '\n' || c == '\r') {
       if (bufferPe.length() > 0) {
-        processarTextoResposta(bufferPe, comunicacaoPeOK);
+        if (!processarLinhaSensoresPe(bufferPe) && !processarLinhaLimiarPe(bufferPe)) {
+          processarTextoResposta(bufferPe, comunicacaoPeOK);
+        }
+        bufferPe = "";
       }
       continue;
     }
 
-    if (isPrintable(c) && bufferPe.length() < 16) {
+    if (isPrintable(c) && bufferPe.length() < 48) {
       bufferPe += c;
     } else {
       bufferPe = "";
@@ -1005,10 +1156,28 @@ void verificarBotoes() {
     } else if (botao2Anterior == HIGH && botao2Atual == LOW) {
       ultimoEventoBotaoMs = agora;
       enviarEventoBotao(2);
-    } else if (botao3Anterior == HIGH && botao3Atual == LOW) {
-      ultimoEventoBotaoMs = agora;
-      enviarEventoBotao(3);
     }
+  }
+
+  if (botao3Anterior == HIGH && botao3Atual == LOW) {
+    if (agora - ultimoEventoBotaoMs >= DEBOUNCE_BOTAO_MS) {
+      enviarEventoBotao(3);
+      ultimoEventoBotaoMs = agora;
+    }
+    botao3PressionadoDesdeMs = agora;
+    botao3LongoEnviado = false;
+  }
+
+  if (botao3Atual == LOW && !botao3LongoEnviado && botao3PressionadoDesdeMs > 0 &&
+      (agora - botao3PressionadoDesdeMs) >= BOTAO_MEIO_LONGO_MS) {
+    enviarEventoBotao(23);
+    botao3LongoEnviado = true;
+    ultimoEventoBotaoMs = agora;
+  }
+
+  if (botao3Anterior == LOW && botao3Atual == HIGH) {
+    botao3PressionadoDesdeMs = 0;
+    botao3LongoEnviado = false;
   }
 
   botao1Anterior = botao1Atual;

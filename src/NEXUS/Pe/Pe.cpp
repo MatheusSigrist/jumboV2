@@ -2,8 +2,9 @@
 // Funcao: ler 32 sensores de linha via dois multiplexadores,
 // calcular o angulo da linha e enviar esse angulo para a Cabeca.
 // Entrada: LDRs da linha e estado atacante/defensor vindo da Cabeca.
-// Saida: pacote serial com angulo da linha (em decimos de grau).
+// Saida: pacote serial com angulo da linha (em decimos de grau)..
 #include <Arduino.h>
+#include <EEPROM.h>
 #include <math.h>
 #include <stdint.h>
 
@@ -17,12 +18,11 @@
 #define TX_CABECA 18
 
 #define NUM_SENSORES 32
-#define LIMIAR_LINHA 3000
+#define LIMIAR_LINHA_PADRAO 2500
 #define INTERVALO_DEBUG_MS 250
 #define BAUD_PE_CABECA 115200
 #define DEBUG_LINHA 0
-#define DELAY_LOOP_MS 2
-
+#define DELAY_LOOP_MS 0
 uint8_t mapaSensores[NUM_SENSORES] = {
   0,  1,  2,  3,
   4,  5,  6,  7,
@@ -53,6 +53,13 @@ bool atacante = true;  // Inicia como ATACANTE para sincronizar com Cabeca
 unsigned long ultimoDebugMs = 0;
 String bufferHandshakeCabeca = "";
 unsigned long ultimoByteHandshakeCabeca = 0;
+bool enviarSensoresBrutosPendentes = false;
+int limiarLinha = LIMIAR_LINHA_PADRAO;
+
+const int EEPROM_SIZE = 64;
+const int EEPROM_ADDR_LIMIAR_LINHA = 0;
+const int LIMIAR_LINHA_MIN = 100;
+const int LIMIAR_LINHA_MAX = 4000;
 
 struct Pacote {
   int16_t angulo;
@@ -70,6 +77,29 @@ struct PacoteEstado {
   bool atacante;
   bool corGolAzul;
 };
+
+void processarComandoCabeca(String comando) {
+  comando.trim();
+  comando.toLowerCase();
+
+  if (comando == "oi") {
+    Serial1.println("OI");
+  } else if (comando == "req:sens") {
+    enviarSensoresBrutosPendentes = true;
+  } else if (comando == "req:lim") {
+    Serial1.print("LIM:");
+    Serial1.println(limiarLinha);
+  } else if (comando.startsWith("setlim:")) {
+    int novoLimiar = comando.substring(7).toInt();
+    if (novoLimiar < LIMIAR_LINHA_MIN) novoLimiar = LIMIAR_LINHA_MIN;
+    if (novoLimiar > LIMIAR_LINHA_MAX) novoLimiar = LIMIAR_LINHA_MAX;
+    limiarLinha = novoLimiar;
+    EEPROM.put(EEPROM_ADDR_LIMIAR_LINHA, limiarLinha);
+    EEPROM.commit();
+    Serial1.print("LIM:");
+    Serial1.println(limiarLinha);
+  }
+}
 
 // Seleciona um canal em um multiplexador 16:1 pelos pinos de endereco.
 void selecionarCanalMUX(int s0, int s1, int s2, int s3, int canal) {
@@ -90,11 +120,7 @@ void ProcessarPingCabeca() {
     ultimoByteHandshakeCabeca = millis();
 
     if (c == '\n' || c == '\r') {
-      bufferHandshakeCabeca.trim();
-      bufferHandshakeCabeca.toLowerCase();
-      if (bufferHandshakeCabeca == "oi") {
-        Serial1.println("OI");
-      }
+      processarComandoCabeca(bufferHandshakeCabeca);
       bufferHandshakeCabeca = "";
       continue;
     }
@@ -107,48 +133,64 @@ void ProcessarPingCabeca() {
   }
 
   if (bufferHandshakeCabeca.length() > 0 && (millis() - ultimoByteHandshakeCabeca) > 80) {
-    bufferHandshakeCabeca.trim();
-    bufferHandshakeCabeca.toLowerCase();
-    if (bufferHandshakeCabeca == "oi") {
-      Serial1.println("OI");
-    }
+    processarComandoCabeca(bufferHandshakeCabeca);
     bufferHandshakeCabeca = "";
   }
 }
 
 // Le pacote de estado da Cabeca e atualiza papel atacante/defensor.
 void LeituraSerial() {
-  while (Serial1.available() >= 2) {
-    if (Serial1.read() == BYTE_INICIA) {
-      byte id = Serial1.read();
-      if (id == ID_PLACA_OLHO || id == ID_PLACA_PE) {
-        if (Serial1.available() >= sizeof(PacoteEstado) + 1) {
-          PacoteEstado temp;
-          Serial1.readBytes((uint8_t*)&temp, sizeof(PacoteEstado));
-          byte stop = Serial1.read();
-          if (stop == BYTE_PARA) {
-            bool mudouPapel = (temp.atacante != atacante);
-            atacante = temp.atacante;
-            
-            Serial.print("Recebido estado da Cabeca: atacante=");
-            Serial.println(atacante ? "1" : "0");
-            
-            // Se papel mudou, resincroniza
-            if (mudouPapel) {
-              Serial.println("Papel mudou! Resincronizando...");
-              // Pequeno delay para estabilizar buffer
-              delay(5);
-            }
-          }
-        }
-      } else {
-        // ID invalido, limpa o buffer
-        while (Serial1.available() > 0 && Serial1.peek() != BYTE_INICIA) {
-          Serial1.read();
+  while (Serial1.available() > 0) {
+    if (Serial1.peek() != BYTE_INICIA) {
+      return;
+    }
+
+    if (Serial1.available() < 2) {
+      return;
+    }
+
+    Serial1.read();
+    byte id = Serial1.read();
+    if (id == ID_PLACA_OLHO || id == ID_PLACA_PE) {
+      if (Serial1.available() < (int)(sizeof(PacoteEstado) + 1)) {
+        return;
+      }
+
+      PacoteEstado temp;
+      Serial1.readBytes((uint8_t*)&temp, sizeof(PacoteEstado));
+      byte stop = Serial1.read();
+      if (stop == BYTE_PARA) {
+        bool mudouPapel = (temp.atacante != atacante);
+        atacante = temp.atacante;
+
+        Serial.print("Recebido estado da Cabeca: atacante=");
+        Serial.println(atacante ? "1" : "0");
+
+        // Se papel mudou, resincroniza
+        if (mudouPapel) {
+          Serial.println("Papel mudou! Resincronizando...");
+          // Pequeno delay para estabilizar buffer
+          delay(5);
         }
       }
     }
   }
+}
+
+void enviarSensoresBrutosSolicitados() {
+  if (!enviarSensoresBrutosPendentes) {
+    return;
+  }
+
+  enviarSensoresBrutosPendentes = false;
+  Serial1.print("SENS:");
+  Serial1.print(ldr[0]);   // Sensor 1
+  Serial1.print(",");
+  Serial1.print(ldr[8]);   // Sensor 9
+  Serial1.print(",");
+  Serial1.print(ldr[16]);  // Sensor 17
+  Serial1.print(",");
+  Serial1.println(ldr[24]); // Sensor 25
 }
 
 // Calcula o angulo da linha por centroide ponderado dos sensores ativos.
@@ -160,7 +202,7 @@ int16_t calcularAngulo(bool repulsao) {
   for (int i = 0; i < NUM_SENSORES; i++) {
     int idxFisico = mapaSensores[i];
     float peso = ldr[idxFisico];
-    if (peso >= LIMIAR_LINHA) {
+    if (peso >= limiarLinha) {
       centroX += peso * sensorX[i];
       centroY += peso * sensorY[i];
       soma += peso;
@@ -195,7 +237,7 @@ int16_t calcularAnguloZona(int inicio, int fim, bool &temLinha) {
   for (int i = inicio; i <= fim; i++) {
     int idxFisico = mapaSensores[i];
     int leitura = ldr[idxFisico];
-    float peso = (float)(leitura - LIMIAR_LINHA);
+    float peso = (float)(leitura - limiarLinha);
     if (peso <= 0.0f) {
       continue;
     }
@@ -242,16 +284,8 @@ PacoteDefensor detectarLinhaDefensorPorZonas() {
   pacote.anguloZonaA = calcularAnguloZona(0, 15, temZonaA);
   pacote.anguloZonaB = calcularAnguloZona(16, 31, temZonaB);
 
-  // Inverte apenas o sentido da Zona B, mantendo a faixa absoluta em 180..360.
-  // Ex.: 360 -> 180, 350 -> 190, 180 -> 360.
-  if (pacote.anguloZonaB >= 0) {
-    float angB = pacote.anguloZonaB / 10.0f;
-    angB = 540.0f - angB;
-    if (angB > 360.0f) {
-      angB -= 360.0f;
-    }
-    pacote.anguloZonaB = (int16_t)round(angB * 10.0f);
-  }
+  // Mantem os angulos absolutos originais de cada zona.
+  // Isso preserva compatibilidade com a logica historica do defensor no Musculo.
 
   pacote.temLinhaZonaA = temZonaA ? 1 : 0;
   pacote.temLinhaZonaB = temZonaB ? 1 : 0;
@@ -266,7 +300,7 @@ void imprimirLeituraSensores() {
     Serial.print(i);
     Serial.print("=");
     Serial.print(ldr[i]);
-    if (ldr[i] >= LIMIAR_LINHA) {
+    if (ldr[i] >= limiarLinha) {
       Serial.print("*");
     }
     if (i < NUM_SENSORES - 1) {
@@ -280,6 +314,14 @@ void imprimirLeituraSensores() {
 void setup() {
   Serial.begin(115200);
   Serial1.begin(BAUD_PE_CABECA, SERIAL_8N1, RX_CABECA, TX_CABECA);
+
+  EEPROM.begin(EEPROM_SIZE);
+  EEPROM.get(EEPROM_ADDR_LIMIAR_LINHA, limiarLinha);
+  if (limiarLinha < LIMIAR_LINHA_MIN || limiarLinha > LIMIAR_LINHA_MAX) {
+    limiarLinha = LIMIAR_LINHA_PADRAO;
+    EEPROM.put(EEPROM_ADDR_LIMIAR_LINHA, limiarLinha);
+    EEPROM.commit();
+  }
 
   pinMode(MUX1_S0, OUTPUT);
   pinMode(MUX1_S1, OUTPUT);
@@ -333,6 +375,8 @@ void loop() {
     Serial1.write((uint8_t*)&pacoteDef, sizeof(PacoteDefensor));
     Serial1.write(BYTE_PARA);
   }
+
+  enviarSensoresBrutosSolicitados();
 
   unsigned long agora = millis();
   if (DEBUG_LINHA && (agora - ultimoDebugMs >= INTERVALO_DEBUG_MS)) {
