@@ -47,6 +47,7 @@ const float yScale  = 1.017126;
 
 int head = 0;
 
+
 bool writeReg(uint8_t reg, uint8_t value) {
   Wire.beginTransmission(QMC5883P_ADDR);
   Wire.write(reg);
