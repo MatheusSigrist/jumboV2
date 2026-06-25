@@ -39,13 +39,14 @@
 // Inicializacao e configuracao da bussola.
 const uint8_t QMC5883P_ADDR = 0x2C;
 
-// Valores de calibracao validados no teste dedicado.
-const float xOffset = -1019.50;
-const float yOffset = 804.00;
-const float xScale  = 0.999054;
-const float yScale  = 1.000948;
+// Valores de calibração validados no teste dedicado.
+const float xOffset = -1223.00;
+const float yOffset = 409.50;
+const float xScale  = 0.983442;
+const float yScale  = 1.017126;
 
 int head = 0;
+
 
 bool writeReg(uint8_t reg, uint8_t value) {
   Wire.beginTransmission(QMC5883P_ADDR);
@@ -307,7 +308,7 @@ void prepararTrocaPapelPe() {
 const unsigned long INTERVALO_ENVIO_IR_MS = 120;
 const unsigned long INTERVALO_ENVIO_BUSSOLA_MS = 120;
 const unsigned long INTERVALO_ENVIO_GOL_MS = 120;
-const unsigned long INTERVALO_ENVIO_LINHA_MS = 20;
+const unsigned long INTERVALO_ENVIO_LINHA_MS = 2;
 const unsigned long INTERVALO_ENVIO_INT_MS = 120;
 const unsigned long INTERVALO_ENVIO_ULTRA_MS = 120;
 const unsigned long INTERVALO_ENVIO_KICKER_MS = 120;
@@ -774,7 +775,7 @@ void enviarBussolaParaMusculo() {
   ultimoEnvioBussolaMusculoMs = millis();
 }
 
-// Publica bola e gols (ângulo e distância) detectados pela camera para o Musculo.
+// Publica bola, gols e intensidade IR para o Musculo.
 void enviarCameraParaMusculo() {
   if ((millis() - ultimoEnvioGolMusculoMs) < INTERVALO_ENVIO_GOL_MS) {
     return;
@@ -793,7 +794,9 @@ void enviarCameraParaMusculo() {
   SerialMusculo.print(",");
   SerialMusculo.print(ultimoYellowDist);
   SerialMusculo.print(",");
-  SerialMusculo.println(cameraOlhoOK ? 1 : 0);
+  SerialMusculo.print(cameraOlhoOK ? 1 : 0);
+  SerialMusculo.print(",");
+  SerialMusculo.println(ultimaIntensidadeIrX10 / 10.0f, 1);
   ultimoEnvioGolMusculoMs = millis();
 }
 
@@ -1270,5 +1273,5 @@ void loop() {
   enviarEstadoParaPlacas();
   atualizarEspNow();
 
-  delay(5);
+  delay(1);
 }
