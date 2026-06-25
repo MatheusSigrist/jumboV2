@@ -35,6 +35,7 @@
 #define I2C_SDA 8
 #define I2C_SCL 9
 #define I2C_FREQ 100000
+//teste
 
 // Inicializacao e configuracao da bussola.
 const uint8_t QMC5883P_ADDR = 0x2C;
