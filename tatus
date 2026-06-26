@@ -1,0 +1,254 @@
+[33mcommit 8505618edb7e8aa56b99265ef073c3b9ff31bc01[m
+Author: mander1311 <150467335+mander1311@users.noreply.github.com>
+Date:   Tue Jun 23 13:48:46 2026 -0300
+
+    Add 4-layer database system for data telemetry (IR Raw, IR Predicted, Command Movement, PWM Output)
+
+[1mdiff --git a/src/NEXUS/musculo/musculo_atacante_modified.cpp b/src/NEXUS/musculo/musculo_atacante_modified.cpp[m
+[1mnew file mode 100644[m
+[1mindex 0000000..5292645[m
+[1m--- /dev/null[m
+[1m+++ b/src/NEXUS/musculo/musculo_atacante_modified.cpp[m
+[36m@@ -0,0 +1,272 @@[m
+[32m+[m[32m// =============================================================================[m
+[32m+[m[32m// SECAO 19 — ESTRATEGIA DO ATACANTE (COM 4 CAMADAS DE DATABASE)[m
+[32m+[m[32m// =============================================================================[m
+[32m+[m[32m// Inclua no topo do musculo.cpp:[m
+[32m+[m[32m// #include "DATABASES_LAYER.hpp"[m
+[32m+[m[32m//[m
+[32m+[m[32m// Integração das 4 camadas de dados:[m
+[32m+[m[32m// Layer 1: IR Bruto (sensor raw)[m
+[32m+[m[32m// Layer 2: IR Previsto (com Kalman)[m
+[32m+[m[32m// Layer 3: Comando de Movimento (decisão)[m
+[32m+[m[32m// Layer 4: Saída PWM (execução real)[m
+[32m+[m[32m// =============================================================================[m
+[32m+[m
+[32m+[m[32mvoid atacante() {[m
+[32m+[m[32m  int16_t anguloGolCamera = -999;[m
+[32m+[m[32m  bool golVisivelCamera = cameraTemGolSelecionadoValido(anguloGolCamera);[m
+[32m+[m[32m  erroAlinhamentoGraus = golVisivelCamera ? calcularErroGolPorPapel((float)anguloGolCamera) : 0.0f;[m
+[32m+[m[32m  fugindoLinhaAgora    = false;[m
+[32m+[m[32m  anguloFugaLinhaCmd   = 0.0f;[m
+[32m+[m
+[32m+[m[32m  static uint8_t confirmacoesLinhaParede  = 0;[m
+[32m+[m[32m  static bool    forcarIrDiretoAposLinha  = false;[m
+[32m+[m
+[32m+[m[32m  int  cmdPidAssinado         = 0;[m
+[32m+[m[32m  bool cameraBolaBrutaVisivel = cameraTemBolaValida();[m
+[32m+[m[32m  float anguloCameraBolaFiltrado  = -1.0f;[m
+[32m+[m[32m  bool cameraBolaFiltradaVisivel  = obterAnguloCameraBolaFiltrado(anguloCameraBolaFiltrado);[m
+[32m+[m[32m  float anguloIrBufferizado        = -1.0f;[m
+[32m+[m[32m  bool irDisponivel               = obterAnguloIrComBuffer(anguloIrBufferizado);[m
+[32m+[m
+[32m+[m[32m  // =========================================================================[m
+[32m+[m[32m  // CAMADA 1: Adicionar IR BRUTO ao banco de dados[m
+[32m+[m[32m  // =========================================================================[m
+[32m+[m[32m  if (irDetectado && anguloIr >= 0.0f) {[m
+[32m+[m[32m    adicionarIrBruto((int16_t)anguloIr, cameraBallDist, 95);[m
+[32m+[m[32m  } else if (ultimoAnguloIrValido >= 0.0f && irDisponivel) {[m
+[32m+[m[32m    adicionarIrBruto((int16_t)ultimoAnguloIrValido, cameraBallDist, 60);[m
+[32m+[m[32m  }[m
+[32m+[m
+[32m+[m[32m  // =========================================================================[m
+[32m+[m[32m  // CAMADA 2: Filtro Kalman + Adicionar IR PREVISTO[m
+[32m+[m[32m  // =========================================================================[m
+[32m+[m[32m  int16_t angloPrevisto = filtroKalmanIr(irDisponivel ? anguloIrBufferizado : -1.0f);[m
+[32m+[m[32m  if (irDisponivel) {[m
+[32m+[m[32m    adicionarIrPrevisto((int16_t)anguloIrBufferizado, angloPrevisto, 0);[m
+[32m+[m[32m  }[m
+[32m+[m
+[32m+[m[32m  // =========================================================================[m
+[32m+[m[32m  // Fuga de linha com prioridade máxima[m
+[32m+[m[32m  // =========================================================================[m
+[32m+[m[32m  if (linhaDetectada && anguloLinhaPe >= 0.0f) {[m
+[32m+[m[32m    fugindoLinhaAgora  = true;[m
+[32m+[m[32m    anguloFugaLinhaCmd = normalizarAngulo360(anguloLinhaPe);[m
+[32m+[m[32m    float anguloFugaSuavizado = suavizarAnguloMovimentoAtacante(anguloFugaLinhaCmd);[m
+[32m+[m[32m    int vel = aplicarFreioUltrassonicoAtacante(VELOCIDADE_FUGA_LINHA);[m
+[32m+[m[41m    [m
+[32m+[m[32m    // CAMADA 3: Registrar comando de fuga de linha[m
+[32m+[m[32m    adicionarComandoMovimento(anguloFugaSuavizado, vel, 1, true, false, 0);[m
+[32m+[m[41m    [m
+[32m+[m[32m    // CAMADA 4: Registrar PWM executado[m
+[32m+[m[32m    int v1 = ledcRead(PWM_CH1), v2 = ledcRead(PWM_CH2);[m
+[32m+[m[32m    int v3 = ledcRead(PWM_CH3), v4 = ledcRead(PWM_CH4);[m
+[32m+[m[32m    float vel_media = (v1 + v2 + v3 + v4) / 4.0f;[m
+[32m+[m[32m    adicionarSaidaPwm(v1, v2, v3, v4, anguloFugaSuavizado, vel_media, 0);[m
+[32m+[m[41m    [m
+[32m+[m[32m    seguirDirecaoPorAngulo(anguloFugaSuavizado, vel);[m
+[32m+[m[32m    return;[m
+[32m+[m[32m  }[m
+[32m+[m
+[32m+[m[32m  // =========================================================================[m
+[32m+[m[32m  // Decide se precisa girar para alinhar ao gol[m
+[32m+[m[32m  // =========================================================================[m
+[32m+[m[32m  bool precisaAlinhar = golVisivelCamera && (fabsf(erroAlinhamentoGraus) > TOLERANCIA_ALINHAMENTO_GRAUS);[m
+[32m+[m[32m  bool erroGrande     = golVisivelCamera && (fabsf(erroAlinhamentoGraus) > 40.0f);[m
+[32m+[m[41m  [m
+[32m+[m[32m  if (precisaAlinhar) {[m
+[32m+[m[32m    alinhandoAgora = true;[m
+[32m+[m[32m    int cmdPid    = calcularSaidaPidBussola(erroAlinhamentoGraus);[m
+[32m+[m[32m    cmdPidAssinado = -SINAL_GIRO_PID * cmdPid;[m
+[32m+[m[32m  } else {[m
+[32m+[m[32m    alinhandoAgora = false;[m[41m [m
+[32m+[m[32m    resetPidBussola();[m
+[32m+[m[32m  }[m
+[32m+[m
+[32m+[m[32m  // =========================================================================[m
+[32m+[m[32m  // Lógica existente de câmera / IR[m
+[32m+[m[32m  // =========================================================================[m
+[32m+[m[32m  if (!irDisponivel && cameraBolaFiltradaVisivel) {[m
+[32m+[m[32m    if (inicioCameraSemIrMs == 0) inicioCameraSemIrMs = millis();[m
+[32m+[m[32m  } else {[m
+[32m+[m[32m    inicioCameraSemIrMs = 0;[m
+[32m+[m[32m  }[m
+[32m+[m[41m  [m
+[32m+[m[32m  bool ignorarLinhaPorCamera = (inicioCameraSemIrMs != 0) &&[m
+[32m+[m[32m                               ((millis() - inicioCameraSemIrMs) >= TEMPO_CAMERA_SEM_IR_PARA_IGNORAR_LINHA_MS);[m
+[32m+[m
+[32m+[m[32m  bool linhaRecenteForcada = (ultimoComandoLinhaMs > 0) &&[m
+[32m+[m[32m                             ((millis() - ultimoComandoLinhaMs) <= RETENCAO_FUGA_LINHA_MS);[m
+[32m+[m[32m  float anguloLinhaParaFuga = (linhaDetectada && anguloLinhaPe >= 0.0f) ? anguloLinhaPe : ultimoAnguloLinhaValido;[m
+[32m+[m
+[32m+[m[32m  bool linhaValida = ((linhaDetectada && (anguloLinhaPe >= 0.0f) && !ignorarLinhaPorCamera) ||[m
+[32m+[m[32m                      (linhaRecenteForcada && (anguloLinhaParaFuga >= 0.0f)));[m
+[32m+[m
+[32m+[m[32m  bool linhaComParedeCritica = linhaValida && ultraLateralCriticoAtacante();[m
+[32m+[m[32m  if (linhaComParedeCritica) {[m
+[32m+[m[32m    if (confirmacoesLinhaParede < ATACANTE_LINHA_PAREDE_CONFIRMACAO) confirmacoesLinhaParede++;[m
+[32m+[m[32m    if (confirmacoesLinhaParede >= ATACANTE_LINHA_PAREDE_CONFIRMACAO) forcarIrDiretoAposLinha = true;[m
+[32m+[m[32m  } else if (!linhaValida) {[m
+[32m+[m[32m    confirmacoesLinhaParede = 0;[m[41m [m
+[32m+[m[32m    forcarIrDiretoAposLinha = false;[m
+[32m+[m[32m  }[m
+[32m+[m
+[32m+[m[32m  bool irDiretoAtivo = forcarIrDiretoAposLinha && irDisponivel;[m
+[32m+[m
+[32m+[m[32m  // =========================================================================[m
+[32m+[m[32m  // PRIORIDADE 1: linha + parede = IR direto[m
+[32m+[m[32m  // =========================================================================[m
+[32m+[m[32m  if (linhaValida && irDiretoAtivo) {[m
+[32m+[m[32m    if (irNaFaixaFrontal(anguloIrBufferizado)) {[m
+[32m+[m[32m      int vel = aplicarFreioUltrassonicoAtacanteFrente(VELOCIDADE_IR_FRONTAL_PWM);[m
+[32m+[m[32m      adicionarComandoMovimento(0.0f, vel, 0, false, false, 0);[m
+[32m+[m[32m      int v1 = ledcRead(PWM_CH1), v2 = ledcRead(PWM_CH2);[m
+[32m+[m[32m      int v3 = ledcRead(PWM_CH3), v4 = ledcRead(PWM_CH4);[m
+[32m+[m[32m      adicionarSaidaPwm(v1, v2, v3, v4, 0.0f, (v1+v2+v3+v4)/4.0f, 0);[m
+[32m+[m[41m      [m
+[32m+[m[32m      if (ultraTcm > 150) moverFrenteComGiro(vel, cmdPidAssinado);[m
+[32m+[m[32m      else                 moverFrenteComGiro(vel, cmdPidAssinado);[m
+[32m+[m[32m    } else {[m
+[32m+[m[32m      float anguloIrAlvo = mapearAnguloBolaParaMovimento(anguloIrBufferizado);[m
+[32m+[m[32m      float anguloIrComRampa = obterAnguloIrSuavizado(anguloIrAlvo);[m
+[32m+[m[32m      int velocidadeIr = aplicarFreioUltrassonicoAtacante(calcularVelocidadeIrPorAngulo(anguloIrBufferizado));[m
+[32m+[m[32m      float anguloMovimentoComControle = suavizarAnguloMovimentoAtacante(anguloIrComRampa);[m
+[32m+[m[41m      [m
+[32m+[m[32m      adicionarComandoMovimento(anguloMovimentoComControle, velocidadeIr, 0, false, false, 0);[m
+[32m+[m[32m      int v1 = ledcRead(PWM_CH1), v2 = ledcRead(PWM_CH2);[m
+[32m+[m[32m      int v3 = ledcRead(PWM_CH3), v4 = ledcRead(PWM_CH4);[m
+[32m+[m[32m      adicionarSaidaPwm(v1, v2, v3, v4, anguloMovimentoComControle, (v1+v2+v3+v4)/4.0f, 0);[m
+[32m+[m[41m      [m
+[32m+[m[32m      seguirDirecaoPorAngulo(anguloMovimentoComControle, velocidadeIr);[m
+[32m+[m[32m    }[m
+[32m+[m[32m    return;[m
+[32m+[m[32m  }[m
+[32m+[m
+[32m+[m[32m  // =========================================================================[m
+[32m+[m[32m  // PRIORIDADE 2: fuga de linha[m
+[32m+[m[32m  // =========================================================================[m
+[32m+[m[32m  if (linhaValida) {[m
+[32m+[m[32m    fugindoLinhaAgora  = true;[m
+[32m+[m[32m    anguloFugaLinhaCmd = normalizarAngulo360(anguloLinhaParaFuga);[m
+[32m+[m[32m    float anguloFugaSuavizado = suavizarAnguloMovimentoAtacante(anguloFugaLinhaCmd);[m
+[32m+[m[32m    int vel = aplicarFreioUltrassonicoAtacante(VELOCIDADE_FUGA_LINHA);[m
+[32m+[m[41m    [m
+[32m+[m[32m    adicionarComandoMovimento(anguloFugaSuavizado, vel, 1, true, false, 0);[m
+[32m+[m[32m    int v1 = ledcRead(PWM_CH1), v2 = ledcRead(PWM_CH2);[m
+[32m+[m[32m    int v3 = ledcRead(PWM_CH3), v4 = ledcRead(PWM_CH4);[m
+[32m+[m[32m    adicionarSaidaPwm(v1, v2, v3, v4, anguloFugaSuavizado, (v1+v2+v3+v4)/4.0f, 0);[m
+[32m+[m[41m    [m
+[32m+[m[32m    seguirDirecaoPorAngulo(anguloFugaSuavizado, vel);[m
+[32m+[m[32m    return;[m
+[32m+[m[32m  }[m
+[32m+[m
+[32m+[m[32m  // =========================================================================[m
+[32m+[m[32m  // PRIORIDADE 3: erro grande = giro puro[m
+[32m+[m[32m  // =========================================================================[m
+[32m+[m[32m  if (erroGrande) {[m
+[32m+[m[32m    adicionarComandoMovimento(0.0f, 0, 2, false, true, (int16_t)erroAlinhamentoGraus);[m
+[32m+[m[32m    int v1 = ledcRead(PWM_CH1), v2 = ledcRead(PWM_CH2);[m
+[32m+[m[32m    int v3 = ledcRead(PWM_CH3), v4 = ledcRead(PWM_CH4);[m
+[32m+[m[32m    adicionarSaidaPwm(v1, v2, v3, v4, 0.0f, 0, (int16_t)erroAlinhamentoGraus);[m
+[32m+[m[41m    [m
+[32m+[m[32m    girarNoEixo(cmdPidAssinado);[m
+[32m+[m[32m    return;[m
+[32m+[m[32m  }[m
+[32m+[m
+[32m+[m[32m  // =========================================================================[m
+[32m+[m[32m  // PRIORIDADE 4: IR disponível[m
+[32m+[m[32m  // =========================================================================[m
+[32m+[m[32m  if (irDisponivel) {[m
+[32m+[m[32m    if (linhaDetectada && anguloLinhaPe >= 0.0f) {[m
+[32m+[m[32m      fugindoLinhaAgora  = true;[m
+[32m+[m[32m      anguloFugaLinhaCmd = normalizarAngulo360(anguloLinhaPe);[m
+[32m+[m[32m      float anguloFugaSuavizado = suavizarAnguloMovimentoAtacante(anguloFugaLinhaCmd);[m
+[32m+[m[32m      int vel = aplicarFreioUltrassonicoAtacante(VELOCIDADE_FUGA_LINHA);[m
+[32m+[m[41m      [m
+[32m+[m[32m      adicionarComandoMovimento(anguloFugaSuavizado, vel, 1, true, false, 0);[m
+[32m+[m[32m      int v1 = ledcRead(PWM_CH1), v2 = ledcRead(PWM_CH2);[m
+[32m+[m[32m      int v3 = ledcRead(PWM_CH3), v4 = ledcRead(PWM_CH4);[m
+[32m+[m[32m      adicionarSaidaPwm(v1, v2, v3, v4, anguloFugaSuavizado, (v1+v2+v3+v4)/4.0f, 0);[m
+[32m+[m[41m      [m
+[32m+[m[32m      seguirDirecaoPorAngulo(anguloFugaSuavizado, vel);[m
+[32m+[m[32m      return;[m
+[32m+[m[32m    }[m
+[32m+[m[41m    [m
+[32m+[m[32m    if (irNaFaixaFrontal(anguloIrBufferizado)) {[m
+[32m+[m[32m      int vel = aplicarFreioUltrassonicoAtacanteFrente(VELOCIDADE_IR_FRONTAL_PWM);[m
+[32m+[m[32m      adicionarComandoMovimento(0.0f, vel, 0, false, false, 0);[m
+[32m+[m[32m      int v1 = ledcRead(PWM_CH1), v2 = ledcRead(PWM_CH2);[m
+[32m+[m[32m      int v3 = ledcRead(PWM_CH3), v4 = ledcRead(PWM_CH4);[m
+[32m+[m[32m      adicionarSaidaPwm(v1, v2, v3, v4, 0.0f, (v1+v2+v3+v4)/4.0f, 0);[m
+[32m+[m[41m      [m
+[32m+[m[32m      if (ultraTcm > 150) moverFrenteComGiro(vel, cmdPidAssinado);[m
+[32m+[m[32m      else                 moverFrenteComGiro(vel, cmdPidAssinado);[m
+[32m+[m[32m    } else {[m
+[32m+[m[32m      float anguloIrAlvo = normalizarAngulo360(mapearAnguloBolaParaMovimento(anguloIrBufferizado) + (erroAlinhamentoGraus * 2));[m
+[32m+[m[32m      float anguloIrComRampa = obterAnguloIrSuavizado(anguloIrAlvo);[m
+[32m+[m[32m      int velocidadeIr = aplicarFreioUltrassonicoAtacante(calcularVelocidadeIrPorAngulo(anguloIrBufferizado));[m
+[32m+[m[32m      float anguloMovimentoComControle = suavizarAnguloMovimentoAtacante(anguloIrComRampa);[m
+[32m+[m[41m      [m
+[32m+[m[32m      adicionarComandoMovimento(anguloMovimentoComControle, velocidadeIr, 0, false, false, 0);[m
+[32m+[m[32m      int v1 = ledcRead(PWM_CH1), v2 = ledcRead(PWM_CH2);[m
+[32m+[m[32m      int v3 = ledcRead(PWM_CH3), v4 = ledcRead(PWM_CH4);[m
+[32m+[m[32m      adicionarSaidaPwm(v1, v2, v3, v4, anguloMovimentoComControle, (v1+v2+v3+v4)/4.0f, 0);[m
+[32m+[m[41m      [m
+[32m+[m[32m      seguirDirecaoPorAngulo(anguloMovimentoComControle, velocidadeIr);[m
+[32m+[m[32m    }[m
+[32m+[m[32m    return;[m
+[32m+[m[32m  }[m
+[32m+[m
+[32m+[m[32m  // =========================================================================[m
+[32m+[m[32m  // PRIORIDADE 5: câmera como fallback de bola[m
+[32m+[m[32m  // =========================================================================[m
+[32m+[m[32m  if (cameraBolaFiltradaVisivel) {[m
+[32m+[m[32m    bool semBolaTempoSuficiente = !cameraBolaBrutaVisivel &&[m
+[32m+[m[32m                                  (cameraSemBolaBrutaInicioMs > 0) &&[m
+[32m+[m[32m                                  ((millis() - cameraSemBolaBrutaInicioMs) >= ATACANTE_ESPERA_SEM_BOLA_CAMERA_MS);[m
+[32m+[m[32m    float anguloCameraVetorial = semBolaTempoSuficiente ? calcularAnguloBuscaSemBolaCameraAtacante() : anguloCameraBolaFiltrado;[m
+[32m+[m[32m    float anguloCameraComRampa = obterAnguloIrSuavizado(anguloCameraVetorial);[m
+[32m+[m[32m    float anguloMovimentoComControle = suavizarAnguloMovimentoAtacante(anguloCameraComRampa);[m
+[32m+[m[32m    int vel = aplicarFreioUltrassonicoAtacante(velocidade_maxima);[m
+[32m+[m[41m    [m
+[32m+[m[32m    adicionarComandoMovimento(anguloMovimentoComControle, vel, 0, false, false, 0);[m
+[32m+[m[32m    int v1 = ledcRead(PWM_CH1), v2 = ledcRead(PWM_CH2);[m
+[32m+[m[32m    int v3 = ledcRead(PWM_CH3), v4 = ledcRead(PWM_CH4);[m
+[32m+[m[32m    adicionarSaidaPwm(v1, v2, v3, v4, anguloMovimentoComControle, (v1+v2+v3+v4)/4.0f, 0);[m
+[32m+[m[41m    [m
+[32m+[m[32m    seguirDirecaoComGiro(anguloMovimentoComControle, vel, cmdPidAssinado);[m
+[32m+[m[32m    return;[m
+[32m+[m[32m  }[m
+[32m+[m
+[32m+[m[32m  // =========================================================================[m
+[32m+[m[32m  // PRIORIDADE 6: apenas alinhamento (sem bola)[m
+[32m+[m[32m  // =======================================================================
