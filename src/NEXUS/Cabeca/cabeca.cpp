@@ -8,6 +8,8 @@
 #include <math.h>
 #include <WiFi.h>
 #include <esp_now.h>
+#include "cabeca_web_server.hpp"
+#include "pacotes_dados_html.hpp"
 
 // ===================== ESP-NOW - ALTERE O MAC AQUI =====================
 // MAC da Cabeca do outro robo (CRONOS). Use o ambiente descobridor_mac para encontrar.
@@ -78,7 +80,7 @@ bool readReg(uint8_t reg, uint8_t &value) {
     return false;
   }
 
-  size_t n = Wire.requestFrom((int)QMC5883P_ADDR, 1, true);
+  size_t n = Wire.requestFrom((uint8_t)QMC5883P_ADDR, (uint8_t)1, (uint8_t)true);
   if (n != 1) {
     Serial.print("Erro I2C readReg(requestFrom) reg 0x");
     Serial.print(reg, HEX);
@@ -144,7 +146,7 @@ bool readQMC5883PData(int16_t &x, int16_t &y, int16_t &z) {
     return false;
   }
 
-  size_t n = Wire.requestFrom((int)QMC5883P_ADDR, 6, true);
+  size_t n = Wire.requestFrom((uint8_t)QMC5883P_ADDR, (uint8_t)6, (uint8_t)true);
   if (n != 6) {
     Serial.print("Leitura incompleta: ");
     Serial.println((int)n);
@@ -293,6 +295,18 @@ bool kickerAtivado = false;
 int ultimoKickerEnviado = -1;
 float ultimoHeadingBussola = 0.0f;
 bool bussolaOK = false;
+int16_t headingReferenciaBussola = -1;
+unsigned long ultimoRxHeadingBussolaMs = 0;
+unsigned long ultimoRxReferenciaBussolaMs = 0;
+uint16_t mapa32Seq = 0;
+uint16_t mapa32Limiar = 0;
+uint16_t mapa32Sensores[PacotesDadosHtml::MAP32_SENSOR_COUNT] = {0};
+unsigned long mapa32UltimoRxMs = 0;
+bool mapa32Valido = false;
+
+CabecaWebServer webServerCabeca;
+const char* WEB_AP_SSID = "NEXUS_CABECA";
+const char* WEB_AP_PASS = "12345678";
 
 void prepararTrocaPapelPe() {
   // Durante a troca de papel, o Pe ainda pode emitir alguns frames no formato anterior.
@@ -594,6 +608,7 @@ void atualizarBussola() {
 
   head = calcularHead(rawX, rawY);
   ultimoHeadingBussola = (float)head;
+  ultimoRxHeadingBussolaMs = millis();
 
   Serial.print("BUS X:");
   Serial.print(rawX);
@@ -664,6 +679,14 @@ void processarMensagem(String msg) {
   } else if (msg.startsWith("setlim:")) {
     SerialPe.print("SETLIM:");
     SerialPe.println(msg.substring(7));
+  } else if (msg.startsWith("busref:")) {
+    String v = msg.substring(7);
+    v.trim();
+    int ref = v.toInt();
+    if (ref < 0) ref = 0;
+    if (ref >= 360) ref %= 360;
+    headingReferenciaBussola = (int16_t)ref;
+    ultimoRxReferenciaBussolaMs = millis();
   } else if (msg.length() > 0) {
     Serial.print("Recebido do musculo: ");
     Serial.println(msg);
@@ -911,6 +934,25 @@ void enviarEstadoKickerParaMusculo() {
   ultimoEnvioKickerMusculoMs = millis();
 }
 
+void processarPacoteMapa32(const PacotesDadosHtml::Mapa32Payload& payload) {
+  mapa32Seq = payload.seq;
+  mapa32Limiar = payload.limiar;
+
+  for (uint8_t i = 0; i < PacotesDadosHtml::MAP32_SENSOR_COUNT; i++) {
+    mapa32Sensores[i] = payload.sensores[i];
+  }
+
+  mapa32UltimoRxMs = millis();
+  mapa32Valido = true;
+
+  webServerCabeca.updateMap32Snapshot(
+      mapa32Seq,
+      mapa32Limiar,
+      mapa32Sensores,
+      mapa32Valido,
+      mapa32UltimoRxMs);
+}
+
 // Valida respostas textuais de vida e marca comunicacao ativa.
 void processarTextoResposta(String &buffer, bool &flagResposta) {
   buffer.trim();
@@ -1044,8 +1086,36 @@ void lerRespostaPe() {
 
   while (SerialPe.available() > 0) {
     if (SerialPe.peek() == BYTE_INICIA) {
+      if (SerialPe.available() < 2) {
+        return;
+      }
+
       SerialPe.read();
       byte id = SerialPe.read();
+
+      if (id == PacotesDadosHtml::MAP32_ID) {
+        if (SerialPe.available() < (int)(sizeof(PacotesDadosHtml::Mapa32Payload) + 2)) {
+          return;
+        }
+
+        PacotesDadosHtml::Mapa32Payload payload;
+        SerialPe.readBytes((uint8_t*)&payload, sizeof(PacotesDadosHtml::Mapa32Payload));
+        uint8_t crcRx = (uint8_t)SerialPe.read();
+        byte stop = SerialPe.read();
+
+        if (stop != PacotesDadosHtml::MAP32_STOP) {
+          continue;
+        }
+
+        uint8_t crcEsperado = PacotesDadosHtml::crcMapa32(payload);
+        if (crcEsperado != crcRx) {
+          continue;
+        }
+
+        processarPacoteMapa32(payload);
+        continue;
+      }
+
       if (id != ID_PLACA_PE) {
         continue;
       }
@@ -1236,6 +1306,7 @@ void setup() {
   }
 
   iniciarEspNow();
+  webServerCabeca.begin(WEB_AP_SSID, WEB_AP_PASS);
 
   unsigned long inicioHandshake = millis();
   while ((millis() - inicioHandshake) < 3000 && !comunicacaoMusculoOK) {
@@ -1262,8 +1333,23 @@ void loop() {
   lerSerialMusculo();
   lerRespostaOlho();
   lerRespostaPe();
+  webServerCabeca.updateUltrasSnapshot(
+      ultimoUltraDX10,
+      ultimoUltraEX10,
+      ultimoUltraFX10,
+      ultimoUltraTX10,
+      ultimoRxOlhoMs);
   enviarIrParaMusculo();
   atualizarBussola();
+  bool refValida = (ultimoRxReferenciaBussolaMs > 0) && ((millis() - ultimoRxReferenciaBussolaMs) < 8000);
+  int16_t refAtual = refValida ? headingReferenciaBussola : (int16_t)ultimoHeadingBussola;
+  webServerCabeca.updateBussolaSnapshot(
+      ultimoHeadingBussola,
+      bussolaOK,
+      refAtual,
+      refValida,
+      ultimoRxHeadingBussolaMs,
+      ultimoRxReferenciaBussolaMs);
   enviarBussolaParaMusculo();
   enviarCameraParaMusculo();  // Envia dados de camera (bola + 2 gols)
   enviarLinhaParaMusculo();
@@ -1273,6 +1359,7 @@ void loop() {
   enviarEstadoKickerParaMusculo();
   enviarEstadoParaPlacas();
   atualizarEspNow();
+  webServerCabeca.handleClient();
 
   delay(1);
 }

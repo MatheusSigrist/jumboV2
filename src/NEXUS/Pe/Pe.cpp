@@ -7,6 +7,7 @@
 #include <EEPROM.h>
 #include <math.h>
 #include <stdint.h>
+#include "pacotes_dados_html.hpp"
 
 #define BYTE_INICIA 0xAA
 #define BYTE_PARA 0x55
@@ -55,6 +56,9 @@ String bufferHandshakeCabeca = "";
 unsigned long ultimoByteHandshakeCabeca = 0;
 bool enviarSensoresBrutosPendentes = false;
 int limiarLinha = LIMIAR_LINHA_PADRAO;
+unsigned long ultimoEnvioMapa32Ms = 0;
+uint16_t seqMapa32 = 0;
+const unsigned long INTERVALO_MAPA32_MS = 250;
 
 const int EEPROM_SIZE = 64;
 const int EEPROM_ADDR_LIMIAR_LINHA = 0;
@@ -191,6 +195,32 @@ void enviarSensoresBrutosSolicitados() {
   Serial1.print(ldr[16]);  // Sensor 17
   Serial1.print(",");
   Serial1.println(ldr[24]); // Sensor 25
+}
+
+void enviarPacoteMapa32ParaCabeca() {
+  unsigned long agora = millis();
+  if ((agora - ultimoEnvioMapa32Ms) < INTERVALO_MAPA32_MS) {
+    return;
+  }
+
+  PacotesDadosHtml::Mapa32Payload payload;
+  payload.seq = ++seqMapa32;
+  payload.limiar = (uint16_t)limiarLinha;
+
+  for (uint8_t i = 0; i < PacotesDadosHtml::MAP32_SENSOR_COUNT; i++) {
+    int idxFisico = mapaSensores[i];
+    payload.sensores[i] = (uint16_t)ldr[idxFisico];
+  }
+
+  uint8_t crc = PacotesDadosHtml::crcMapa32(payload);
+
+  Serial1.write(PacotesDadosHtml::MAP32_START);
+  Serial1.write(PacotesDadosHtml::MAP32_ID);
+  Serial1.write((uint8_t*)&payload, sizeof(payload));
+  Serial1.write(crc);
+  Serial1.write(PacotesDadosHtml::MAP32_STOP);
+
+  ultimoEnvioMapa32Ms = agora;
 }
 
 // Calcula o angulo da linha por centroide ponderado dos sensores ativos.
@@ -377,6 +407,7 @@ void loop() {
   }
 
   enviarSensoresBrutosSolicitados();
+  enviarPacoteMapa32ParaCabeca();
 
   unsigned long agora = millis();
   if (DEBUG_LINHA && (agora - ultimoDebugMs >= INTERVALO_DEBUG_MS)) {

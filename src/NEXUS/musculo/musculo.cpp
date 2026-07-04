@@ -221,6 +221,8 @@ bool corGolAzul             = false;
 bool corGolPendenteEnvio    = true;
 unsigned long ultimoEnvioCorGolMs         = 0;
 const unsigned long INTERVALO_ENVIO_COR_GOL_MS = 500;
+unsigned long ultimoEnvioRefBussolaMs = 0;
+const unsigned long INTERVALO_ENVIO_REF_BUSSOLA_MS = 500;
 
 // --- Kicker ---
 bool kickerRecebido         = false;
@@ -1070,6 +1072,21 @@ void enviarCorGolParaCabeca() {
   ultimoEnvioCorGolMs = millis();
 }
 
+// Envia a referencia de heading salva na EEPROM para a Cabeca.
+void enviarReferenciaBussolaParaCabeca(bool forcar = false) {
+  if (!forcar && (millis() - ultimoEnvioRefBussolaMs) < INTERVALO_ENVIO_REF_BUSSOLA_MS) {
+    return;
+  }
+
+  int ref = headingBussolaSalvo;
+  if (ref < 0) ref = 0;
+  if (ref >= 360) ref %= 360;
+
+  Serial1.print("BUSREF:");
+  Serial1.println(ref);
+  ultimoEnvioRefBussolaMs = millis();
+}
+
 // Solicita leituras brutas de sensor ao Pé (somente na tela de sensores)
 void solicitarSensoresBrutosPe(bool forcar = false) {
   if (estadoAtual != FUNCAO || subMenuFuncao != SUBFUNCAO_SENSORES) {
@@ -1750,6 +1767,9 @@ void processarEventoBotao(uint8_t botao) {
       headingBussolaSalvo = headingBussolaTeste;
       EEPROM.put(EEPROM_ADDR_BUSSOLA, headingBussolaSalvo);
       bool ok = EEPROM.commit();
+      if (ok) {
+        enviarReferenciaBussolaParaCabeca(true);
+      }
       mensagemBotao = ok ? "BUSSOLA GRAVADA" : "ERRO EEPROM";
       subMenuCalibracao = SUBMENU_PRINCIPAL; itemSubMenu = 0;
     } else if (botao == 1 || botao == 2) {
@@ -3277,6 +3297,7 @@ void setup() {
   }
 
   enviarEstadoJogoParaCabeca(true);
+  enviarReferenciaBussolaParaCabeca(true);
   desenharTelaAtual();
 }
 
@@ -3300,6 +3321,7 @@ void loop() {
   atualizarPapelAutomaticoPorParceria();
   enviarEstadoJogoParaCabeca();
   enviarCorGolParaCabeca();
+  enviarReferenciaBussolaParaCabeca();
   solicitarSensoresBrutosPe();
   if (!limiarLinhaSincronizado) solicitarLimiarLinhaPe();
   atualizarKicker();
