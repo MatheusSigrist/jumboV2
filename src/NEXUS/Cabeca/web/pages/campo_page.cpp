@@ -17,7 +17,7 @@ String renderCampoPage() {
   body += "<div class=\"muted\" id=\"ultraMeta\" style=\"margin-bottom:10px;\">Referencias: campo 182 x 243 cm, circulo central diametro 60 cm, robo diametro 21 cm.</div>";
 
   body += "<div style=\"width:min(94vw,820px);margin:0 auto;\">";
-  body += "<svg viewBox=\"0 0 1980 2590\" style=\"width:100%;height:auto;display:block;border-radius:12px;box-shadow:0 8px 20px rgba(0,0,0,.15);background:#0a0a0a;\" aria-label=\"Campo RoboCup 2D\">";
+  body += "<svg viewBox=\"0 0 1980 2590\" style=\"width:100%;height:auto;display:block;border-radius:12px;box-shadow:0 8px 20px rgba(0,0,0,.35);background:#0a0a0a;\" aria-label=\"Campo RoboCup 2D\">";
 
   body += "<rect x=\"40\" y=\"40\" width=\"1900\" height=\"2510\" rx=\"36\" fill=\"#0d0d0d\"/>";
   body += "<rect x=\"80\" y=\"80\" width=\"1820\" height=\"2430\" fill=\"#00b53f\"/>";
@@ -27,11 +27,11 @@ String renderCampoPage() {
 
   body += "<circle cx=\"990\" cy=\"1295\" r=\"300\" fill=\"none\" stroke=\"#f4f4f4\" stroke-width=\"12\"/>";
 
-  body += "<path d=\"M 590 200 H 1390 Q 1540 200 1540 350 V 450 H 440 V 350 Q 440 200 590 200 Z\" fill=\"none\" stroke=\"#f4f4f4\" stroke-width=\"12\"/>";
-  body += "<path d=\"M 440 2140 H 1540 V 2240 Q 1540 2390 1390 2390 H 590 Q 440 2390 440 2240 Z\" fill=\"none\" stroke=\"#f4f4f4\" stroke-width=\"12\"/>";
+  body += "<path d=\"M 440 200 H 1540 V 300 Q 1540 450 1390 450 H 590 Q 440 450 440 300 Z\" fill=\"none\" stroke=\"#f4f4f4\" stroke-width=\"12\"/>";
+  body += "<path d=\"M 590 2140 H 1390 Q 1540 2140 1540 2290 V 2390 H 440 V 2290 Q 440 2140 590 2140 Z\" fill=\"none\" stroke=\"#f4f4f4\" stroke-width=\"12\"/>";
 
-  body += "<rect x=\"700\" y=\"110\" width=\"580\" height=\"60\" fill=\"#1f5eff\" opacity=\"0.95\"/>";
-  body += "<rect x=\"700\" y=\"2420\" width=\"580\" height=\"60\" fill=\"#ffd21f\" opacity=\"0.95\"/>";
+  body += "<rect x=\"700\" y=\"110\" width=\"580\" height=\"60\" fill=\"#ffd21f\" opacity=\"0.95\"/>";
+  body += "<rect x=\"700\" y=\"2420\" width=\"580\" height=\"60\" fill=\"#1f5eff\" opacity=\"0.95\"/>";
 
   body += "<g id=\"robot\" transform=\"translate(990 1540)\">";
   body += "<circle r=\"105\" fill=\"#202020\" stroke=\"#ffffff\" stroke-width=\"8\"/>";

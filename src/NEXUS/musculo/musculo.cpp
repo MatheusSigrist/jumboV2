@@ -25,8 +25,7 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <EEPROM.h>
-#include <Adafruit_GFX.h>
-#include <Adafruit_SSD1306.h>
+#include "display/ihm_display.hpp"
 
 
 // =============================================================================
@@ -42,12 +41,9 @@ bool papelAtacanteAnterior = false;  // Detecta mudanças de papel entre ciclos
 #define RX_CABECA 17
 #define TX_CABECA 18
 
-// --- Pinos do barramento I2C e dimensões do display OLED ---
+// --- Pinos do barramento I2C ---
 #define SDA_PIN 8
 #define SCL_PIN 9
-#define SCREEN_WIDTH  128
-#define SCREEN_HEIGHT  64
-#define OLED_ADDR     0x3C
 
 // --- Pinos da Ponte H — Conjunto A (Motores 1 e 2) ---
 #define IN1_1_A  5
@@ -81,10 +77,6 @@ bool papelAtacanteAnterior = false;  // Detecta mudanças de papel entre ciclos
 constexpr uint8_t  KICKER_PIN = 21;
 constexpr unsigned long KICK_PULSE_MS = 100;   // Duração do pulso de chute (ms)
 constexpr unsigned long KICK_INTERVAL_MS = 1000;  // Intervalo mínimo entre chutes (ms)
-
-// --- Instância do display OLED ---
-Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
-
 
 // =============================================================================
 // SECAO 2 — VARIAVEIS DE COMUNICACAO E ESTADO GERAL
@@ -254,7 +246,7 @@ const int EEPROM_ADDR_COR_GOL     = EEPROM_ADDR_PAPEL_CONFIG + (int)sizeof(uint8
 
 // Enums de configuração de papel e cor de gol (persistidos em EEPROM)
 enum PapelConfigurado { PAPEL_CONFIG_ATACANTE, PAPEL_CONFIG_DEFENSOR, PAPEL_CONFIG_AUTO };
-PapelConfigurado papelConfiguradoMenu = PAPEL_CONFIG_AUTO;
+int papelConfiguradoMenu = PAPEL_CONFIG_AUTO;
 
 // Aplica o papel configurado localmente (ignora a Cabeça quando fixo)
 void aplicarPapelConfiguradoLocal() {
@@ -308,7 +300,7 @@ void carregarCorGolEEPROM() {
 // =============================================================================
 
 enum Estado { MENU, CALIBRACAO, FUNCAO, INICIAR };
-Estado estadoAtual   = MENU;
+int estadoAtual   = MENU;
 int    itemSelecionado = 0;
 
 // Submenus da calibração
@@ -321,7 +313,7 @@ enum SubMenuCalibracao {
   SUBMENU_CAMERA,
   SUBMENU_ESPNOW
 };
-SubMenuCalibracao subMenuCalibracao = SUBMENU_PRINCIPAL;
+int subMenuCalibracao = SUBMENU_PRINCIPAL;
 int itemSubMenu = 0;
 
 // Submenus de função
@@ -332,7 +324,7 @@ enum SubMenuFuncao {
   SUBFUNCAO_LIMIAR_LINHA,
   SUBFUNCAO_KICKER
 };
-SubMenuFuncao subMenuFuncao     = SUBFUNCAO_PRINCIPAL;
+int subMenuFuncao     = SUBFUNCAO_PRINCIPAL;
 int           itemSubMenuFuncao = 0;
 
 
@@ -1118,690 +1110,7 @@ void enviarLimiarLinhaParaPe() {
 }
 
 
-// =============================================================================
-// SECAO 16 — INTERFACE OLED: TELAS DE MENU E CALIBRACAO
-// =============================================================================
-
-// Desenha a tela principal de menu
-void desenharMenu() {
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 0);
-  display.println("==== MENU ====");
-  display.println();
-  int16_t anguloGolMenu = -999;
-  bool golVisivelMenu = cameraTemGolSelecionadoValido(anguloGolMenu);
-
-  // Item 0: CALIBRACAO
-  if (itemSelecionado == 0) {
-    display.fillRect(0, 16, 128, 10, SSD1306_WHITE);
-    display.setTextColor(SSD1306_BLACK);
-    display.setCursor(4, 18);
-    display.println("CALIBRACAO");
-    display.setTextColor(SSD1306_WHITE);
-  } else {
-    display.setCursor(4, 18);
-    display.println("CALIBRACAO");
-  }
-
-  // Item 1: FUNCAO
-  if (itemSelecionado == 1) {
-    display.fillRect(0, 32, 128, 10, SSD1306_WHITE);
-    display.setTextColor(SSD1306_BLACK);
-    display.setCursor(4, 34);
-    display.println("FUNCAO");
-    display.setTextColor(SSD1306_WHITE);
-  } else {
-    display.setCursor(4, 34);
-    display.println("FUNCAO");
-  }
-
-  // Item 2: INICIAR
-  if (itemSelecionado == 2) {
-    display.fillRect(0, 44, 128, 10, SSD1306_WHITE);
-    display.setTextColor(SSD1306_BLACK);
-    display.setCursor(4, 46);
-    display.println("INICIAR");
-    display.setTextColor(SSD1306_WHITE);
-  } else {
-    display.setCursor(4, 46);
-    display.println("INICIAR");
-  }
-
-  // Rodapé: papel atual e status do ESP-NOW
-  display.setCursor(0, 56);
-  display.print("P:");
-  display.print(papelAtacante ? "ATC" : "DEF");
-  display.print(" ESN:");
-  display.print(espnowConectadoRecente() ? "ON" : "OFF");
-  display.display();
-}
-
-// Desenha as telas do submenu de função (papéis, sensores, limiar, kicker)
-void desenharSubmenuFuncao() {
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 0);
-  display.println("=== FUNCAO ===");
-  display.println();
-
-  // --- Nível principal: escolhe entre PAPEIS, SENSORES, KICKER ou VOLTA ---
-  if (subMenuFuncao == SUBFUNCAO_PRINCIPAL) {
-    if (itemSubMenuFuncao == 0) {
-      display.fillRect(0, 16, 128, 8, SSD1306_WHITE);
-      display.setTextColor(SSD1306_BLACK);
-      display.setCursor(4, 16);
-      display.println("PAPEIS");
-      display.setTextColor(SSD1306_WHITE);
-    } else {
-      display.setCursor(4, 16);
-      display.println("PAPEIS");
-    }
-    if (itemSubMenuFuncao == 1) {
-      display.fillRect(0, 24, 128, 8, SSD1306_WHITE);
-      display.setTextColor(SSD1306_BLACK);
-      display.setCursor(4, 24);
-      display.println("SENSORES");
-      display.setTextColor(SSD1306_WHITE);
-    } else {
-      display.setCursor(4, 24);
-      display.println("SENSORES");
-    }
-    if (itemSubMenuFuncao == 2) {
-      display.fillRect(0, 32, 128, 8, SSD1306_WHITE);
-      display.setTextColor(SSD1306_BLACK);
-      display.setCursor(4, 32);
-      display.println("KICKER");
-      display.setTextColor(SSD1306_WHITE);
-    } else {
-      display.setCursor(4, 32);
-      display.println("KICKER");
-    }
-    if (itemSubMenuFuncao == 3) {
-      display.fillRect(0, 40, 128, 8, SSD1306_WHITE);
-      display.setTextColor(SSD1306_BLACK);
-      display.setCursor(4, 40);
-      display.println("VOLTA");
-      display.setTextColor(SSD1306_WHITE);
-    } else {
-      display.setCursor(4, 40);
-      display.println("VOLTA");
-    }
-    display.setCursor(0, 48);
-    display.print("MODO: ");
-    if      (papelConfiguradoMenu == PAPEL_CONFIG_ATACANTE) display.println("ATACANTE");
-    else if (papelConfiguradoMenu == PAPEL_CONFIG_DEFENSOR) display.println("DEFENSOR");
-    else                                                    display.println("AUTO");
-    display.setCursor(0, 56);
-    display.print("PAPEL: ");
-    display.print(papelAtacante ? "ATC" : "DEF");
-    display.print(" ");
-    display.println(espnowConectadoRecente() ? "ON" : "OFF");
-
-  // --- Nível papeis: ATACANTE, DEFENSOR, AUTO, VOLTA ---
-  } else if (subMenuFuncao == SUBFUNCAO_PAPEIS) {
-    if (itemSubMenuFuncao == 0) {
-      display.fillRect(0, 16, 128, 8, SSD1306_WHITE);
-      display.setTextColor(SSD1306_BLACK);
-      display.setCursor(4, 16);
-      display.println("ATACANTE");
-      display.setTextColor(SSD1306_WHITE);
-    } else {
-      display.setCursor(4, 16);
-      display.println("ATACANTE");
-    }
-    if (itemSubMenuFuncao == 1) {
-      display.fillRect(0, 24, 128, 8, SSD1306_WHITE);
-      display.setTextColor(SSD1306_BLACK);
-      display.setCursor(4, 24);
-      display.println("DEFENSOR");
-      display.setTextColor(SSD1306_WHITE);
-    } else {
-      display.setCursor(4, 24);
-      display.println("DEFENSOR");
-    }
-    if (itemSubMenuFuncao == 2) {
-      display.fillRect(0, 32, 128, 8, SSD1306_WHITE);
-      display.setTextColor(SSD1306_BLACK);
-      display.setCursor(4, 32);
-      display.println("AUTO");
-      display.setTextColor(SSD1306_WHITE);
-    } else {
-      display.setCursor(4, 32);
-      display.println("AUTO");
-    }
-    if (itemSubMenuFuncao == 3) {
-      display.fillRect(0, 40, 128, 8, SSD1306_WHITE);
-      display.setTextColor(SSD1306_BLACK);
-      display.setCursor(4, 40);
-      display.println("VOLTA");
-      display.setTextColor(SSD1306_WHITE);
-    } else {
-      display.setCursor(4, 40);
-      display.println("VOLTA");
-    }
-    display.setCursor(0, 56);
-    display.println("BTN3 CONFIRMA");
-
-  // --- Nível sensores: exibe leituras brutas dos LDRs ---
-  } else if (subMenuFuncao == SUBFUNCAO_SENSORES) {
-    bool sensoresRecentes = (ultimoRxSensoresBrutosMs > 0) &&
-                            ((millis() - ultimoRxSensoresBrutosMs) <= TIMEOUT_SENSORES_BRUTOS_MS);
-    display.setCursor(0, 8);
-    display.println("LDR BRUTO PE");
-    display.setCursor(0, 20);
-    display.print("S1 :"); display.print(sensoresRecentes ? sensorBruto1  : -1);
-    display.setCursor(66, 20);
-    display.print("S9 :"); display.print(sensoresRecentes ? sensorBruto9  : -1);
-    display.setCursor(0, 34);
-    display.print("S17:"); display.print(sensoresRecentes ? sensorBruto17 : -1);
-    display.setCursor(66, 34);
-    display.print("S25:"); display.print(sensoresRecentes ? sensorBruto25 : -1);
-    display.setCursor(0, 46);
-    display.println(sensoresRecentes ? "DADOS: OK" : "DADOS: AGUARDANDO");
-    display.setCursor(0, 56);
-    display.println("BTN3 ABRE LIMIAR");
-
-  // --- Nível limiar: ajuste manual do limiar de linha ---
-  } else if (subMenuFuncao == SUBFUNCAO_LIMIAR_LINHA) {
-    display.setCursor(0, 0);
-    display.println("AJUSTE LIMIAR LINHA");
-    display.setCursor(61, 16);
-    display.println("^");
-    display.setTextSize(2);
-    display.setCursor(24, 26);
-    display.println(limiarLinhaEditado);
-    display.setTextSize(1);
-    display.setCursor(61, 48);
-    display.println("v");
-    display.setCursor(0, 56);
-    display.println("BTN3 SALVA E VOLTA");
-
-  // --- Nível kicker: CHUTAR ou VOLTAR ---
-  } else if (subMenuFuncao == SUBFUNCAO_KICKER) {
-    if (itemSubMenuFuncao == 0) {
-      display.fillRect(0, 18, 128, 12, SSD1306_WHITE);
-      display.setTextColor(SSD1306_BLACK);
-      display.setCursor(24, 20);
-      display.println("CHUTAR");
-      display.setTextColor(SSD1306_WHITE);
-    } else {
-      display.setCursor(24, 20);
-      display.println("CHUTAR");
-    }
-    if (itemSubMenuFuncao == 1) {
-      display.fillRect(0, 36, 128, 12, SSD1306_WHITE);
-      display.setTextColor(SSD1306_BLACK);
-      display.setCursor(24, 38);
-      display.println("VOLTAR");
-      display.setTextColor(SSD1306_WHITE);
-    } else {
-      display.setCursor(24, 38);
-      display.println("VOLTAR");
-    }
-    display.setCursor(0, 56);
-    display.println("BTN3 CONFIRMA");
-  }
-
-  display.display();
-}
-
-// Desenha as telas do submenu de calibração (gol, bússola, IR, ultra, câmera, linha)
-void desenharSubmenuCalibracao() {
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 0);
-  display.println("== CALIBRACAO ==");
-  display.println();
-
-  // --- Nível principal: lista as opções de calibração ---
-  if (subMenuCalibracao == SUBMENU_PRINCIPAL) {
-    if (itemSubMenu == 0) {
-      display.fillRect(0, 16, 128, 8, SSD1306_WHITE);
-      display.setTextColor(SSD1306_BLACK);
-      display.setCursor(4, 16); display.println("GOL");
-      display.setTextColor(SSD1306_WHITE);
-    } else { display.setCursor(4, 16); display.println("GOL"); }
-
-    if (itemSubMenu == 1) {
-      display.fillRect(0, 24, 128, 8, SSD1306_WHITE);
-      display.setTextColor(SSD1306_BLACK);
-      display.setCursor(4, 24); display.println("BUSSOLA");
-      display.setTextColor(SSD1306_WHITE);
-    } else { display.setCursor(4, 24); display.println("BUSSOLA"); }
-
-    if (itemSubMenu == 2) {
-      display.fillRect(0, 32, 128, 8, SSD1306_WHITE);
-      display.setTextColor(SSD1306_BLACK);
-      display.setCursor(4, 32); display.println("IR");
-      display.setTextColor(SSD1306_WHITE);
-    } else { display.setCursor(4, 32); display.println("IR"); }
-
-    if (itemSubMenu == 3) {
-      display.fillRect(0, 40, 128, 8, SSD1306_WHITE);
-      display.setTextColor(SSD1306_BLACK);
-      display.setCursor(4, 40); display.println("ULTRA");
-      display.setTextColor(SSD1306_WHITE);
-    } else { display.setCursor(4, 40); display.println("ULTRA"); }
-
-    if (itemSubMenu == 4) {
-      display.fillRect(0, 48, 128, 8, SSD1306_WHITE);
-      display.setTextColor(SSD1306_BLACK);
-      display.setCursor(4, 48); display.println("CAM");
-      display.setTextColor(SSD1306_WHITE);
-    } else { display.setCursor(4, 48); display.println("CAM"); }
-
-    if (itemSubMenu == 5) {
-      display.fillRect(0, 56, 128, 8, SSD1306_WHITE);
-      display.setTextColor(SSD1306_BLACK);
-      display.setCursor(4, 56); display.println("LINHA CTR");
-      display.setTextColor(SSD1306_WHITE);
-    } else { display.setCursor(4, 56); display.println("LINHA CTR"); }
-
-    if (itemSubMenu == 6) {
-      display.fillRect(96, 0, 32, 8, SSD1306_WHITE);
-      display.setTextColor(SSD1306_BLACK);
-      display.setCursor(98, 2); display.println("VOLTA");
-      display.setTextColor(SSD1306_WHITE);
-    } else { display.setCursor(98, 2); display.println("VOLTA"); }
-
-  // --- Seleção de cor do gol (amarelo ou azul) ---
-  } else if (subMenuCalibracao == SUBMENU_GOL) {
-    display.println("Selecione cor do gol");
-    if (itemSubMenu == 0) {
-      display.fillRect(0, 24, 128, 10, SSD1306_WHITE);
-      display.setTextColor(SSD1306_BLACK);
-      display.setCursor(4, 26); display.println("AMARELO");
-      display.setTextColor(SSD1306_WHITE);
-    } else { display.setCursor(4, 26); display.println("AMARELO"); }
-    if (itemSubMenu == 1) {
-      display.fillRect(0, 40, 128, 10, SSD1306_WHITE);
-      display.setTextColor(SSD1306_BLACK);
-      display.setCursor(4, 42); display.println("AZUL");
-      display.setTextColor(SSD1306_WHITE);
-    } else { display.setCursor(4, 42); display.println("AZUL"); }
-    if (itemSubMenu == 2) {
-      display.fillRect(0, 54, 128, 10, SSD1306_WHITE);
-      display.setTextColor(SSD1306_BLACK);
-      display.setCursor(4, 56); display.println("VOLTA");
-      display.setTextColor(SSD1306_WHITE);
-    } else { display.setCursor(4, 56); display.println("VOLTA"); }
-
-  // --- Diagnóstico do IR vindo da Cabeça ---
-  } else if (subMenuCalibracao == SUBMENU_IR) {
-    display.clearDisplay();
-    display.setTextSize(1);
-    display.setTextColor(SSD1306_WHITE);
-    display.setCursor(0, 0);
-    display.println("=== TESTE IR ===");
-    display.println();
-    display.print("COM CABECA: ");
-    display.println(comunicacaoCabecaOK ? "OK" : "FALHA");
-    display.print("ANGULO IR: ");
-    if (irDetectado) { display.print(anguloIr, 1); display.println(" deg"); }
-    else               { display.println("SEM BOLA"); }
-    display.println();
-    display.println("BTN1/2/3 VOLTAR");
-
-  // --- Diagnóstico dos ultrassônicos ---
-  } else if (subMenuCalibracao == SUBMENU_ULTRA) {
-    display.clearDisplay();
-    display.setTextSize(1);
-    display.setTextColor(SSD1306_WHITE);
-    display.setCursor(0, 0);
-    display.println("=== TESTE ULTRA ===");
-    display.println();
-    if (ultrasValidos && ((millis() - ultimoRxUltraMs) < TIMEOUT_ULTRA_MS)) {
-      display.print("D: "); display.print(ultraDcm, 1); display.println(" cm");
-      display.print("E: "); display.print(ultraEcm, 1); display.println(" cm");
-      display.print("F: "); display.print(ultraFcm, 1); display.println(" cm");
-      display.print("T: "); display.print(ultraTcm, 1); display.println(" cm");
-    } else {
-      display.println("SEM DADOS");
-      display.println("ULTRA DA CABECA");
-      display.println("AGUARDANDO...");
-    }
-    display.println("BTN1/2/3 VOLTAR");
-
-  // --- Diagnóstico de linha (atacante: ângulo único; defensor: zonas A e B) ---
-  } else if (subMenuCalibracao == SUBMENU_ESPNOW) {
-    display.clearDisplay();
-    display.setTextSize(1);
-    display.setTextColor(SSD1306_WHITE);
-    display.setCursor(0, 0);
-    display.println("=== TESTE LINHA ===");
-    display.setCursor(0, 12);
-    display.print("PAPEL: ");
-    display.println(papelAtacante ? "ATC" : "DEF");
-    if (papelAtacante) {
-      display.setCursor(0, 24);
-      display.print("ANG: ");
-      if (linhaDetectada && anguloLinhaPe >= 0.0f) { display.print(anguloLinhaPe, 1); display.println(" deg"); }
-      else                                           { display.println("SEM LEITURA"); }
-      display.setCursor(0, 40);
-      display.print("ESN: ");
-      display.println(espnowConectadoRecente() ? "CONECTADO" : "DESCONECTADO");
-    } else {
-      display.setCursor(0, 22);
-      display.print("A: ");
-      if (linhaZonaAValida && anguloLinhaZonaA >= 0.0f) { display.print(anguloLinhaZonaA, 1); display.println(" deg"); }
-      else                                                { display.println("SEM LEITURA"); }
-      display.setCursor(0, 32);
-      display.print("B: ");
-      if (linhaZonaBValida && anguloLinhaZonaB >= 0.0f) { display.print(anguloLinhaZonaB, 1); display.println(" deg"); }
-      else                                                { display.println("SEM LEITURA"); }
-      display.setCursor(0, 44);
-      display.print("ESN: ");
-      display.println(espnowConectadoRecente() ? "CONECTADO" : "DESCONECTADO");
-    }
-    display.setCursor(0, 56);
-    display.println("BTN1/2/3 VOLTAR");
-
-  // --- Diagnóstico da câmera (bola + 2 gols: ângulo e distância) ---
-  } else if (subMenuCalibracao == SUBMENU_CAMERA) {
-    display.clearDisplay();
-    display.setTextSize(1);
-    display.setTextColor(SSD1306_WHITE);
-    display.setCursor(0, 0);
-    display.println("TESTE CAM");
-    bool dataTimeout = !cameraPacoteRecente();
-    display.setTextSize(2);
-    display.setCursor(0, 16);
-    if (!dataTimeout) {
-      display.print("B ");  display.print(cameraBallAngle);   display.print("/"); display.println(cameraBallDist);
-      display.print("AZ "); display.print(cameraBlueAngle);   display.print("/"); display.println(cameraBlueDist);
-      display.print("AM "); display.print(cameraYellowAngle); display.print("/"); display.println(cameraYellowDist);
-    } else {
-      display.println("SEM");
-      display.println("SINAL");
-    }
-
-  // --- Calibração da bússola: mostra leitura atual e valor salvo ---
-  } else {
-    display.setCursor(0, 0);
-    display.println("BUSSOLA AGORA");
-    display.println();
-    display.print("COM: ");
-    display.println((comunicacaoCabecaOK && bussolaValida) ? "OK" : "SEM DADO");
-    display.setTextSize(3);
-    display.setCursor(8, 20);
-    if (bussolaValida) {
-      display.print(headingBussolaTeste);
-      display.print((char)247);
-    } else {
-      display.setTextSize(2);
-      display.setCursor(8, 24);
-      display.print("---");
-    }
-    display.setTextSize(1);
-    display.setCursor(0, 54);
-    display.print("SALVO:");
-    display.print(headingBussolaSalvo);
-    display.print((char)247);
-    display.print("  BTN3 SALVA");
-  }
-
-  display.display();
-}
-
-// Desenha a tela de operação (jogo ativo) com telemetria de sensores
-void desenharOperacao() {
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 0);
-  display.println("=== OPERACAO TESTE ===");
-  display.println();
-  int16_t anguloGolOperacao = -999;
-  bool golVisivelOperacao = cameraTemGolSelecionadoValido(anguloGolOperacao);
-  display.print("COM CABECA: "); display.println(comunicacaoCabecaOK ? "OK" : "FALHA");
-  display.print("IR ANG: ");
-  if (irDetectado) { display.print(anguloIr, 1); display.println(" deg"); }
-  else               { display.println("NAO DETECTADO"); }
-  display.print("ERRO GOL: ");
-  if (golVisivelOperacao) {
-    float erroGolMostrado = calcularErroGolPorPapel((float)anguloGolOperacao);
-    display.print(erroGolMostrado, 1); display.println(" deg");
-  } else {
-    display.println("SEM GOL");
-  }
-  display.print("LINHA ANG: ");
-  if (linhaDetectada) {
-    display.print(anguloLinhaPe, 1); display.println(" deg");
-    display.print("FUGA CMD: "); display.print(anguloFugaLinhaCmd, 1); display.println(" deg");
-  } else {
-    display.println("SEM LINHA");
-  }
-  if (golVisivelOperacao) {
-    display.print("ERRO: "); display.print(erroAlinhamentoGraus, 1); display.println(" deg");
-    if (fugindoLinhaAgora) { display.println("MODO: FUGINDO LINHA"); }
-    else                   { display.println(alinhandoAgora ? "MODO: ALINHANDO GOL" : "MODO: SEGUINDO BOLA"); }
-    display.print("PIX: ");
-    bool usarAzul = golReferenciaAzulEfetiva();
-    display.println(usarAzul ? cameraBlueDist : cameraYellowDist);
-  } else if (fugindoLinhaAgora) {
-    display.println("MODO: FUGINDO LINHA");
-  }
-  display.display();
-}
-
-// Exibe tela com status de comunicação entre as placas
-void desenharStatusPlacas() {
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 0);
-  display.println("=== TESTE PLACAS ===");
-  display.println();
-  display.print("MUSC<->CAB: "); display.println(comunicacaoCabecaOK ? "OK" : "FALHA");
-  display.print("OLHO: ");       display.println(olhoOK ? "OK" : "FALHA");
-  display.print("PE: ");         display.println(peOK   ? "OK" : "FALHA");
-  display.display();
-}
-
-// Exibe tela de falha quando o handshake com a Cabeça cai
-void mostrarTelaFalhaComunicacao() {
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 0);
-  display.println("=== TESTE COM/BTN ===");
-  display.println();
-  display.println("COM CABECA: FALHA");
-  display.println("Verifique serial 17/18");
-  display.println();
-  display.print("Ultimo: "); display.println(mensagemBotao);
-  display.display();
-}
-
-// Roteia para a tela correta conforme estado atual e comunicação
-void desenharTelaAtual() {
-  if (millis() < mostrarStatusAte) {
-    desenharStatusPlacas();
-    return;
-  }
-  // Sem handshake válido, tela de falha tem prioridade absoluta
-  if (!comunicacaoCabecaOK) {
-    mostrarTelaFalhaComunicacao();
-    return;
-  }
-  if      (estadoAtual == MENU)       desenharMenu();
-  else if (estadoAtual == CALIBRACAO) desenharSubmenuCalibracao();
-  else if (estadoAtual == FUNCAO)     desenharSubmenuFuncao();
-  else                                desenharOperacao();
-}
-
-
-// =============================================================================
-// SECAO 17 — INTERFACE OLED: PROCESSAMENTO DE BOTOES
-// =============================================================================
-
-// Trata eventos de botão e navega entre menus, calibrações e operação
-void processarEventoBotao(uint8_t botao) {
-
-  // --- MENU PRINCIPAL: BTN1 sobe, BTN2 desce, BTN3 confirma ---
-  if (estadoAtual == MENU) {
-    if      (botao == 1) { itemSelecionado--; if (itemSelecionado < 0) itemSelecionado = 2; }
-    else if (botao == 2) { itemSelecionado++; if (itemSelecionado > 2) itemSelecionado = 0; }
-    else if (botao == 3) {
-      if (itemSelecionado == 0) {
-        estadoAtual = CALIBRACAO; subMenuCalibracao = SUBMENU_PRINCIPAL; itemSubMenu = 0;
-      } else if (itemSelecionado == 1) {
-        estadoAtual = FUNCAO; subMenuFuncao = SUBFUNCAO_PRINCIPAL; itemSubMenuFuncao = 0;
-      } else {
-        estadoAtual = INICIAR; atualizarSozinhoLocal(); enviarEstadoJogoParaCabeca(true);
-      }
-    }
-    return;
-  }
-
-  // --- FUNCAO > PRINCIPAL ---
-  if (estadoAtual == FUNCAO && subMenuFuncao == SUBFUNCAO_PRINCIPAL) {
-    if      (botao == 1) { itemSubMenuFuncao--; if (itemSubMenuFuncao < 0) itemSubMenuFuncao = 3; }
-    else if (botao == 2) { itemSubMenuFuncao++; if (itemSubMenuFuncao > 3) itemSubMenuFuncao = 0; }
-    else if (botao == 3) {
-      if (itemSubMenuFuncao == 0) {
-        subMenuFuncao = SUBFUNCAO_PAPEIS;
-        if      (papelConfiguradoMenu == PAPEL_CONFIG_ATACANTE) itemSubMenuFuncao = 0;
-        else if (papelConfiguradoMenu == PAPEL_CONFIG_DEFENSOR) itemSubMenuFuncao = 1;
-        else                                                     itemSubMenuFuncao = 2;
-      } else if (itemSubMenuFuncao == 1) {
-        subMenuFuncao = SUBFUNCAO_SENSORES; solicitarSensoresBrutosPe(true);
-      } else if (itemSubMenuFuncao == 2) {
-        subMenuFuncao = SUBFUNCAO_KICKER; itemSubMenuFuncao = 0;
-      } else {
-        estadoAtual = MENU; itemSelecionado = 1;
-      }
-    }
-    return;
-  }
-
-  // --- FUNCAO > PAPEIS ---
-  if (estadoAtual == FUNCAO && subMenuFuncao == SUBFUNCAO_PAPEIS) {
-    if      (botao == 1) { itemSubMenuFuncao--; if (itemSubMenuFuncao < 0) itemSubMenuFuncao = 3; }
-    else if (botao == 2) { itemSubMenuFuncao++; if (itemSubMenuFuncao > 3) itemSubMenuFuncao = 0; }
-    else if (botao == 3) {
-      if (itemSubMenuFuncao == 0) {
-        papelConfiguradoMenu = PAPEL_CONFIG_ATACANTE; aplicarPapelConfiguradoLocal(); enviarPapelAtualParaCabeca();
-        mensagemBotao = salvarPapelConfiguradoEEPROM() ? "PAPEL FIXO ATC" : "ERRO EEPROM";
-      } else if (itemSubMenuFuncao == 1) {
-        papelConfiguradoMenu = PAPEL_CONFIG_DEFENSOR; aplicarPapelConfiguradoLocal(); enviarPapelAtualParaCabeca();
-        mensagemBotao = salvarPapelConfiguradoEEPROM() ? "PAPEL FIXO DEF" : "ERRO EEPROM";
-      } else if (itemSubMenuFuncao == 2) {
-        papelConfiguradoMenu = PAPEL_CONFIG_AUTO;
-        mensagemBotao = salvarPapelConfiguradoEEPROM() ? "PAPEL AUTO" : "ERRO EEPROM";
-      }
-      subMenuFuncao = SUBFUNCAO_PRINCIPAL; itemSubMenuFuncao = 0;
-    }
-    return;
-  }
-
-  // --- FUNCAO > SENSORES ---
-  if (estadoAtual == FUNCAO && subMenuFuncao == SUBFUNCAO_SENSORES) {
-    if (botao == 1 || botao == 2) { solicitarSensoresBrutosPe(true); }
-    else if (botao == 3) {
-      subMenuFuncao = SUBFUNCAO_LIMIAR_LINHA;
-      limiarLinhaSincronizado = false;
-      entradaTelaLimiarMs = millis();
-      solicitarLimiarLinhaPe(true);
-    }
-    return;
-  }
-
-  // --- FUNCAO > LIMIAR DE LINHA ---
-  if (estadoAtual == FUNCAO && subMenuFuncao == SUBFUNCAO_LIMIAR_LINHA) {
-    if      (botao == 1) { limiarLinhaEditado += LIMIAR_LINHA_PASSO; if (limiarLinhaEditado > LIMIAR_LINHA_MAX) limiarLinhaEditado = LIMIAR_LINHA_MAX; limiarLinhaSincronizado = true; }
-    else if (botao == 2) { limiarLinhaEditado -= LIMIAR_LINHA_PASSO; if (limiarLinhaEditado < LIMIAR_LINHA_MIN) limiarLinhaEditado = LIMIAR_LINHA_MIN; limiarLinhaSincronizado = true; }
-    else if (botao == 3) { enviarLimiarLinhaParaPe(); mensagemBotao = "LIMIAR SALVO"; subMenuFuncao = SUBFUNCAO_PRINCIPAL; itemSubMenuFuncao = 1; }
-    return;
-  }
-
-  // --- FUNCAO > KICKER ---
-  if (estadoAtual == FUNCAO && subMenuFuncao == SUBFUNCAO_KICKER) {
-    if (botao == 1 || botao == 2) { itemSubMenuFuncao = 1 - itemSubMenuFuncao; }
-    else if (botao == 3) {
-      if (itemSubMenuFuncao == 0) { solicitarChuteManualkicker(); mensagemBotao = "CHUTE MANUAL"; }
-      else                         { subMenuFuncao = SUBFUNCAO_PRINCIPAL; itemSubMenuFuncao = 2; }
-    }
-    return;
-  }
-
-  // --- CALIBRACAO > PRINCIPAL ---
-  if (estadoAtual == CALIBRACAO && subMenuCalibracao == SUBMENU_PRINCIPAL) {
-    if      (botao == 1) { itemSubMenu--; if (itemSubMenu < 0) itemSubMenu = 6; }
-    else if (botao == 2) { itemSubMenu++; if (itemSubMenu > 6) itemSubMenu = 0; }
-    else if (botao == 3) {
-      if      (itemSubMenu == 0) { subMenuCalibracao = SUBMENU_GOL;     itemSubMenu = corGolAzul ? 1 : 0; }
-      else if (itemSubMenu == 1) { subMenuCalibracao = SUBMENU_BUSSOLA; itemSubMenu = 0; }
-      else if (itemSubMenu == 2) { subMenuCalibracao = SUBMENU_IR;      itemSubMenu = 0; }
-      else if (itemSubMenu == 3) { subMenuCalibracao = SUBMENU_ULTRA;   itemSubMenu = 0; }
-      else if (itemSubMenu == 4) { subMenuCalibracao = SUBMENU_CAMERA;  itemSubMenu = 0; }
-      else if (itemSubMenu == 5) { subMenuCalibracao = SUBMENU_ESPNOW;  itemSubMenu = 0; }
-      else                        { estadoAtual = MENU; itemSelecionado = 0; }
-    }
-    return;
-  }
-
-  // --- CALIBRACAO > GOL: seleciona a cor e marca envio pendente ---
-  if (estadoAtual == CALIBRACAO && subMenuCalibracao == SUBMENU_GOL) {
-    if      (botao == 1) { itemSubMenu--; if (itemSubMenu < 0) itemSubMenu = 2; }
-    else if (botao == 2) { itemSubMenu++; if (itemSubMenu > 2) itemSubMenu = 0; }
-    else if (botao == 3) {
-      if (itemSubMenu == 0 || itemSubMenu == 1) {
-        corGolAzul = (itemSubMenu == 1);
-        corGolPendenteEnvio = true;
-        bool ok = salvarCorGolEEPROM();
-        mensagemBotao = ok ? (corGolAzul ? "GOL AZUL SALVO" : "GOL AMARELO SALVO") : "ERRO EEPROM";
-      }
-      subMenuCalibracao = SUBMENU_PRINCIPAL; itemSubMenu = 0;
-    }
-    return;
-  }
-
-  // --- CALIBRACAO > BUSSOLA: BTN3 salva referência de heading ---
-  if (estadoAtual == CALIBRACAO && subMenuCalibracao == SUBMENU_BUSSOLA) {
-    if (botao == 3) {
-      headingBussolaSalvo = headingBussolaTeste;
-      EEPROM.put(EEPROM_ADDR_BUSSOLA, headingBussolaSalvo);
-      bool ok = EEPROM.commit();
-      if (ok) {
-        enviarReferenciaBussolaParaCabeca(true);
-      }
-      mensagemBotao = ok ? "BUSSOLA GRAVADA" : "ERRO EEPROM";
-      subMenuCalibracao = SUBMENU_PRINCIPAL; itemSubMenu = 0;
-    } else if (botao == 1 || botao == 2) {
-      subMenuCalibracao = SUBMENU_PRINCIPAL; itemSubMenu = 1;
-    }
-    return;
-  }
-
-  // --- CALIBRACAO > IR, ULTRA, CAMERA, ESPNOW: qualquer botão volta ---
-  if (estadoAtual == CALIBRACAO && subMenuCalibracao == SUBMENU_IR) {
-    if (botao == 1 || botao == 2 || botao == 3) { subMenuCalibracao = SUBMENU_PRINCIPAL; itemSubMenu = 2; }
-    return;
-  }
-  if (estadoAtual == CALIBRACAO && subMenuCalibracao == SUBMENU_ULTRA) {
-    if (botao == 1 || botao == 2 || botao == 3) { subMenuCalibracao = SUBMENU_PRINCIPAL; itemSubMenu = 3; }
-    return;
-  }
-  if (estadoAtual == CALIBRACAO && subMenuCalibracao == SUBMENU_CAMERA) {
-    if (botao == 1 || botao == 2 || botao == 3) { subMenuCalibracao = SUBMENU_PRINCIPAL; itemSubMenu = 4; }
-    return;
-  }
-  if (estadoAtual == CALIBRACAO && subMenuCalibracao == SUBMENU_ESPNOW) {
-    if (botao == 1 || botao == 2 || botao == 3) { subMenuCalibracao = SUBMENU_PRINCIPAL; itemSubMenu = 5; }
-    return;
-  }
-
-  // --- INICIAR: BTN3 volta ao menu e para o jogo ---
-  if (estadoAtual == INICIAR && botao == 3) {
-    estadoAtual = MENU;
-    enviarEstadoJogoParaCabeca(true);
-  }
-}
+// IHM movida para src/NEXUS/musculo/display/ihm_display.cpp
 
 
 // =============================================================================
@@ -3273,17 +2582,13 @@ void setup() {
 
   // Inicializa I2C e display OLED
   Wire.begin(SDA_PIN, SCL_PIN);
-  if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR)) {
+  if (!iniciarDisplayIHM()) {
     while (1) { delay(100); }
   }
-
-  // Exibe tela de inicialização
-  display.clearDisplay();
-  display.setTextSize(2);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(20, 25);
-  display.println("TESTANDO...");
-  display.display();
+  mostrarBootEtapaIHM("OLED", 20);
+  mostrarBootEtapaIHM("I2C", 35);
+  mostrarBootEtapaIHM("UART", 55);
+  mostrarBootEtapaIHM("EEPROM", 75);
 
   // Tenta handshake inicial com a Cabeça por TIMEOUT_COM_MS
   unsigned long inicio = millis();
@@ -3295,6 +2600,8 @@ void setup() {
     if (comunicacaoCabecaOK) break;
     delay(10);
   }
+
+  mostrarBootEtapaIHM("CABECA", 100);
 
   enviarEstadoJogoParaCabeca(true);
   enviarReferenciaBussolaParaCabeca(true);

@@ -27,6 +27,11 @@ class CabecaWebServer {
                              bool headingReferenciaValida,
                              unsigned long ultimoHeadingRxMs,
                              unsigned long ultimoReferenciaRxMs);
+  void updateRuntimeStatus(bool atacante,
+                           float loopFps,
+                           int32_t wifiRssiDbm,
+                           uint8_t apClients,
+                           unsigned long updatedMs);
 
  private:
   bool running_ = false;
@@ -48,4 +53,10 @@ class CabecaWebServer {
   bool bussolaReferenciaValida_ = false;
   unsigned long bussolaUltimoHeadingRxMs_ = 0;
   unsigned long bussolaUltimaRefRxMs_ = 0;
+
+  bool statusAtacante_ = true;
+  float statusLoopFps_ = 0.0f;
+  int32_t statusWifiRssiDbm_ = -127;
+  uint8_t statusApClients_ = 0;
+  unsigned long statusUpdatedMs_ = 0;
 };

@@ -175,6 +175,36 @@ bool CabecaWebServer::begin(const char* apSsid, const char* apPassword, uint16_t
       server.send(200, "application/json", json);
     });
 
+    server.on("/api/status", HTTP_GET, []() {
+      if (gSelf == nullptr) {
+        server.send(500, "application/json", "{\"erro\":\"server\"}");
+        return;
+      }
+
+      unsigned long idade = 0;
+      if (gSelf->statusUpdatedMs_ > 0) {
+        idade = millis() - gSelf->statusUpdatedMs_;
+      }
+
+      String json;
+      json.reserve(220);
+      json += "{\"papel\":\"";
+      json += gSelf->statusAtacante_ ? "ATACANTE" : "DEFENSOR";
+      json += "\",\"loop_fps\":";
+      json += String(gSelf->statusLoopFps_, 1);
+      json += ",\"wifi_dbm\":";
+      json += String(gSelf->statusWifiRssiDbm_);
+      json += ",\"wifi_ok\":";
+      json += (gSelf->statusWifiRssiDbm_ > -120) ? "true" : "false";
+      json += ",\"ap_clients\":";
+      json += String(gSelf->statusApClients_);
+      json += ",\"idade_ms\":";
+      json += String(idade);
+      json += "}";
+
+      server.send(200, "application/json", json);
+    });
+
     server.onNotFound([]() {
       server.send(404, "text/plain", "rota nao encontrada");
     });
@@ -251,4 +281,16 @@ void CabecaWebServer::updateBussolaSnapshot(float headingAtualDeg,
   bussolaReferenciaValida_ = headingReferenciaValida;
   bussolaUltimoHeadingRxMs_ = ultimoHeadingRxMs;
   bussolaUltimaRefRxMs_ = ultimoReferenciaRxMs;
+}
+
+void CabecaWebServer::updateRuntimeStatus(bool atacante,
+                                          float loopFps,
+                                          int32_t wifiRssiDbm,
+                                          uint8_t apClients,
+                                          unsigned long updatedMs) {
+  statusAtacante_ = atacante;
+  statusLoopFps_ = loopFps;
+  statusWifiRssiDbm_ = wifiRssiDbm;
+  statusApClients_ = apClients;
+  statusUpdatedMs_ = updatedMs;
 }

@@ -303,6 +303,8 @@ uint16_t mapa32Limiar = 0;
 uint16_t mapa32Sensores[PacotesDadosHtml::MAP32_SENSOR_COUNT] = {0};
 unsigned long mapa32UltimoRxMs = 0;
 bool mapa32Valido = false;
+unsigned long ultimoLoopWebStatusMs = 0;
+float loopFpsFiltrado = 0.0f;
 
 CabecaWebServer webServerCabeca;
 const char* WEB_AP_SSID = "NEXUS_CABECA";
@@ -1324,6 +1326,30 @@ void setup() {
 
 // Laco principal da Cabeca: coleta entradas e redistribui dados para o Musculo.
 void loop() {
+  unsigned long agoraLoopMs = millis();
+  if (ultimoLoopWebStatusMs == 0) {
+    ultimoLoopWebStatusMs = agoraLoopMs;
+    loopFpsFiltrado = 0.0f;
+  } else {
+    unsigned long dt = agoraLoopMs - ultimoLoopWebStatusMs;
+    if (dt > 0) {
+      float fpsInst = 1000.0f / (float)dt;
+      if (loopFpsFiltrado <= 0.01f) {
+        loopFpsFiltrado = fpsInst;
+      } else {
+        loopFpsFiltrado = (0.88f * loopFpsFiltrado) + (0.12f * fpsInst);
+      }
+    }
+    ultimoLoopWebStatusMs = agoraLoopMs;
+  }
+
+  webServerCabeca.updateRuntimeStatus(
+      atacanteCfg,
+      loopFpsFiltrado,
+      WiFi.RSSI(),
+      (uint8_t)WiFi.softAPgetStationNum(),
+      agoraLoopMs);
+
   if (millis() - ultimoEnvioOiMs >= INTERVALO_OI_MS) {
     SerialMusculo.println("oi");
     ultimoEnvioOiMs = millis();

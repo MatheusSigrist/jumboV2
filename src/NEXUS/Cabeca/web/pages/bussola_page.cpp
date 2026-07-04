@@ -16,7 +16,7 @@ String renderBussolaPage() {
 
   body += "<div style=\"display:grid;gap:12px;grid-template-columns:1fr;\">";
   body += "<div style=\"width:min(92vw,640px);margin:0 auto;\">";
-  body += "<canvas id=\"radar\" width=\"640\" height=\"640\" style=\"width:100%;height:auto;display:block;border-radius:14px;background:radial-gradient(circle at 50% 50%,#17341e 0%,#0a170f 60%,#050a07 100%);box-shadow:inset 0 0 30px rgba(0,0,0,.45),0 10px 24px rgba(0,0,0,.22);\"></canvas>";
+  body += "<canvas id=\"radar\" width=\"640\" height=\"640\" style=\"width:100%;height:auto;display:block;border-radius:14px;background:radial-gradient(circle at 50% 50%,#2a0d0d 0%,#130808 62%,#050404 100%);box-shadow:inset 0 0 30px rgba(0,0,0,.45),0 10px 24px rgba(0,0,0,.22);\"></canvas>";
   body += "</div>";
 
   body += "<div style=\"display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;\">";
@@ -39,10 +39,10 @@ String renderBussolaPage() {
   script += "function toRad(deg){return (deg-90)*Math.PI/180;}";
 
   script += "function drawGrid(cx,cy,r){";
-  script += "ctx.strokeStyle='rgba(68,214,92,0.55)';ctx.lineWidth=2;";
+  script += "ctx.strokeStyle='rgba(255,78,78,0.50)';ctx.lineWidth=2;";
   script += "for(let k=1;k<=4;k++){ctx.beginPath();ctx.arc(cx,cy,r*k/4,0,Math.PI*2);ctx.stroke();}";
   script += "for(let d=0;d<360;d+=30){const a=toRad(d);ctx.beginPath();ctx.moveTo(cx,cy);ctx.lineTo(cx+r*Math.cos(a),cy+r*Math.sin(a));ctx.stroke();}";
-  script += "ctx.fillStyle='rgba(187,255,200,0.9)';ctx.font='bold 16px Segoe UI, sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';";
+  script += "ctx.fillStyle='rgba(255,218,218,0.92)';ctx.font='bold 16px Segoe UI, sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';";
   script += "for(let d=0;d<360;d+=30){const a=toRad(d);const rr=r+20;ctx.fillText(String(d),cx+rr*Math.cos(a),cy+rr*Math.sin(a));}";
   script += "}";
 
@@ -58,9 +58,9 @@ String renderBussolaPage() {
   script += "const w=cvs.width,h=cvs.height,cx=w*0.5,cy=h*0.5,r=Math.min(w,h)*0.38;";
   script += "ctx.clearRect(0,0,w,h);drawGrid(cx,cy,r);";
   script += "if(st.atualOk&&st.refOk){drawSector(cx,cy,r,n360(st.atual),st.erro);}";
-  script += "if(st.refOk){drawNeedle(cx,cy,r,n360(st.ref),'#ffe600',5);}";
-  script += "if(st.atualOk){drawNeedle(cx,cy,r,n360(st.atual),'#01a0ff',5);}";
-  script += "ctx.fillStyle='#8dff9c';ctx.beginPath();ctx.arc(cx,cy,6,0,Math.PI*2);ctx.fill();";
+  script += "if(st.refOk){drawNeedle(cx,cy,r,n360(st.ref),'#ff8a8a',5);}";
+  script += "if(st.atualOk){drawNeedle(cx,cy,r,n360(st.atual),'#ff2a2a',5);}";
+  script += "ctx.fillStyle='#ffdcdc';ctx.beginPath();ctx.arc(cx,cy,6,0,Math.PI*2);ctx.fill();";
   script += "}";
 
   script += "function fmt(v){return Number.isFinite(v)?v.toFixed(1)+' deg':'-';}";
