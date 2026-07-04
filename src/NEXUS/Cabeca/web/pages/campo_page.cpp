@@ -45,54 +45,68 @@ String renderCampoPage() {
   body += "</main>";
 
   String script;
-  script.reserve(5200);
+  script.reserve(7600);
   script += "<script>";
   script += "const FIELD_W=182.0,FIELD_H=243.0,ROBOT_D=21.0,ROBOT_R=ROBOT_D/2.0;";
   script += "const COMP_TOL=22.0,MAX_JUMP=65.0;";
+  script += "const TAU_FAST=0.26,TAU_SLOW=0.78;";
   script += "let lastX=FIELD_W/2.0,lastY=FIELD_H/2.0,lastConf=0.0;";
+  script += "let lastTickMs=Date.now();";
   script += "const robotEl=document.getElementById('robot');const meta=document.getElementById('ultraMeta');";
 
   script += "function isValidDist(v){return Number.isFinite(v)&&v>1&&v<350;}";
   script += "function clamp(v,min,max){return Math.max(min,Math.min(max,v));}";
+  script += "function mix(a,b,t){return a*(1-t)+b*t;}";
 
-  script += "function pickAxis(cA,cB,residual,field,last){";
-  script += "const hasA=isValidDist(cA),hasB=isValidDist(cB);";
-  script += "const min=ROBOT_R,max=field-ROBOT_R;";
-  script += "let x=last,conf=0.05,state='fallback';";
+  script += "function complementary(prev,meas,conf,dtSec){";
+  script += "const tau=(conf>=0.8)?TAU_FAST:TAU_SLOW;";
+  script += "let alpha=Math.exp(-dtSec/Math.max(0.02,tau));";
+  script += "alpha=clamp(alpha+(1-conf)*0.18,0.08,0.96);";
+  script += "return alpha*prev+(1-alpha)*meas;}";
+
+  script += "function estimateAxis(aRaw,bRaw,field,last,dtSec,axis){";
+  script += "const hasA=isValidDist(aRaw),hasB=isValidDist(bRaw);";
+  script += "const min=ROBOT_R,max=field-ROBOT_R,usable=field-2*ROBOT_R;";
+  script += "let meas=last,conf=0.05,state='fallback',residual=999,sumAB=0;";
 
   script += "if(hasA&&hasB){";
-  script += "const a=clamp(cA,min,max),b=clamp(cB,min,max);";
-  script += "if(residual<=COMP_TOL){x=(a+b)*0.5;conf=0.95;state='compativel';}";
-  script += "else{";
-  script += "const score=(cand)=>{let s=1.0;s-=Math.min(1.0,Math.abs(cand-last)/MAX_JUMP);if(cand<=min||cand>=max)s-=0.25;return s;};";
-  script += "const sa=score(a),sb=score(b);const best=sa>=sb?a:b;const other=sa>=sb?b:a;";
-  script += "x=0.78*best+0.22*other;conf=0.45;state='incompativel_priorizado';}";
+  script += "const directA=clamp(aRaw+ROBOT_R,min,max);";
+  script += "const directB=clamp(field-(bRaw+ROBOT_R),min,max);";
+  script += "sumAB=Math.max(1.0,aRaw+bRaw);";
+  script += "residual=Math.abs((aRaw+bRaw+2*ROBOT_R)-field);";
+  script += "if(residual<=COMP_TOL){";
+  script += "meas=(directA+directB)*0.5;conf=0.95;state='compativel';";
+  script += "}else{";
+  script += "const fracA=clamp(aRaw/sumAB,0,1);";
+  script += "const fracB=clamp(bRaw/sumAB,0,1);";
+  script += "const mapFromA=min+fracA*usable;";
+  script += "const mapFromB=min+(1.0-fracB)*usable;";
+  script += "meas=0.5*(mapFromA+mapFromB);";
+  script += "conf=0.56;state='incompativel_mapeado';";
   script += "}";
-  script += "else if(hasA){x=clamp(cA,min,max);conf=0.60;state='single_a';}";
-  script += "else if(hasB){x=clamp(cB,min,max);conf=0.60;state='single_b';}";
+  script += "}else if(hasA){";
+  script += "meas=clamp(aRaw+ROBOT_R,min,max);conf=0.62;state=axis+'_single_a';";
+  script += "}else if(hasB){";
+  script += "meas=clamp(field-(bRaw+ROBOT_R),min,max);conf=0.62;state=axis+'_single_b';";
+  script += "}";
 
-  script += "return {x:clamp(x,min,max),conf,state};}";
+  script += "const jump=meas-last;";
+  script += "const limited=last+clamp(jump,-MAX_JUMP,MAX_JUMP);";
+  script += "const filtered=complementary(last,limited,conf,dtSec);";
+  script += "return {x:clamp(filtered,min,max),meas:clamp(meas,min,max),conf,state,residual,sum:sumAB};}";
 
   script += "function estimateFromUltras(u){";
   script += "const d=u.d,e=u.e,f=u.f,t=u.t;";
-  script += "const xFromLeft=e+ROBOT_R;";
-  script += "const xFromRight=FIELD_W-(d+ROBOT_R);";
-  script += "const yFromTop=f+ROBOT_R;";
-  script += "const yFromBottom=FIELD_H-(t+ROBOT_R);";
+  script += "const now=Date.now();const dtSec=clamp((now-lastTickMs)/1000.0,0.05,0.8);lastTickMs=now;";
 
-  script += "const xResidual=(isValidDist(d)&&isValidDist(e))?Math.abs((d+e+2*ROBOT_R)-FIELD_W):999;";
-  script += "const yResidual=(isValidDist(f)&&isValidDist(t))?Math.abs((f+t+2*ROBOT_R)-FIELD_H):999;";
+  script += "const rx=estimateAxis(e,d,FIELD_W,lastX,dtSec,'x');";
+  script += "const ry=estimateAxis(f,t,FIELD_H,lastY,dtSec,'y');";
 
-  script += "const rx=pickAxis(xFromLeft,xFromRight,xResidual,FIELD_W,lastX);";
-  script += "const ry=pickAxis(yFromTop,yFromBottom,yResidual,FIELD_H,lastY);";
-
-  script += "let x=0.72*lastX+0.28*rx.x;";
-  script += "let y=0.72*lastY+0.28*ry.x;";
-  script += "x=clamp(x,ROBOT_R,FIELD_W-ROBOT_R);";
-  script += "y=clamp(y,ROBOT_R,FIELD_H-ROBOT_R);";
+  script += "let x=rx.x;";
+  script += "let y=ry.x;";
 
   script += "lastX=x;lastY=y;lastConf=(rx.conf+ry.conf)*0.5;";
-  script += "return {x,y,conf:lastConf,xState:rx.state,yState:ry.state,xResidual,yResidual};}";
+  script += "return {x,y,conf:lastConf,xState:rx.state,yState:ry.state,xResidual:rx.residual,yResidual:ry.residual,xSum:rx.sum,ySum:ry.sum,xMeas:rx.meas,yMeas:ry.meas,dtSec};}";
 
   script += "function drawRobot(pos){";
   script += "const sx=80+pos.x*10.0;const sy=80+pos.y*10.0;";
@@ -105,7 +119,7 @@ String renderCampoPage() {
   script += "const r=await fetch('/api/ultras',{cache:'no-store'});if(!r.ok)return;const j=await r.json();";
   script += "const u={d:Number(j.uD_x10)/10.0,e:Number(j.uE_x10)/10.0,f:Number(j.uF_x10)/10.0,t:Number(j.uT_x10)/10.0};";
   script += "const pos=estimateFromUltras(u);drawRobot(pos);";
-  script += "meta.textContent='US (cm) D:'+fmt(u.d)+' E:'+fmt(u.e)+' F:'+fmt(u.f)+' T:'+fmt(u.t)+' | x:'+fmt(pos.x)+' y:'+fmt(pos.y)+' cm | conf:'+fmt(pos.conf*100)+'% | X:'+pos.xState+' Y:'+pos.yState+' | resid X:'+fmt(pos.xResidual)+' Y:'+fmt(pos.yResidual)+' | idade:'+Number(j.idade_ms||0)+' ms';";
+  script += "meta.textContent='US (cm) D:'+fmt(u.d)+' E:'+fmt(u.e)+' F:'+fmt(u.f)+' T:'+fmt(u.t)+' | somaX:'+fmt(pos.xSum)+' somaY:'+fmt(pos.ySum)+' | meas x:'+fmt(pos.xMeas)+' y:'+fmt(pos.yMeas)+' | filt x:'+fmt(pos.x)+' y:'+fmt(pos.y)+' cm | conf:'+fmt(pos.conf*100)+'% | X:'+pos.xState+' Y:'+pos.yState+' | resid X:'+fmt(pos.xResidual)+' Y:'+fmt(pos.yResidual)+' | dt:'+fmt(pos.dtSec*1000)+' ms | idade:'+Number(j.idade_ms||0)+' ms';";
   script += "}catch(_){}}";
 
   script += "tick();setInterval(tick,250);";
