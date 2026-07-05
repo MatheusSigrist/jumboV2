@@ -307,6 +307,18 @@ unsigned long ultimoLoopWebStatusMs = 0;
 float loopFpsFiltrado = 0.0f;
 
 CabecaWebServer webServerCabeca;
+
+bool encaminharAlvoPosicionamentoMusculo(float xCm, float yCm) {
+  if (!comunicacaoMusculoOK) {
+    return false;
+  }
+
+  SerialMusculo.print("POS:");
+  SerialMusculo.print(xCm, 1);
+  SerialMusculo.print("/");
+  SerialMusculo.println(yCm, 1);
+  return true;
+}
 const char* WEB_AP_SSID = "NEXUS_CABECA";
 const char* WEB_AP_PASS = "12345678";
 
@@ -1308,6 +1320,7 @@ void setup() {
   }
 
   iniciarEspNow();
+  webServerCabeca.setPositionTargetSender(encaminharAlvoPosicionamentoMusculo);
   webServerCabeca.begin(WEB_AP_SSID, WEB_AP_PASS);
 
   unsigned long inicioHandshake = millis();

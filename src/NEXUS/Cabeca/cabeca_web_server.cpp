@@ -26,6 +26,34 @@ float erroSignedGraus(float referencia, float atual) {
   while (erro < -180.0f) erro += 360.0f;
   return erro;
 }
+
+bool parseTargetPair(const String& raw, float& xCm, float& yCm) {
+  String texto = raw;
+  texto.trim();
+  int sep = texto.indexOf('/');
+  if (sep <= 0) {
+    return false;
+  }
+
+  String sx = texto.substring(0, sep);
+  String sy = texto.substring(sep + 1);
+  sx.trim();
+  sy.trim();
+  sx.replace(',', '.');
+  sy.replace(',', '.');
+
+  if (sx.length() == 0 || sy.length() == 0) {
+    return false;
+  }
+
+  xCm = sx.toFloat();
+  yCm = sy.toFloat();
+  return isfinite(xCm) && isfinite(yCm);
+}
+}
+
+void CabecaWebServer::setPositionTargetSender(bool (*sender)(float xCm, float yCm)) {
+  positionTargetSender_ = sender;
 }
 
 bool CabecaWebServer::begin(const char* apSsid, const char* apPassword, uint16_t port) {
@@ -202,6 +230,39 @@ bool CabecaWebServer::begin(const char* apSsid, const char* apPassword, uint16_t
       json += String(idade);
       json += "}";
 
+      server.send(200, "application/json", json);
+    });
+
+    server.on("/api/posicionamento", HTTP_POST, []() {
+      if (gSelf == nullptr) {
+        server.send(500, "application/json", "{\"erro\":\"server\"}");
+        return;
+      }
+      if (gSelf->positionTargetSender_ == nullptr) {
+        server.send(503, "application/json", "{\"erro\":\"sender_indisponivel\"}");
+        return;
+      }
+
+      String alvo = server.arg("alvo");
+      float xCm = 0.0f;
+      float yCm = 0.0f;
+      if (!parseTargetPair(alvo, xCm, yCm)) {
+        server.send(400, "application/json", "{\"erro\":\"formato_invalido\"}");
+        return;
+      }
+
+      if (!gSelf->positionTargetSender_(xCm, yCm)) {
+        server.send(409, "application/json", "{\"erro\":\"nao_encaminhado\"}");
+        return;
+      }
+
+      String json;
+      json.reserve(80);
+      json += "{\"ok\":true,\"alvo\":\"";
+      json += String(xCm, 1);
+      json += "/";
+      json += String(yCm, 1);
+      json += "\"}";
       server.send(200, "application/json", json);
     });
 

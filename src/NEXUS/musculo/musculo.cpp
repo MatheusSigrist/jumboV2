@@ -320,12 +320,26 @@ int itemSubMenu = 0;
 enum SubMenuFuncao {
   SUBFUNCAO_PRINCIPAL,
   SUBFUNCAO_PAPEIS,
+  SUBFUNCAO_POSICIONAMENTO,
   SUBFUNCAO_SENSORES,
   SUBFUNCAO_LIMIAR_LINHA,
   SUBFUNCAO_KICKER
 };
 int subMenuFuncao     = SUBFUNCAO_PRINCIPAL;
 int           itemSubMenuFuncao = 0;
+
+void pararMotores();
+void seguirDirecaoPorAngulo(float anguloGraus, int velocidade);
+
+// Posicionamento por coordenadas enviado via HTTPS (repasse da Cabeca)
+bool posicionamentoAlvoAtivo = false;
+float posicionamentoAlvoXcm = 91.0f;
+float posicionamentoAlvoYcm = 121.5f;
+float posicionamentoAtualXcm = 91.0f;
+float posicionamentoAtualYcm = 121.5f;
+float posicionamentoConfianca = 0.0f;
+float posicionamentoAnguloAlvoGraus = 0.0f;
+unsigned long posicionamentoUltimaEstimativaMs = 0;
 
 
 // =============================================================================
@@ -373,6 +387,18 @@ bool   alinhandoAgora     = false;  // true quando executando giro de alinhament
 bool   fugindoLinhaAgora  = false;  // true quando executando fuga de linha
 float  anguloFugaLinhaCmd = 0.0f;   // Ângulo do comando de fuga enviado aos motores
 const int VELOCIDADE_FUGA_LINHA = 255;
+
+const float CAMPO_LARGURA_CM = 182.0f;
+const float CAMPO_ALTURA_CM = 243.0f;
+const float ROBO_DIAMETRO_CAMPO_CM = 21.0f;
+const float ROBO_RAIO_CAMPO_CM = ROBO_DIAMETRO_CAMPO_CM * 0.5f;
+const float POS_COMP_TOL_CM = 22.0f;
+const float POS_TAU_FAST = 0.26f;
+const float POS_TAU_SLOW = 0.48f;
+const float POS_TOLERANCIA_CM = 10.0f;
+const float POS_TOLERANCIA_STOP_BRUTA_CM = 13.0f;
+const float POS_JUMP_MAX_CM = 35.0f;
+const int POS_VELOCIDADE_PWM = 100;
 
 // --- Tolerâncias de alinhamento ---
 // *** AJUSTE AQUI para afinar a janela de alinhamento com o gol ***
@@ -503,6 +529,170 @@ float mapearFaixaClamped(float valor, float entradaMin, float entradaMax,
   if (proporcao < 0.0f) proporcao = 0.0f;
   if (proporcao > 1.0f) proporcao = 1.0f;
   return saidaMin + ((saidaMax - saidaMin) * proporcao);
+}
+
+bool posicionamentoModuloArmado() {
+  return (estadoAtual == FUNCAO) && (subMenuFuncao == SUBFUNCAO_POSICIONAMENTO);
+}
+
+void cancelarPosicionamentoAlvo(bool manterMensagem = false) {
+  posicionamentoAlvoAtivo = false;
+  resetPidBussola();
+  pararMotores();
+  if (!manterMensagem) {
+    mensagemBotao = "POS CANCELADO";
+    mostrarStatusAte = millis() + 1800;
+  }
+}
+
+bool ultraValidoParaPosicao(float v) {
+  return isfinite(v) && v > 1.0f && v < 350.0f;
+}
+
+float filtroComplementarPos(float anterior, float medicao, float confianca, float dtSec) {
+  float tau = (confianca >= 0.8f) ? POS_TAU_FAST : POS_TAU_SLOW;
+  if (tau < 0.02f) tau = 0.02f;
+  float alpha = expf(-dtSec / tau);
+  alpha = constrain(alpha + ((1.0f - confianca) * 0.18f), 0.08f, 0.96f);
+  return (alpha * anterior) + ((1.0f - alpha) * medicao);
+}
+
+struct EixoPosResultado {
+  float valor;
+  float medida;
+  float confianca;
+  float residual;
+};
+
+EixoPosResultado estimarEixoPosicao(float leituraA,
+                                    float leituraB,
+                                    float campo,
+                                    float ultimo,
+                                    float dtSec) {
+  const bool temA = ultraValidoParaPosicao(leituraA);
+  const bool temB = ultraValidoParaPosicao(leituraB);
+  const float minimo = ROBO_RAIO_CAMPO_CM;
+  const float maximo = campo - ROBO_RAIO_CAMPO_CM;
+  const float utilizavel = campo - (2.0f * ROBO_RAIO_CAMPO_CM);
+
+  float medida = ultimo;
+  float confianca = 0.05f;
+  float residual = 999.0f;
+
+  if (temA && temB) {
+    float diretoA = constrain(leituraA + ROBO_RAIO_CAMPO_CM, minimo, maximo);
+    float diretoB = constrain(campo - (leituraB + ROBO_RAIO_CAMPO_CM), minimo, maximo);
+    float soma = leituraA + leituraB;
+    if (soma < 1.0f) soma = 1.0f;
+    residual = fabsf((leituraA + leituraB + (2.0f * ROBO_RAIO_CAMPO_CM)) - campo);
+    if (residual <= POS_COMP_TOL_CM) {
+      medida = 0.5f * (diretoA + diretoB);
+      confianca = 0.95f;
+    } else {
+      float fracA = constrain(leituraA / soma, 0.0f, 1.0f);
+      float fracB = constrain(leituraB / soma, 0.0f, 1.0f);
+      float mapaA = minimo + (fracA * utilizavel);
+      float mapaB = minimo + ((1.0f - fracB) * utilizavel);
+      medida = 0.5f * (mapaA + mapaB);
+      confianca = 0.56f;
+    }
+  } else if (temA) {
+    medida = constrain(leituraA + ROBO_RAIO_CAMPO_CM, minimo, maximo);
+    confianca = 0.62f;
+  } else if (temB) {
+    medida = constrain(campo - (leituraB + ROBO_RAIO_CAMPO_CM), minimo, maximo);
+    confianca = 0.62f;
+  }
+
+  float salto = medida - ultimo;
+  float medidaLimitada = ultimo + constrain(salto, -POS_JUMP_MAX_CM, POS_JUMP_MAX_CM);
+  float filtrada = filtroComplementarPos(ultimo, medidaLimitada, confianca, dtSec);
+
+  EixoPosResultado out;
+  out.valor = constrain(filtrada, minimo, maximo);
+  out.medida = constrain(medida, minimo, maximo);
+  out.confianca = confianca;
+  out.residual = residual;
+  return out;
+}
+
+bool estimarPosicaoCampoAtual(float &xCm, float &yCm, float &confianca) {
+  unsigned long agora = millis();
+  float dtSec = 0.08f;
+  if (posicionamentoUltimaEstimativaMs > 0 && agora > posicionamentoUltimaEstimativaMs) {
+    dtSec = (agora - posicionamentoUltimaEstimativaMs) / 1000.0f;
+    if (dtSec < 0.05f) dtSec = 0.05f;
+    if (dtSec > 0.8f) dtSec = 0.8f;
+  }
+  posicionamentoUltimaEstimativaMs = agora;
+
+  EixoPosResultado eixoX = estimarEixoPosicao(ultraEcm, ultraDcm, CAMPO_LARGURA_CM,
+                                              posicionamentoAtualXcm, dtSec);
+  EixoPosResultado eixoY = estimarEixoPosicao(ultraFcm, ultraTcm, CAMPO_ALTURA_CM,
+                                              posicionamentoAtualYcm, dtSec);
+
+  xCm = eixoX.valor;
+  yCm = eixoY.valor;
+  confianca = 0.5f * (eixoX.confianca + eixoY.confianca);
+
+  posicionamentoAtualXcm = xCm;
+  posicionamentoAtualYcm = yCm;
+  posicionamentoConfianca = confianca;
+  return (eixoX.confianca > 0.1f) && (eixoY.confianca > 0.1f);
+}
+
+bool dentroToleranciaPos(float erroX, float erroY, float tolerancia) {
+  return (fabsf(erroX) <= tolerancia) && (fabsf(erroY) <= tolerancia);
+}
+
+bool executarPosicionamentoAlvo() {
+  if (!posicionamentoModuloArmado()) {
+    if (posicionamentoAlvoAtivo) {
+      cancelarPosicionamentoAlvo(true);
+      mensagemBotao = "POS SAIU MODULO";
+      mostrarStatusAte = millis() + 1800;
+    }
+    return false;
+  }
+
+  if (!posicionamentoAlvoAtivo) {
+    resetPidBussola();
+    pararMotores();
+    return true;
+  }
+
+  if (!ultrasValidos) {
+    pararMotores();
+    mensagemBotao = "POS AGUARDA SENS";
+    mostrarStatusAte = millis() + 1200;
+    return true;
+  }
+
+  float atualX = posicionamentoAtualXcm;
+  float atualY = posicionamentoAtualYcm;
+  float confianca = 0.0f;
+  if (!estimarPosicaoCampoAtual(atualX, atualY, confianca)) {
+    pararMotores();
+    mensagemBotao = "POS SEM POSICAO";
+    mostrarStatusAte = millis() + 1200;
+    return true;
+  }
+
+  const float erroX = posicionamentoAlvoXcm - atualX;
+  const float erroY = posicionamentoAlvoYcm - atualY;
+  const float erroXBruto = posicionamentoAlvoXcm - constrain((ultraValidoParaPosicao(ultraEcm) ? (ultraEcm + ROBO_RAIO_CAMPO_CM) : atualX), ROBO_RAIO_CAMPO_CM, CAMPO_LARGURA_CM - ROBO_RAIO_CAMPO_CM);
+  const float erroYBruto = posicionamentoAlvoYcm - constrain((ultraValidoParaPosicao(ultraFcm) ? (ultraFcm + ROBO_RAIO_CAMPO_CM) : atualY), ROBO_RAIO_CAMPO_CM, CAMPO_ALTURA_CM - ROBO_RAIO_CAMPO_CM);
+  if (dentroToleranciaPos(erroX, erroY, POS_TOLERANCIA_CM) ||
+      dentroToleranciaPos(erroXBruto, erroYBruto, POS_TOLERANCIA_STOP_BRUTA_CM)) {
+    cancelarPosicionamentoAlvo(true);
+    mensagemBotao = "POSICAO ATINGIDA";
+    mostrarStatusAte = millis() + 2200;
+    return true;
+  }
+
+  posicionamentoAnguloAlvoGraus = normalizarAngulo360(atan2f(erroX, -erroY) * 180.0f / PI);
+  seguirDirecaoPorAngulo(posicionamentoAnguloAlvoGraus, POS_VELOCIDADE_PWM);
+  return true;
 }
 
 
@@ -1190,6 +1380,44 @@ void processarMensagemCabeca(String msg) {
     if (headingBussolaTeste >= 360) headingBussolaTeste = 0;
     bussolaValida = true; ultimoRxBussolaMs = millis();
     comunicacaoCabecaOK = true; ultimoRxCabeca = millis(); return;
+  }
+
+  if (msg.startsWith("POS:")) {
+    String payload = msg.substring(4);
+    payload.trim();
+    int separador = payload.indexOf('/');
+    if (separador > 0) {
+      String sx = payload.substring(0, separador);
+      String sy = payload.substring(separador + 1);
+      sx.trim(); sy.trim();
+      if (payloadNumericoValido(sx) && payloadNumericoValido(sy)) {
+        float alvoX = sx.toFloat();
+        float alvoY = sy.toFloat();
+        float minX = ROBO_RAIO_CAMPO_CM;
+        float maxX = CAMPO_LARGURA_CM - ROBO_RAIO_CAMPO_CM;
+        float minY = ROBO_RAIO_CAMPO_CM;
+        float maxY = CAMPO_ALTURA_CM - ROBO_RAIO_CAMPO_CM;
+        if (!posicionamentoModuloArmado()) {
+          mensagemBotao = "POS BLOQ DISPLAY";
+          mostrarStatusAte = millis() + 1800;
+          cancelarPosicionamentoAlvo(true);
+          comunicacaoCabecaOK = true; ultimoRxCabeca = millis();
+          return;
+        }
+        if (alvoX >= minX && alvoX <= maxX && alvoY >= minY && alvoY <= maxY) {
+          posicionamentoAlvoXcm = alvoX;
+          posicionamentoAlvoYcm = alvoY;
+          posicionamentoAlvoAtivo = true;
+          mensagemBotao = "POS ALVO RECEBIDO";
+          mostrarStatusAte = millis() + 1800;
+        } else {
+          mensagemBotao = "POS FORA CAMPO";
+          mostrarStatusAte = millis() + 1800;
+        }
+        comunicacaoCabecaOK = true; ultimoRxCabeca = millis();
+      }
+    }
+    return;
   }
 
   // Telemetria de gol: erro angular, flag de detecção, pixels e estado da câmera
@@ -2636,6 +2864,14 @@ void loop() {
   // Timeout de comunicação: derruba estado se Cabeça ficar silenciosa
   if ((millis() - ultimoRxCabeca) > TIMEOUT_COM_MS) {
     comunicacaoCabecaOK = false; bussolaValida = false;
+  }
+
+  if (executarPosicionamentoAlvo()) {
+    static unsigned long ultimaTelaPos = 0;
+    if ((millis() - ultimaTelaPos) > 120) {
+      desenharTelaAtual(); ultimaTelaPos = millis();
+    }
+    return;
   }
 
   // Lógica de jogo: executa estratégia conforme papel atual

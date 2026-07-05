@@ -23,9 +23,10 @@ constexpr int SUBMENU_GOL_CALIBRACAO = 8;
 
 constexpr int SUBFUNCAO_PRINCIPAL = 0;
 constexpr int SUBFUNCAO_PAPEIS = 1;
-constexpr int SUBFUNCAO_SENSORES = 2;
-constexpr int SUBFUNCAO_LIMIAR_LINHA = 3;
-constexpr int SUBFUNCAO_KICKER = 4;
+constexpr int SUBFUNCAO_POSICIONAMENTO = 2;
+constexpr int SUBFUNCAO_SENSORES = 3;
+constexpr int SUBFUNCAO_LIMIAR_LINHA = 4;
+constexpr int SUBFUNCAO_KICKER = 5;
 
 constexpr int PAPEL_CONFIG_ATACANTE = 0;
 constexpr int PAPEL_CONFIG_DEFENSOR = 1;
@@ -58,6 +59,9 @@ extern int subMenuCalibracao;
 extern int itemSubMenu;
 extern int subMenuFuncao;
 extern int itemSubMenuFuncao;
+extern bool posicionamentoAlvoAtivo;
+extern float posicionamentoAlvoXcm;
+extern float posicionamentoAlvoYcm;
 
 extern int papelConfiguradoMenu;
 extern bool corGolAzul;
@@ -228,21 +232,32 @@ void desenharSubmenuFuncao() {
       display.fillRect(0, 32, 128, 8, SSD1306_WHITE);
       display.setTextColor(SSD1306_BLACK);
       display.setCursor(4, 32);
-      display.println("KICKER");
+      display.println("POSICIONA");
       display.setTextColor(SSD1306_WHITE);
     } else {
       display.setCursor(4, 32);
-      display.println("KICKER");
+      display.println("POSICIONA");
     }
 
     if (itemSubMenuFuncao == 2) {
       display.fillRect(0, 40, 128, 8, SSD1306_WHITE);
       display.setTextColor(SSD1306_BLACK);
       display.setCursor(4, 40);
-      display.println("VOLTAR");
+      display.println("KICKER");
       display.setTextColor(SSD1306_WHITE);
     } else {
       display.setCursor(4, 40);
+      display.println("KICKER");
+    }
+
+    if (itemSubMenuFuncao == 3) {
+      display.fillRect(0, 48, 128, 8, SSD1306_WHITE);
+      display.setTextColor(SSD1306_BLACK);
+      display.setCursor(4, 48);
+      display.println("VOLTAR");
+      display.setTextColor(SSD1306_WHITE);
+    } else {
+      display.setCursor(4, 48);
       display.println("VOLTAR");
     }
 
@@ -326,6 +341,26 @@ void desenharSubmenuFuncao() {
     display.println("v");
     display.setCursor(0, 56);
     display.println("OK salva");
+
+  } else if (subMenuFuncao == SUBFUNCAO_POSICIONAMENTO) {
+    display.setCursor(0, 10);
+    display.println("AGUARDANDO HTTPS");
+    display.setCursor(0, 24);
+    if (posicionamentoAlvoAtivo) {
+      display.print("ALVO X:");
+      display.print((int)posicionamentoAlvoXcm);
+      display.setCursor(0, 34);
+      display.print("ALVO Y:");
+      display.print((int)posicionamentoAlvoYcm);
+      display.setCursor(0, 56);
+      display.println("OK: voltar/parar");
+    } else {
+      display.println("SEM ALVO");
+      display.setCursor(0, 34);
+      display.println("ESPERE COMANDO");
+      display.setCursor(0, 56);
+      display.println("OK: voltar");
+    }
 
   } else if (subMenuFuncao == SUBFUNCAO_KICKER) {
     if (itemSubMenuFuncao == 0) {
@@ -662,10 +697,10 @@ void processarEventoBotao(uint8_t botao) {
   if (estadoAtual == FUNCAO && subMenuFuncao == SUBFUNCAO_PRINCIPAL) {
     if (botao == 1) {
       itemSubMenuFuncao--;
-      if (itemSubMenuFuncao < 0) itemSubMenuFuncao = 2;
+      if (itemSubMenuFuncao < 0) itemSubMenuFuncao = 3;
     } else if (botao == 2) {
       itemSubMenuFuncao++;
-      if (itemSubMenuFuncao > 2) itemSubMenuFuncao = 0;
+      if (itemSubMenuFuncao > 3) itemSubMenuFuncao = 0;
     } else if (botao == 3) {
       if (itemSubMenuFuncao == 0) {
         subMenuFuncao = SUBFUNCAO_PAPEIS;
@@ -673,6 +708,9 @@ void processarEventoBotao(uint8_t botao) {
         else if (papelConfiguradoMenu == PAPEL_CONFIG_DEFENSOR) itemSubMenuFuncao = 1;
         else itemSubMenuFuncao = 2;
       } else if (itemSubMenuFuncao == 1) {
+        subMenuFuncao = SUBFUNCAO_POSICIONAMENTO;
+        itemSubMenuFuncao = 0;
+      } else if (itemSubMenuFuncao == 2) {
         subMenuFuncao = SUBFUNCAO_KICKER;
         itemSubMenuFuncao = 0;
       } else {
@@ -735,6 +773,14 @@ void processarEventoBotao(uint8_t botao) {
     } else if (botao == 3) {
       enviarLimiarLinhaParaPe();
       mensagemBotao = "LIMIAR SALVO";
+      subMenuFuncao = SUBFUNCAO_PRINCIPAL;
+      itemSubMenuFuncao = 1;
+    }
+    return;
+  }
+
+  if (estadoAtual == FUNCAO && subMenuFuncao == SUBFUNCAO_POSICIONAMENTO) {
+    if (botao == 3) {
       subMenuFuncao = SUBFUNCAO_PRINCIPAL;
       itemSubMenuFuncao = 1;
     }

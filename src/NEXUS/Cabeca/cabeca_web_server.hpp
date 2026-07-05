@@ -11,6 +11,7 @@ class CabecaWebServer {
   void handleClient();
   bool isRunning() const;
   IPAddress ipAddress() const;
+  void setPositionTargetSender(bool (*sender)(float xCm, float yCm));
   void updateMap32Snapshot(uint16_t seq,
                            uint16_t limiar,
                            const uint16_t* sensores,
@@ -59,4 +60,5 @@ class CabecaWebServer {
   int32_t statusWifiRssiDbm_ = -127;
   uint8_t statusApClients_ = 0;
   unsigned long statusUpdatedMs_ = 0;
+  bool (*positionTargetSender_)(float xCm, float yCm) = nullptr;
 };
