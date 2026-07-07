@@ -21,7 +21,7 @@ String renderCampoPage() {
   body += "</section>";
 
   body += "<div style=\"width:min(94vw,820px);margin:0 auto;\">";
-  body += "<svg viewBox=\"0 0 1980 2590\" style=\"width:100%;height:auto;display:block;border-radius:12px;box-shadow:0 8px 20px rgba(0,0,0,.35);background:#0a0a0a;\" aria-label=\"Campo RoboCup 2D\">";
+  body += "<svg id=\"campoSvg\" viewBox=\"0 0 1980 2590\" style=\"width:100%;height:auto;display:block;border-radius:12px;box-shadow:0 8px 20px rgba(0,0,0,.35);background:#0a0a0a;\" aria-label=\"Campo RoboCup 2D\">";
 
   body += "<rect x=\"40\" y=\"40\" width=\"1900\" height=\"2510\" rx=\"36\" fill=\"#0d0d0d\"/>";
   body += "<rect x=\"80\" y=\"80\" width=\"1820\" height=\"2430\" fill=\"#00b53f\"/>";
@@ -69,18 +69,20 @@ String renderCampoPage() {
   body += "</main>";
 
   String script;
-  script.reserve(11600);
+  script.reserve(13600);
   script += "<script>";
   script += "const FIELD_W=182.0,FIELD_H=243.0,ROBOT_D=21.0,ROBOT_R=ROBOT_D/2.0;";
   script += "const COMP_TOL=22.0,MAX_JUMP=20.0;";
   script += "const GROSS_RESIDUAL=55.0,FREEZE_CONF=0.52;";
   script += "const TAU_FAST=0.18,TAU_SLOW=0.42;";
   script += "const TARGET_TOL=10.0;";
+  script += "const SVG_W=1980.0,SVG_H=2590.0,FIELD_SVG_X=80.0,FIELD_SVG_Y=80.0,FIELD_SVG_W=1820.0,FIELD_SVG_H=2430.0;";
   script += "let lastX=FIELD_W/2.0,lastY=FIELD_H/2.0,lastConf=0.0;";
   script += "let lastTickMs=Date.now();";
+  script += "let prevEstMs=Date.now(),prevEstX=lastX,prevEstY=lastY,velEstX=0,velEstY=0;let tickBusy=false;";
   script += "let manualMode=false;let targetPos={x:FIELD_W/2.0,y:FIELD_H/2.0};let currentAutoPos={x:FIELD_W/2.0,y:FIELD_H/2.0};";
   script += "let filtU={d:null,e:null,f:null,t:null};let histU={d:[],e:[],f:[],t:[]};";
-  script += "const robotEl=document.getElementById('robot');const meta=document.getElementById('ultraMeta');";
+  script += "const campoSvg=document.getElementById('campoSvg');const robotEl=document.getElementById('robot');const meta=document.getElementById('ultraMeta');";
   script += "const manualToggle=document.getElementById('manualToggle');const manualModal=document.getElementById('manualModal');const manualTarget=document.getElementById('manualTarget');const manualHint=document.getElementById('manualHint');const manualError=document.getElementById('manualError');const manualCancel=document.getElementById('manualCancel');const manualSave=document.getElementById('manualSave');";
   script += "const targetLayer=document.getElementById('targetLayer');const toleranceRect=document.getElementById('toleranceRect');const vectorLine=document.getElementById('vectorLine');const targetPoint=document.getElementById('targetPoint');const targetLabel=document.getElementById('targetLabel');";
 
@@ -88,7 +90,7 @@ String renderCampoPage() {
   script += "function clamp(v,min,max){return Math.max(min,Math.min(max,v));}";
   script += "function median3(arr){const a=arr.slice().sort((x,y)=>x-y);const m=Math.floor(a.length/2);return a[m];}";
   script += "function pushHist(key,v){if(!isValidDist(v))return;histU[key].push(v);if(histU[key].length>3)histU[key].shift();}";
-  script += "function robustSensor(key,v){if(!isValidDist(v))return filtU[key]??-1;pushHist(key,v);let base=v;if(histU[key].length>=3)base=median3(histU[key]);else if(histU[key].length===2)base=0.5*(histU[key][0]+histU[key][1]);if(filtU[key]==null){filtU[key]=base;return base;}const delta=base-filtU[key];const limit=18.0;filtU[key]=filtU[key]+clamp(delta,-limit,limit)*0.62;return filtU[key];}";
+  script += "function robustSensor(key,v){if(!isValidDist(v))return (filtU[key]==null?-1:filtU[key]);pushHist(key,v);let base=v;if(histU[key].length>=3)base=median3(histU[key]);else if(histU[key].length===2)base=0.5*(histU[key][0]+histU[key][1]);if(filtU[key]==null){filtU[key]=base;return base;}const delta=base-filtU[key];const limit=18.0;filtU[key]=filtU[key]+clamp(delta,-limit,limit)*0.62;return filtU[key];}";
   script += "function prefilterUltras(u){return {d:robustSensor('d',u.d),e:robustSensor('e',u.e),f:robustSensor('f',u.f),t:robustSensor('t',u.t)};}";
   script += "function parseCoord(v){const n=Number(v);return Number.isFinite(n)?n:NaN;}";
   script += "function parseTargetPair(text){const raw=String(text||'').trim();const parts=raw.split('/');if(parts.length!==2)return {ok:false};const x=parseCoord(parts[0].replace(',','.'));const y=parseCoord(parts[1].replace(',','.'));if(!Number.isFinite(x)||!Number.isFinite(y))return {ok:false};return {ok:true,x,y};}";
@@ -101,8 +103,13 @@ String renderCampoPage() {
   script += "function updateManualButton(){manualToggle.textContent=manualMode?'Alvo: ligado':'Alvo: desligado';manualToggle.setAttribute('aria-pressed',manualMode?'true':'false');}";
   script += "function validateManualCoords(x,y){if(!Number.isFinite(x)||!Number.isFinite(y))return 'Digite a coordenada no formato x/y.';if(x<coordMinX()||x>coordMaxX())return 'X fora do campo util.';if(y<coordMinY()||y>coordMaxY())return 'Y fora do campo util.';return ''; }";
   script += "function toSvgX(x){return 80+x*10.0;}function toSvgY(y){return 80+y*10.0;}";
+  script += "function n360(a){let x=a;while(x<0)x+=360;while(x>=360)x-=360;return x;}";
+  script += "function calcMoveAngle(current,target){return n360(Math.atan2(target.x-current.x, -(target.y-current.y))*180/Math.PI);}";
+  script += "function classifyDriveMode(angle){const a=n360(angle);const normal=(a>=315||a<=45)||(a>=135&&a<=225);if(normal)return 'NORMAL';const laterais=(a>45&&a<135)||(a>225&&a<315);if(laterais)return 'LATERAIS';return 'NORMAL';}";
   script += "function targetMetrics(current,target){const dx=target.x-current.x;const dy=target.y-current.y;const dist=Math.sqrt(dx*dx+dy*dy);const angle=Math.atan2(dy,dx)*180/Math.PI;return {dx,dy,dist,angle};}";
   script += "function drawTargetOverlay(current,target){if(!manualMode){targetLayer.style.display='none';return;}targetLayer.style.display='block';const left=clamp(target.x-TARGET_TOL,coordMinX(),coordMaxX());const right=clamp(target.x+TARGET_TOL,coordMinX(),coordMaxX());const top=clamp(target.y-TARGET_TOL,coordMinY(),coordMaxY());const bottom=clamp(target.y+TARGET_TOL,coordMinY(),coordMaxY());const x1=toSvgX(left),y1=toSvgY(top),x2=toSvgX(right),y2=toSvgY(bottom),tx=toSvgX(target.x),ty=toSvgY(target.y),cx=toSvgX(current.x),cy=toSvgY(current.y);toleranceRect.setAttribute('x',x1.toFixed(1));toleranceRect.setAttribute('y',y1.toFixed(1));toleranceRect.setAttribute('width',(x2-x1).toFixed(1));toleranceRect.setAttribute('height',(y2-y1).toFixed(1));vectorLine.setAttribute('x1',cx.toFixed(1));vectorLine.setAttribute('y1',cy.toFixed(1));vectorLine.setAttribute('x2',tx.toFixed(1));vectorLine.setAttribute('y2',ty.toFixed(1));targetPoint.setAttribute('cx',tx.toFixed(1));targetPoint.setAttribute('cy',ty.toFixed(1));targetLabel.setAttribute('x',tx.toFixed(1));targetLabel.setAttribute('y',(ty+14).toFixed(1));}";
+  script += "function clientToFieldCoords(clientX,clientY){const rect=campoSvg.getBoundingClientRect();if(rect.width<=0||rect.height<=0)return null;const sx=(clientX-rect.left)*(SVG_W/rect.width);const sy=(clientY-rect.top)*(SVG_H/rect.height);if(sx<FIELD_SVG_X||sx>(FIELD_SVG_X+FIELD_SVG_W)||sy<FIELD_SVG_Y||sy>(FIELD_SVG_Y+FIELD_SVG_H))return null;const x=clamp((sx-FIELD_SVG_X)/10.0,coordMinX(),coordMaxX());const y=clamp((sy-FIELD_SVG_Y)/10.0,coordMinY(),coordMaxY());return {x,y};}";
+  script += "async function enviarAlvoHTTPS(x,y,origem){const angMove=calcMoveAngle(currentAutoPos,{x,y});const modo=classifyDriveMode(angMove);const body=new URLSearchParams();body.set('alvo',x.toFixed(1)+'/'+y.toFixed(1));body.set('modo',modo);const r=await fetch('/api/posicionamento',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'},body:body.toString()});const j=await r.json().catch(()=>({}));if(!r.ok||!j.ok)throw new Error('rejeitado');targetPos={x,y};manualMode=true;updateManualButton();drawTargetOverlay(currentAutoPos,targetPos);const m=targetMetrics(currentAutoPos,targetPos);meta.textContent='Alvo '+fmt(targetPos.x)+'/'+fmt(targetPos.y)+' cm enviado por '+origem+' | vetor dx:'+fmt(m.dx)+' dy:'+fmt(m.dy)+' | dist:'+fmt(m.dist)+' cm | ang:'+fmt(m.angle)+' deg | angMov:'+fmt(angMove)+' deg | modo:'+modo;}";
 
   script += "function complementary(prev,meas,conf,dtSec){";
   script += "const tau=(conf>=0.8)?TAU_FAST:TAU_SLOW;";
@@ -157,27 +164,39 @@ String renderCampoPage() {
   script += "lastX=x;lastY=y;lastConf=(rx.conf+ry.conf)*0.5;";
   script += "return {x,y,conf:lastConf,xState:rx.state,yState:ry.state,xResidual:rx.residual,yResidual:ry.residual,xSum:rx.sum,ySum:ry.sum,xMeas:rx.meas,yMeas:ry.meas,dtSec,grossBad,weak};}";
 
+  script += "function predictPose(est,idadeMs){";
+  script += "const now=Date.now();";
+  script += "const dt=clamp((now-prevEstMs)/1000.0,0.03,0.40);";
+  script += "const instVx=(est.x-prevEstX)/dt;const instVy=(est.y-prevEstY)/dt;";
+  script += "velEstX=(0.65*velEstX)+(0.35*instVx);velEstY=(0.65*velEstY)+(0.35*instVy);";
+  script += "const lookAhead=clamp((Number(idadeMs||0)/1000.0)+0.06,0.0,0.45);";
+  script += "const peso=clamp((est.conf-0.45)/0.50,0.0,1.0);";
+  script += "const px=clamp(est.x+(velEstX*lookAhead*peso),coordMinX(),coordMaxX());";
+  script += "const py=clamp(est.y+(velEstY*lookAhead*peso),coordMinY(),coordMaxY());";
+  script += "prevEstX=est.x;prevEstY=est.y;prevEstMs=now;";
+  script += "return {x:px,y:py,rawX:est.x,rawY:est.y,vx:velEstX,vy:velEstY,lookAhead,peso};}";
+
   script += "function drawRobot(pos){";
   script += "const sx=80+pos.x*10.0;const sy=80+pos.y*10.0;";
   script += "robotEl.setAttribute('transform','translate('+sx.toFixed(1)+' '+sy.toFixed(1)+')');}";
 
   script += "function fmt(v){return Number.isFinite(v)?v.toFixed(1):'-';}";
 
-  script += "async function tick(){";
-  script += "try{";
+  script += "async function tick(){if(tickBusy)return;tickBusy=true;try{";
   script += "const r=await fetch('/api/ultras',{cache:'no-store'});if(!r.ok)return;const j=await r.json();";
   script += "const uRaw={d:Number(j.uD_x10)/10.0,e:Number(j.uE_x10)/10.0,f:Number(j.uF_x10)/10.0,t:Number(j.uT_x10)/10.0};";
   script += "const u=prefilterUltras(uRaw);";
-  script += "const pos=estimateFromUltras(u);currentAutoPos={x:pos.x,y:pos.y};drawRobot(pos);";
-  script += "if(manualMode){const m=targetMetrics(currentAutoPos,targetPos);drawTargetOverlay(currentAutoPos,targetPos);meta.textContent='Alvo '+fmt(targetPos.x)+'/'+fmt(targetPos.y)+' cm | tolerancia X:'+fmt(clamp(targetPos.x-TARGET_TOL,coordMinX(),coordMaxX()))+' a '+fmt(clamp(targetPos.x+TARGET_TOL,coordMinX(),coordMaxX()))+' | Y:'+fmt(clamp(targetPos.y-TARGET_TOL,coordMinY(),coordMaxY()))+' a '+fmt(clamp(targetPos.y+TARGET_TOL,coordMinY(),coordMaxY()))+' | vetor dx:'+fmt(m.dx)+' dy:'+fmt(m.dy)+' | dist:'+fmt(m.dist)+' cm | ang:'+fmt(m.angle)+' deg | idade:'+Number(j.idade_ms||0)+' ms';}else{drawTargetOverlay(currentAutoPos,targetPos);meta.textContent='US raw D:'+fmt(uRaw.d)+' E:'+fmt(uRaw.e)+' F:'+fmt(uRaw.f)+' T:'+fmt(uRaw.t)+' | filt D:'+fmt(u.d)+' E:'+fmt(u.e)+' F:'+fmt(u.f)+' T:'+fmt(u.t)+' | pos x:'+fmt(pos.x)+' y:'+fmt(pos.y)+' cm | conf:'+fmt(pos.conf*100)+'% | resid X:'+fmt(pos.xResidual)+' Y:'+fmt(pos.yResidual)+' | hold:'+(pos.grossBad&&pos.weak?'SIM':'NAO')+' | dt:'+fmt(pos.dtSec*1000)+' ms | idade:'+Number(j.idade_ms||0)+' ms';}";
-  script += "}catch(_){}}";
+  script += "const pos=estimateFromUltras(u);const pred=predictPose(pos,Number(j.idade_ms||0));currentAutoPos={x:pred.x,y:pred.y};drawRobot(pred);";
+  script += "if(manualMode){const m=targetMetrics(currentAutoPos,targetPos);const angMove=calcMoveAngle(currentAutoPos,targetPos);const modo=classifyDriveMode(angMove);drawTargetOverlay(currentAutoPos,targetPos);meta.textContent='Alvo '+fmt(targetPos.x)+'/'+fmt(targetPos.y)+' cm | tolerancia X:'+fmt(clamp(targetPos.x-TARGET_TOL,coordMinX(),coordMaxX()))+' a '+fmt(clamp(targetPos.x+TARGET_TOL,coordMinX(),coordMaxX()))+' | Y:'+fmt(clamp(targetPos.y-TARGET_TOL,coordMinY(),coordMaxY()))+' a '+fmt(clamp(targetPos.y+TARGET_TOL,coordMinY(),coordMaxY()))+' | vetor dx:'+fmt(m.dx)+' dy:'+fmt(m.dy)+' | dist:'+fmt(m.dist)+' cm | ang:'+fmt(m.angle)+' deg | angMov:'+fmt(angMove)+' deg | modo:'+modo+' | pre X:'+fmt(pred.x)+' Y:'+fmt(pred.y)+' | idade:'+Number(j.idade_ms||0)+' ms';}else{drawTargetOverlay(currentAutoPos,targetPos);meta.textContent='US raw D:'+fmt(uRaw.d)+' E:'+fmt(uRaw.e)+' F:'+fmt(uRaw.f)+' T:'+fmt(uRaw.t)+' | filt D:'+fmt(u.d)+' E:'+fmt(u.e)+' F:'+fmt(u.f)+' T:'+fmt(u.t)+' | pos x:'+fmt(pos.x)+' y:'+fmt(pos.y)+' cm | pre x:'+fmt(pred.x)+' y:'+fmt(pred.y)+' cm | vel x:'+fmt(pred.vx)+' y:'+fmt(pred.vy)+' cm/s | conf:'+fmt(pos.conf*100)+'% | resid X:'+fmt(pos.xResidual)+' Y:'+fmt(pos.yResidual)+' | hold:'+(pos.grossBad&&pos.weak?'SIM':'NAO')+' | dt:'+fmt(pos.dtSec*1000)+' ms | idade:'+Number(j.idade_ms||0)+' ms';}";
+  script += "}catch(_){}finally{tickBusy=false;}}";
 
   script += "manualToggle.addEventListener('click',()=>{if(!manualMode){openManualModal();}else{manualMode=false;updateManualButton();}});";
   script += "manualCancel.addEventListener('click',()=>{closeManualModal();manualMode=false;updateManualButton();});";
-  script += "manualSave.addEventListener('click',async ()=>{const parsed=parseTargetPair(manualTarget.value);const x=parsed.x;const y=parsed.y;const err=(!parsed.ok)?'Digite a coordenada no formato x/y.':validateManualCoords(x,y);if(err){setManualError(err);return;}setManualError('');const body=new URLSearchParams();body.set('alvo',x.toFixed(1)+'/'+y.toFixed(1));try{const r=await fetch('/api/posicionamento',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'},body:body.toString()});const j=await r.json().catch(()=>({}));if(!r.ok||!j.ok){setManualError('Robo nao aceitou o alvo via HTTPS.');return;}targetPos={x,y};manualMode=true;updateManualButton();closeManualModal();drawTargetOverlay(currentAutoPos,targetPos);const m=targetMetrics(currentAutoPos,targetPos);meta.textContent='Alvo '+fmt(targetPos.x)+'/'+fmt(targetPos.y)+' cm enviado | vetor dx:'+fmt(m.dx)+' dy:'+fmt(m.dy)+' | dist:'+fmt(m.dist)+' cm | ang:'+fmt(m.angle)+' deg';}catch(_){setManualError('Falha ao enviar alvo para o robo.');}});";
+  script += "manualSave.addEventListener('click',async ()=>{const parsed=parseTargetPair(manualTarget.value);const x=parsed.x;const y=parsed.y;const err=(!parsed.ok)?'Digite a coordenada no formato x/y.':validateManualCoords(x,y);if(err){setManualError(err);return;}setManualError('');try{await enviarAlvoHTTPS(x,y,'coordenada');closeManualModal();}catch(_){setManualError('Falha ao enviar alvo para o robo.');}});";
+  script += "campoSvg.addEventListener('pointerdown',async (ev)=>{if(!manualMode){meta.textContent='Ative Alvo: ligado para selecionar por toque no campo.';return;}const p=clientToFieldCoords(ev.clientX,ev.clientY);if(!p)return;try{await enviarAlvoHTTPS(p.x,p.y,'toque');}catch(_){meta.textContent='Falha ao enviar alvo por toque.';}});";
   script += "manualModal.addEventListener('click',(ev)=>{if(ev.target===manualModal){closeManualModal();manualMode=false;updateManualButton();}});";
 
-  script += "updateManualHint();updateManualButton();tick();setInterval(tick,120);";
+  script += "updateManualHint();updateManualButton();tick();setInterval(tick,70);";
   script += "</script>";
 
   return HtmlTemplate::wrapPage("Posicionamento em Campo", body, "", script);

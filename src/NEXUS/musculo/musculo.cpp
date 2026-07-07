@@ -25,6 +25,7 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <EEPROM.h>
+#include "motores_movimentacao.hpp"
 #include "display/ihm_display.hpp"
 
 
@@ -44,34 +45,6 @@ bool papelAtacanteAnterior = false;  // Detecta mudanças de papel entre ciclos
 // --- Pinos do barramento I2C ---
 #define SDA_PIN 8
 #define SCL_PIN 9
-
-// --- Pinos da Ponte H — Conjunto A (Motores 1 e 2) ---
-#define IN1_1_A  5
-#define IN2_1_A  6
-#define PWM_1_A  4
-
-#define IN1_2_A  3
-#define IN2_2_A 46
-#define PWM_2_A  7
-
-// --- Pinos da Ponte H — Conjunto B (Motores 3 e 4) ---
-#define IN1_1_B 11
-#define IN2_1_B 12
-#define PWM_1_B 10
-
-#define IN1_2_B 13
-#define IN2_2_B 14
-#define PWM_2_B 47
-
-// --- Canais PWM do ESP32 para cada motor ---
-#define PWM_CH1 0
-#define PWM_CH2 1
-#define PWM_CH3 2
-#define PWM_CH4 3
-
-// --- Configuração global do PWM dos motores ---
-#define PWM_FREQ 20000   // Frequência: 20 kHz (fora da faixa audível)
-#define PWM_RES     8    // Resolução: 8 bits (0–255)
 
 // --- Pino e temporização do solenoide (kicker) ---
 constexpr uint8_t  KICKER_PIN = 21;
@@ -328,8 +301,8 @@ enum SubMenuFuncao {
 int subMenuFuncao     = SUBFUNCAO_PRINCIPAL;
 int           itemSubMenuFuncao = 0;
 
-void pararMotores();
-void seguirDirecaoPorAngulo(float anguloGraus, int velocidade);
+bool bussolaTemReferenciaValida();
+float calcularErroReferenciaBussola();
 
 // Posicionamento por coordenadas enviado via HTTPS (repasse da Cabeca)
 bool posicionamentoAlvoAtivo = false;
@@ -398,7 +371,12 @@ const float POS_TAU_SLOW = 0.48f;
 const float POS_TOLERANCIA_CM = 10.0f;
 const float POS_TOLERANCIA_STOP_BRUTA_CM = 13.0f;
 const float POS_JUMP_MAX_CM = 35.0f;
-const int POS_VELOCIDADE_PWM = 100;
+const int POS_VELOCIDADE_PWM = 150;
+const int POS_VELOCIDADE_PWM_MIN = 100;
+const float POS_DIST_RAMP_CM = 80.0f;
+const unsigned long POS_STOP_CONFIRM_MS = 180;
+const float POS_TOLERANCIA_GIRO_GRAUS = 6.0f;
+const float POS_GIRO_SO_EIXO_GRAUS = 35.0f;
 
 // --- Tolerâncias de alinhamento ---
 // *** AJUSTE AQUI para afinar a janela de alinhamento com o gol ***
@@ -646,7 +624,10 @@ bool dentroToleranciaPos(float erroX, float erroY, float tolerancia) {
 }
 
 bool executarPosicionamentoAlvo() {
+  static unsigned long dentroTolDesdeMs = 0;
+
   if (!posicionamentoModuloArmado()) {
+    dentroTolDesdeMs = 0;
     if (posicionamentoAlvoAtivo) {
       cancelarPosicionamentoAlvo(true);
       mensagemBotao = "POS SAIU MODULO";
@@ -656,6 +637,7 @@ bool executarPosicionamentoAlvo() {
   }
 
   if (!posicionamentoAlvoAtivo) {
+    dentroTolDesdeMs = 0;
     resetPidBussola();
     pararMotores();
     return true;
@@ -682,236 +664,64 @@ bool executarPosicionamentoAlvo() {
   const float erroY = posicionamentoAlvoYcm - atualY;
   const float erroXBruto = posicionamentoAlvoXcm - constrain((ultraValidoParaPosicao(ultraEcm) ? (ultraEcm + ROBO_RAIO_CAMPO_CM) : atualX), ROBO_RAIO_CAMPO_CM, CAMPO_LARGURA_CM - ROBO_RAIO_CAMPO_CM);
   const float erroYBruto = posicionamentoAlvoYcm - constrain((ultraValidoParaPosicao(ultraFcm) ? (ultraFcm + ROBO_RAIO_CAMPO_CM) : atualY), ROBO_RAIO_CAMPO_CM, CAMPO_ALTURA_CM - ROBO_RAIO_CAMPO_CM);
-  if (dentroToleranciaPos(erroX, erroY, POS_TOLERANCIA_CM) ||
-      dentroToleranciaPos(erroXBruto, erroYBruto, POS_TOLERANCIA_STOP_BRUTA_CM)) {
-    cancelarPosicionamentoAlvo(true);
-    mensagemBotao = "POSICAO ATINGIDA";
-    mostrarStatusAte = millis() + 2200;
-    return true;
+  bool emTolerancia = dentroToleranciaPos(erroX, erroY, POS_TOLERANCIA_CM) ||
+                      dentroToleranciaPos(erroXBruto, erroYBruto, POS_TOLERANCIA_STOP_BRUTA_CM);
+
+  if (emTolerancia) {
+    if (dentroTolDesdeMs == 0) {
+      dentroTolDesdeMs = millis();
+    }
+    if ((millis() - dentroTolDesdeMs) >= POS_STOP_CONFIRM_MS) {
+      cancelarPosicionamentoAlvo(true);
+      mensagemBotao = "POSICAO ATINGIDA";
+      mostrarStatusAte = millis() + 2200;
+      dentroTolDesdeMs = 0;
+      return true;
+    }
+  } else {
+    dentroTolDesdeMs = 0;
   }
 
   posicionamentoAnguloAlvoGraus = normalizarAngulo360(atan2f(erroX, -erroY) * 180.0f / PI);
-  seguirDirecaoPorAngulo(posicionamentoAnguloAlvoGraus, POS_VELOCIDADE_PWM);
+  float distAlvoCm = sqrtf((erroX * erroX) + (erroY * erroY));
+  float velPosMapeada = mapearFaixaClamped(distAlvoCm,
+                                           POS_TOLERANCIA_CM,
+                                           POS_DIST_RAMP_CM,
+                                           (float)POS_VELOCIDADE_PWM_MIN,
+                                           (float)POS_VELOCIDADE_PWM);
+  int velocidadePosPwm = constrain((int)roundf(velPosMapeada),
+                                   POS_VELOCIDADE_PWM_MIN,
+                                   POS_VELOCIDADE_PWM);
+
+  int cmdGiroPos = 0;
+  bool usarGiroPos = false;
+  if (bussolaTemReferenciaValida()) {
+    float erroBussolaPos = calcularErroReferenciaBussola();
+    if (fabsf(erroBussolaPos) > 5.0f) {
+      int cmdPidPos = calcularSaidaPidBussola(erroBussolaPos);
+      cmdGiroPos = SINAL_GIRO_PID * cmdPidPos;
+      usarGiroPos = true;
+    }
+  }
+
+  float anguloMov = normalizarAngulo360(posicionamentoAnguloAlvoGraus);
+  bool faixaNormal = (anguloMov >= 315.0f || anguloMov <= 45.0f ||
+                      (anguloMov >= 135.0f && anguloMov <= 225.0f));
+
+  if (faixaNormal) {
+    if (usarGiroPos) {
+      seguirDirecaoComGiro(anguloMov, velocidadePosPwm, cmdGiroPos);
+    } else {
+      seguirDirecaoPorAngulo(anguloMov, velocidadePosPwm);
+    }
+  } else {
+    if (usarGiroPos) {
+      seguirDirecaoComGiroLaterais(anguloMov, velocidadePosPwm, cmdGiroPos);
+    } else {
+      seguirDirecaoPorAngulo(anguloMov, velocidadePosPwm);
+    }
+  }
   return true;
-}
-
-
-// =============================================================================
-// SECAO 9 — FUNCOES DE CONTROLE DE MOTORES
-// =============================================================================
-
-// Aciona o Motor 1 com sentido e PWM conforme velocidade assinada
-void Motor_1(int vel1) {
-  int pwm1 = constrain(abs(vel1), 0, 255);
-  ledcWrite(PWM_CH1, pwm1);
-  if (vel1 <= 0) { digitalWrite(IN1_1_A, HIGH); digitalWrite(IN2_1_A, LOW); }
-  else           { digitalWrite(IN1_1_A, LOW);  digitalWrite(IN2_1_A, HIGH); }
-}
-
-// Aciona o Motor 2 com sentido e PWM conforme velocidade assinada
-void Motor_2(int vel2) {
-  int pwm2 = constrain(abs(vel2), 0, 255);
-  ledcWrite(PWM_CH2, pwm2);
-  if (vel2 <= 0) { digitalWrite(IN1_2_A, HIGH); digitalWrite(IN2_2_A, LOW); }
-  else           { digitalWrite(IN1_2_A, LOW);  digitalWrite(IN2_2_A, HIGH); }
-}
-
-// Aciona o Motor 4 com sentido e PWM conforme velocidade assinada
-void Motor_4(int vel3) {
-  int pwm3 = constrain(abs(vel3), 0, 255);
-  ledcWrite(PWM_CH3, pwm3);
-  if (vel3 <= 0) { digitalWrite(IN1_1_B, HIGH); digitalWrite(IN2_1_B, LOW); }
-  else           { digitalWrite(IN1_1_B, LOW);  digitalWrite(IN2_1_B, HIGH); }
-}
-
-// Aciona o Motor 3 com sentido e PWM conforme velocidade assinada
-void Motor_3(int vel4) {
-  int pwm4 = constrain(abs(vel4), 0, 255);
-  ledcWrite(PWM_CH4, pwm4);
-  if (vel4 <= 0) { digitalWrite(IN1_2_B, HIGH); digitalWrite(IN2_2_B, LOW); }
-  else           { digitalWrite(IN1_2_B, LOW);  digitalWrite(IN2_2_B, HIGH); }
-}
-
-// Para todos os motores, desligando PWM e deixando pontes em estado neutro
-void pararMotores() {
-  ledcWrite(PWM_CH1, 0);
-  ledcWrite(PWM_CH2, 0);
-  ledcWrite(PWM_CH3, 0);
-  ledcWrite(PWM_CH4, 0);
-  digitalWrite(IN1_1_A, LOW); digitalWrite(IN2_1_A, LOW);
-  digitalWrite(IN1_2_A, LOW); digitalWrite(IN2_2_A, LOW);
-  digitalWrite(IN1_1_B, LOW); digitalWrite(IN2_1_B, LOW);
-  digitalWrite(IN1_2_B, LOW); digitalWrite(IN2_2_B, LOW);
-}
-
-// Aplica rampa PWM em um único motor para suavizar variações
-int aplicarRampaPwm(int alvo, int atual, int passoMaximo) {
-  int delta = alvo - atual;
-  if (delta >  passoMaximo) return atual + passoMaximo;
-  if (delta < -passoMaximo) return atual - passoMaximo;
-  return alvo;
-}
-
-// Aplica rampa em todos os 4 motores antes de enviar aos drivers
-void aplicarComandoMotoresComRampa(int v1Alvo, int v2Alvo, int v3Alvo, int v4Alvo) {
-  static int v1Atual = 0;
-  static int v2Atual = 0;
-  static int v3Atual = 0;
-  static int v4Atual = 0;
-
-  int alvo1 = constrain(v1Alvo, -255, 255);
-  int alvo2 = constrain(v2Alvo, -255, 255);
-  int alvo3 = constrain(v3Alvo, -255, 255);
-  int alvo4 = constrain(v4Alvo, -255, 255);
-
-  v1Atual = aplicarRampaPwm(alvo1, v1Atual, PASSO_RAMPA_PWM);
-  v2Atual = aplicarRampaPwm(alvo2, v2Atual, PASSO_RAMPA_PWM);
-  v3Atual = aplicarRampaPwm(alvo3, v3Atual, PASSO_RAMPA_PWM);
-  v4Atual = aplicarRampaPwm(alvo4, v4Atual, PASSO_RAMPA_PWM);
-
-  Motor_1(v1Atual);
-  Motor_2(v2Atual);
-  Motor_3(v3Atual);
-  Motor_4(v4Atual);
-}
-
-
-// Gira o robô no próprio eixo com velocidade assinada
-void girarNoEixo(int velocidade) {
-  int vel = constrain(velocidade, -velocidade_maxima, velocidade_maxima);
-  // Horário: M1/M2 frente e M3/M4 trás; anti-horário: inverso
-  aplicarComandoMotoresComRampa(-vel, -vel, -vel, -vel);
-}
-
-// Converte ângulo de translação (polar) em velocidades individuais de roda (mecanum/omni)
-void seguirDirecaoPorAngulo(float anguloGraus, int velocidade) {
-  int velocidadeAlvo = constrain(velocidade, 0, velocidade_maxima);
-
-  // Vetor translacional no referencial do robô
-  float theta = anguloGraus * PI / 180.0;
-  float vx = velocidadeAlvo * sin(theta);
-  float vy = velocidadeAlvo * cos(theta);
-
-  // Ângulos físicos das rodas omnidirecionais (45°, 135°, 225°, 315°)
-  float theta1 = 45.0  * PI / 180.0;
-  float theta2 = 135.0 * PI / 180.0;
-  float theta3 = 225.0 * PI / 180.0;
-  float theta4 = 315.0 * PI / 180.0;
-
-  // Projeção do vetor em cada roda
-  float v1 = vx * cos(theta1) + vy * sin(theta1);
-  float v2 = vx * cos(theta2) + vy * sin(theta2);
-  float v3 = vx * cos(theta3) + vy * sin(theta3);
-  float v4 = vx * cos(theta4) + vy * sin(theta4);
-
-  // Renormaliza para manter a maior roda dentro do limite
-  float maxVel = max(max(abs(v1), abs(v2)), max(abs(v3), abs(v4)));
-  if (maxVel > velocidade_maxima) {
-    float escala = (float)velocidade_maxima / maxVel;
-    v1 *= escala; v2 *= escala; v3 *= escala; v4 *= escala;
-  }
-
-  aplicarComandoMotoresComRampa((int)v1, (int)v2, (int)v3, (int)v4);
-}
-
-// Move por ângulo e soma termo de giro para corrigir orientação durante o deslocamento
-void seguirDirecaoComGiro(float anguloGraus, int velocidade, int cmdGiro) {
-  int velocidadeAlvo = constrain(velocidade, 0, velocidade_maxima);
-
-  float theta = anguloGraus * PI / 180.0f;
-  float vx = velocidadeAlvo * sinf(theta);
-  float vy = velocidadeAlvo * cosf(theta);
-
-  float theta1 = 45.0f  * PI / 180.0f;
-  float theta2 = 135.0f * PI / 180.0f;
-  float theta3 = 225.0f * PI / 180.0f;
-  float theta4 = 315.0f * PI / 180.0f;
-
-  float v1 = vx * cosf(theta1) + vy * sinf(theta1);
-  float v2 = vx * cosf(theta2) + vy * sinf(theta2);
-  float v3 = vx * cosf(theta3) + vy * sinf(theta3);
-  float v4 = vx * cosf(theta4) + vy * sinf(theta4);
-
-  // Sobrepõe o termo de rotação à translação (mesmo sentido de girarNoEixo)
-  float termoGiro = -GANHO_GIRO_MISTO * (float)cmdGiro;
-  v1 += termoGiro; v2 += termoGiro; v3 += termoGiro; v4 += termoGiro;
-
-  float maxVel = max(max(fabsf(v1), fabsf(v2)), max(fabsf(v3), fabsf(v4)));
-  if (maxVel > velocidade_maxima) {
-    float escala = (float)velocidade_maxima / maxVel;
-    v1 *= escala; v2 *= escala; v3 *= escala; v4 *= escala;
-  }
-
-  aplicarComandoMotoresComRampa((int)v1, (int)v2, (int)v3, (int)v4);
-}
-
-
-
-//novo alinhameto para 90 e 270 
-
-void seguirDirecaoComGiroLaterais(float anguloGraus, int velocidade, int cmdGiro) {
-  int velocidadeAlvo = constrain(velocidade, 0, velocidade_maxima);
-
-  float theta = anguloGraus * PI / 180.0f;
-  float vx = velocidadeAlvo * sinf(theta);
-  float vy = velocidadeAlvo * cosf(theta);
-
-  float theta1 = 45.0f  * PI / 180.0f;
-  float theta2 = 135.0f * PI / 180.0f;
-  float theta3 = 225.0f * PI / 180.0f;
-  float theta4 = 315.0f * PI / 180.0f;
-
-  float v1 = vx * cosf(theta1) + vy * sinf(theta1);
-  float v2 = vx * cosf(theta2) + vy * sinf(theta2);
-  float v3 = vx * cosf(theta3) + vy * sinf(theta3);
-  float v4 = vx * cosf(theta4) + vy * sinf(theta4);
-
-  // Sobrepõe o termo de rotação à translação (mesmo sentido de girarNoEixo)
-  float termoGiro = -GANHO_GIRO_MISTO * (float)cmdGiro;
-  v1 += termoGiro; v2 -= termoGiro; v3 -= termoGiro; v4 += termoGiro;
-
-  float maxVel = max(max(fabsf(v1), fabsf(v2)), max(fabsf(v3), fabsf(v4)));
-  if (maxVel > velocidade_maxima) {
-    float escala = (float)velocidade_maxima / maxVel;
-    v1 *= escala; v2 *= escala; v3 *= escala; v4 *= escala;
-  }
-
-  aplicarComandoMotoresComRampa((int)v1, (int)v2, (int)v3, (int)v4);
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// Move para frente com PWM fixo nas rodas, mantendo correção de giro
-void moverFrenteComGiro(int velocidadePwm, int cmdGiro) {
-  int pwmBase = constrain(velocidadePwm, 0, 255);
-
-  // Padrão equivalente a avançar para frente no referencial atual
-  float v1 =  (float)pwmBase;
-  float v2 =  (float)pwmBase;
-  float v3 = -(float)pwmBase;
-  float v4 = -(float)pwmBase;
-
-  // Mesmo sentido de compensação de giro do restante da locomoção
-  float termoGiro = -GANHO_GIRO_MISTO * (float)cmdGiro;
-  v1 += termoGiro; v2 += termoGiro; v3 += termoGiro; v4 += termoGiro;
-
-  aplicarComandoMotoresComRampa((int)v1, (int)v2, (int)v3, (int)v4);
 }
 
 
@@ -2026,35 +1836,6 @@ float PIDZIMBUSSOLANOVINHA(float erro)
 }
 
 
-bool processarLinhaAtacante(float &anguloFugaSaida, bool &fugindoLinhaSaida)
-{
-    static uint8_t confirmacoes = 0;
-
-    bool linhaAtiva = (linhaDetectada && (anguloLinhaPe >= 0.0f));
-
-    // filtro simples anti-flicker
-    if (linhaAtiva) {
-        if (confirmacoes < 3) confirmacoes++;
-    } else {
-        confirmacoes = 0;
-    }
-
-    bool linhaConfirmada = (confirmacoes >= 2);
-
-    if (!linhaConfirmada) {
-        fugindoLinhaSaida = false;
-        return false;
-    }
-
-    // linha válida → gera fuga
-    fugindoLinhaSaida = true;
-
-    anguloFugaSaida = normalizarAngulo360(anguloLinhaPe);
-
-    return true;
-}
-
-
 // *** FUNCAO PRINCIPAL DO ATACANTE ***
 // Alinha ao gol, segue bola por IR/câmera, foge da linha e chuta quando alinhado
 void atacante() {
@@ -2094,23 +1875,14 @@ void atacante() {
   // -------------------------------
   // PRIORIDADE 2: LINHA (USANDO SUA FUNÇÃO NOVA)
   // -------------------------------
-  
     float anguloFuga = 0.0f;
-    bool fugindoLinha = false;
-if (processarLinhaAtacante(anguloFuga, fugindoLinha)){
+    if (sairDaLinha(linhaDetectada, anguloLinhaPe,
+            aplicarFreioUltrassonicoAtacante(VELOCIDADE_FUGA_LINHA),
+            &anguloFuga)) {
     fugindoLinhaAgora = true;
     anguloFugaLinhaCmd = anguloFuga;
-
-    float anguloFugaSuave =
-        suavizarAnguloMovimentoAtacante(anguloFuga);
-
-    seguirDirecaoPorAngulo(
-        anguloFugaSuave,
-        aplicarFreioUltrassonicoAtacante(VELOCIDADE_FUGA_LINHA)
-    );
-
     return;
-}
+    }
 
   // -------------------------------
   // PRIORIDADE 3: IR + ATAQUE
@@ -2793,20 +2565,16 @@ void setup() {
   carregarPapelConfiguradoEEPROM();
   carregarCorGolEEPROM();
 
-  // Configura todas as saídas da ponte H e o pino do kicker
-  pinMode(IN1_1_A, OUTPUT); pinMode(IN2_1_A, OUTPUT);
-  pinMode(IN1_2_A, OUTPUT); pinMode(IN2_2_A, OUTPUT);
-  pinMode(IN1_1_B, OUTPUT); pinMode(IN2_1_B, OUTPUT);
-  pinMode(IN1_2_B, OUTPUT); pinMode(IN2_2_B, OUTPUT);
+  // Configura o pino do kicker
   pinMode(KICKER_PIN, OUTPUT);
   digitalWrite(KICKER_PIN, LOW);
 
-  // Associa cada pino PWM ao seu canal no ESP32
-  ledcSetup(PWM_CH1, PWM_FREQ, PWM_RES); ledcAttachPin(PWM_1_A, PWM_CH1);
-  ledcSetup(PWM_CH2, PWM_FREQ, PWM_RES); ledcAttachPin(PWM_2_A, PWM_CH2);
-  ledcSetup(PWM_CH3, PWM_FREQ, PWM_RES); ledcAttachPin(PWM_1_B, PWM_CH3);
-  ledcSetup(PWM_CH4, PWM_FREQ, PWM_RES); ledcAttachPin(PWM_2_B, PWM_CH4);
-  pararMotores();
+  // Inicializa toda a camada de motores e movimentacao pela biblioteca dedicada
+  MotoresMovimentacaoConfig motoresCfg;
+  motoresCfg.velocidadeMaxima = velocidade_maxima;
+  motoresCfg.passoRampaPwm = PASSO_RAMPA_PWM;
+  motoresCfg.ganhoGiroMisto = GANHO_GIRO_MISTO;
+  inicializarMotoresMovimentacao(motoresCfg);
 
   // Inicializa I2C e display OLED
   Wire.begin(SDA_PIN, SCL_PIN);

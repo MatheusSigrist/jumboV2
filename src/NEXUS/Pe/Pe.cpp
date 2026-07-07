@@ -7,6 +7,8 @@
 #include <EEPROM.h>
 #include <math.h>
 #include <stdint.h>
+#include "comunicacao_unificada.hpp"
+#include "comunicacao_nexus_payloads.hpp"
 #include "pacotes_dados_html.hpp"
 
 #define BYTE_INICIA 0xAA
@@ -54,8 +56,11 @@ bool atacante = true;  // Inicia como ATACANTE para sincronizar com Cabeca
 unsigned long ultimoDebugMs = 0;
 String bufferHandshakeCabeca = "";
 unsigned long ultimoByteHandshakeCabeca = 0;
-bool enviarSensoresBrutosPendentes = false;
-int limiarLinha = LIMIAR_LINHA_PADRAO;
+struct EstadoComunicacaoPe {
+  bool enviarSensoresBrutosPendentes = false;
+  int limiarLinha = LIMIAR_LINHA_PADRAO;
+};
+EstadoComunicacaoPe estadoComPe;
 unsigned long ultimoEnvioMapa32Ms = 0;
 uint16_t seqMapa32 = 0;
 const unsigned long INTERVALO_MAPA32_MS = 250;
@@ -82,6 +87,10 @@ struct PacoteEstado {
   bool corGolAzul;
 };
 
+using namespace ComunicacaoUnificada;
+using namespace ComunicacaoNexus;
+Receptor receptorCabeca;
+
 void processarComandoCabeca(String comando) {
   comando.trim();
   comando.toLowerCase();
@@ -89,19 +98,19 @@ void processarComandoCabeca(String comando) {
   if (comando == "oi") {
     Serial1.println("OI");
   } else if (comando == "req:sens") {
-    enviarSensoresBrutosPendentes = true;
+    estadoComPe.enviarSensoresBrutosPendentes = true;
   } else if (comando == "req:lim") {
     Serial1.print("LIM:");
-    Serial1.println(limiarLinha);
+    Serial1.println(estadoComPe.limiarLinha);
   } else if (comando.startsWith("setlim:")) {
     int novoLimiar = comando.substring(7).toInt();
     if (novoLimiar < LIMIAR_LINHA_MIN) novoLimiar = LIMIAR_LINHA_MIN;
     if (novoLimiar > LIMIAR_LINHA_MAX) novoLimiar = LIMIAR_LINHA_MAX;
-    limiarLinha = novoLimiar;
-    EEPROM.put(EEPROM_ADDR_LIMIAR_LINHA, limiarLinha);
+    estadoComPe.limiarLinha = novoLimiar;
+    EEPROM.put(EEPROM_ADDR_LIMIAR_LINHA, estadoComPe.limiarLinha);
     EEPROM.commit();
     Serial1.print("LIM:");
-    Serial1.println(limiarLinha);
+    Serial1.println(estadoComPe.limiarLinha);
   }
 }
 
@@ -144,6 +153,57 @@ void ProcessarPingCabeca() {
 
 // Le pacote de estado da Cabeca e atualiza papel atacante/defensor.
 void LeituraSerial() {
+  Frame frame;
+  while (receptorCabeca.poll(Serial1, frame)) {
+    if (frame.rota == Rota::CABECA_PARA_PE_COMANDO && frame.tamanho == sizeof(PeComandoPayload)) {
+      PeComandoPayload cmd;
+      if (lerStruct(frame, cmd)) {
+        if (cmd.comando == (uint8_t)ComandoPe::REQ_SENS) {
+          estadoComPe.enviarSensoresBrutosPendentes = true;
+        } else if (cmd.comando == (uint8_t)ComandoPe::REQ_LIM) {
+          PeLimiarPayload lim;
+          lim.limiar = (int16_t)estadoComPe.limiarLinha;
+          enviarStruct(Serial1, Rota::PE_PARA_CABECA_LIMIAR, lim);
+          Serial1.print("LIM:");
+          Serial1.println(estadoComPe.limiarLinha);
+        } else if (cmd.comando == (uint8_t)ComandoPe::SET_LIM) {
+          int novoLimiar = (int)cmd.valor;
+          if (novoLimiar < LIMIAR_LINHA_MIN) novoLimiar = LIMIAR_LINHA_MIN;
+          if (novoLimiar > LIMIAR_LINHA_MAX) novoLimiar = LIMIAR_LINHA_MAX;
+          estadoComPe.limiarLinha = novoLimiar;
+          EEPROM.put(EEPROM_ADDR_LIMIAR_LINHA, estadoComPe.limiarLinha);
+          EEPROM.commit();
+          PeLimiarPayload lim;
+          lim.limiar = (int16_t)estadoComPe.limiarLinha;
+          enviarStruct(Serial1, Rota::PE_PARA_CABECA_LIMIAR, lim);
+          Serial1.print("LIM:");
+          Serial1.println(estadoComPe.limiarLinha);
+        }
+      }
+      continue;
+    }
+
+    if (frame.rota != Rota::CABECA_PARA_PE && frame.rota != Rota::CABECA_PARA_TODOS) {
+      continue;
+    }
+
+    PacoteEstado temp;
+    if (!lerStruct(frame, temp)) {
+      continue;
+    }
+
+    bool mudouPapel = (temp.atacante != atacante);
+    atacante = temp.atacante;
+
+    Serial.print("Recebido estado da Cabeca: atacante=");
+    Serial.println(atacante ? "1" : "0");
+
+    if (mudouPapel) {
+      Serial.println("Papel mudou! Resincronizando...");
+      delay(5);
+    }
+  }
+
   while (Serial1.available() > 0) {
     if (Serial1.peek() != BYTE_INICIA) {
       return;
@@ -182,11 +242,18 @@ void LeituraSerial() {
 }
 
 void enviarSensoresBrutosSolicitados() {
-  if (!enviarSensoresBrutosPendentes) {
+  if (!estadoComPe.enviarSensoresBrutosPendentes) {
     return;
   }
 
-  enviarSensoresBrutosPendentes = false;
+  estadoComPe.enviarSensoresBrutosPendentes = false;
+  PeSensoresPayload payload;
+  payload.sensor1 = (int16_t)ldr[0];
+  payload.sensor9 = (int16_t)ldr[8];
+  payload.sensor17 = (int16_t)ldr[16];
+  payload.sensor25 = (int16_t)ldr[24];
+  enviarStruct(Serial1, Rota::PE_PARA_CABECA_SENSORES, payload);
+
   Serial1.print("SENS:");
   Serial1.print(ldr[0]);   // Sensor 1
   Serial1.print(",");
@@ -205,7 +272,7 @@ void enviarPacoteMapa32ParaCabeca() {
 
   PacotesDadosHtml::Mapa32Payload payload;
   payload.seq = ++seqMapa32;
-  payload.limiar = (uint16_t)limiarLinha;
+  payload.limiar = (uint16_t)estadoComPe.limiarLinha;
 
   for (uint8_t i = 0; i < PacotesDadosHtml::MAP32_SENSOR_COUNT; i++) {
     int idxFisico = mapaSensores[i];
@@ -232,7 +299,7 @@ int16_t calcularAngulo(bool repulsao) {
   for (int i = 0; i < NUM_SENSORES; i++) {
     int idxFisico = mapaSensores[i];
     float peso = ldr[idxFisico];
-    if (peso >= limiarLinha) {
+    if (peso >= estadoComPe.limiarLinha) {
       centroX += peso * sensorX[i];
       centroY += peso * sensorY[i];
       soma += peso;
@@ -267,7 +334,7 @@ int16_t calcularAnguloZona(int inicio, int fim, bool &temLinha) {
   for (int i = inicio; i <= fim; i++) {
     int idxFisico = mapaSensores[i];
     int leitura = ldr[idxFisico];
-    float peso = (float)(leitura - limiarLinha);
+    float peso = (float)(leitura - estadoComPe.limiarLinha);
     if (peso <= 0.0f) {
       continue;
     }
@@ -330,7 +397,7 @@ void imprimirLeituraSensores() {
     Serial.print(i);
     Serial.print("=");
     Serial.print(ldr[i]);
-    if (ldr[i] >= limiarLinha) {
+    if (ldr[i] >= estadoComPe.limiarLinha) {
       Serial.print("*");
     }
     if (i < NUM_SENSORES - 1) {
@@ -346,10 +413,10 @@ void setup() {
   Serial1.begin(BAUD_PE_CABECA, SERIAL_8N1, RX_CABECA, TX_CABECA);
 
   EEPROM.begin(EEPROM_SIZE);
-  EEPROM.get(EEPROM_ADDR_LIMIAR_LINHA, limiarLinha);
-  if (limiarLinha < LIMIAR_LINHA_MIN || limiarLinha > LIMIAR_LINHA_MAX) {
-    limiarLinha = LIMIAR_LINHA_PADRAO;
-    EEPROM.put(EEPROM_ADDR_LIMIAR_LINHA, limiarLinha);
+  EEPROM.get(EEPROM_ADDR_LIMIAR_LINHA, estadoComPe.limiarLinha);
+  if (estadoComPe.limiarLinha < LIMIAR_LINHA_MIN || estadoComPe.limiarLinha > LIMIAR_LINHA_MAX) {
+    estadoComPe.limiarLinha = LIMIAR_LINHA_PADRAO;
+    EEPROM.put(EEPROM_ADDR_LIMIAR_LINHA, estadoComPe.limiarLinha);
     EEPROM.commit();
   }
 
@@ -391,19 +458,11 @@ void loop() {
   if (atacante) {
     Pacote pacote;
     pacote.angulo = detectarLinhaAtacante();
-
-    Serial1.write(BYTE_INICIA);
-    Serial1.write(ID_PLACA_PE);
-    Serial1.write((uint8_t*)&pacote, sizeof(Pacote));
-    Serial1.write(BYTE_PARA);
+    enviarStruct(Serial1, Rota::PE_PARA_CABECA, pacote);
   } else {
     PacoteDefensor pacoteDef;
     pacoteDef = detectarLinhaDefensorPorZonas();
-
-    Serial1.write(BYTE_INICIA);
-    Serial1.write(ID_PLACA_PE);
-    Serial1.write((uint8_t*)&pacoteDef, sizeof(PacoteDefensor));
-    Serial1.write(BYTE_PARA);
+    enviarStruct(Serial1, Rota::PE_PARA_CABECA, pacoteDef);
   }
 
   enviarSensoresBrutosSolicitados();

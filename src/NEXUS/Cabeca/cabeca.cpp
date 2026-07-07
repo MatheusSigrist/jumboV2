@@ -9,6 +9,8 @@
 #include <WiFi.h>
 #include <esp_now.h>
 #include "cabeca_web_server.hpp"
+#include "comunicacao_unificada.hpp"
+#include "comunicacao_nexus_payloads.hpp"
 #include "pacotes_dados_html.hpp"
 
 // ===================== ESP-NOW - ALTERE O MAC AQUI =====================
@@ -189,6 +191,9 @@ HardwareSerial SerialMusculo(0);
 HardwareSerial SerialOlho(1);
 HardwareSerial SerialPe(2);
 
+using namespace ComunicacaoUnificada;
+using namespace ComunicacaoNexus;
+
 struct PacoteOlho {
   int16_t uD;
   int16_t uE;
@@ -307,6 +312,47 @@ unsigned long ultimoLoopWebStatusMs = 0;
 float loopFpsFiltrado = 0.0f;
 
 CabecaWebServer webServerCabeca;
+Receptor receptorOlho;
+Receptor receptorPe;
+
+void aplicarPacoteOlhoRecebido(const PacoteOlho& pacote) {
+  comunicacaoOlhoOK = true;
+  ultimoRxOlhoMs = millis();
+  ultimoUltraDX10 = pacote.uD;
+  ultimoUltraEX10 = pacote.uE;
+  ultimoUltraFX10 = pacote.uF;
+  ultimoUltraTX10 = pacote.uT;
+  ultimoAnguloIrX10 = pacote.angulo;
+  ultimaIntensidadeIrX10 = pacote.intensidade;
+  ultimoBallAngle = pacote.ballAngle;
+  ultimoBallDist = pacote.ballDist;
+  ultimoBlueAngle = pacote.blueAngle;
+  ultimoBlueDist = pacote.blueDist;
+  ultimoYellowAngle = pacote.yellowAngle;
+  ultimoYellowDist = pacote.yellowDist;
+  cameraOlhoOK = (pacote.cameraOK != 0);
+}
+
+void aplicarPacotePeAtacante(const PacotePe& pacote) {
+  comunicacaoPeOK = true;
+  ultimoAnguloLinhaX10 = pacote.angulo;
+}
+
+void aplicarPacotePeDefensor(const PacotePeDefensor& pacoteDef) {
+  comunicacaoPeOK = true;
+  linhaZonaAValida = (pacoteDef.temLinhaZonaA == 1);
+  linhaZonaBValida = (pacoteDef.temLinhaZonaB == 1);
+  ultimoAnguloLinhaZonaAX10 = linhaZonaAValida ? pacoteDef.anguloZonaA : -10;
+  ultimoAnguloLinhaZonaBX10 = linhaZonaBValida ? pacoteDef.anguloZonaB : -10;
+
+  if (linhaZonaAValida) {
+    ultimoAnguloLinhaX10 = ultimoAnguloLinhaZonaAX10;
+  } else if (linhaZonaBValida) {
+    ultimoAnguloLinhaX10 = ultimoAnguloLinhaZonaBX10;
+  } else {
+    ultimoAnguloLinhaX10 = -10;
+  }
+}
 
 bool encaminharAlvoPosicionamentoMusculo(float xCm, float yCm) {
   if (!comunicacaoMusculoOK) {
@@ -318,6 +364,13 @@ bool encaminharAlvoPosicionamentoMusculo(float xCm, float yCm) {
   SerialMusculo.print("/");
   SerialMusculo.println(yCm, 1);
   return true;
+}
+
+void enviarComandoPe(ComandoPe comando, int16_t valor = 0) {
+  PeComandoPayload payload;
+  payload.comando = (uint8_t)comando;
+  payload.valor = valor;
+  enviarStruct(SerialPe, Rota::CABECA_PARA_PE_COMANDO, payload);
 }
 const char* WEB_AP_SSID = "NEXUS_CABECA";
 const char* WEB_AP_PASS = "12345678";
@@ -687,12 +740,19 @@ void processarMensagem(String msg) {
       }
     }
   } else if (msg == "req:sens") {
+    enviarComandoPe(ComandoPe::REQ_SENS, 0);
     SerialPe.println("REQ:SENS");
   } else if (msg == "req:lim") {
+    enviarComandoPe(ComandoPe::REQ_LIM, 0);
     SerialPe.println("REQ:LIM");
   } else if (msg.startsWith("setlim:")) {
+    String v = msg.substring(7);
+    v.trim();
+    int limiar = v.toInt();
+    if (limiar < 0) limiar = 0;
+    enviarComandoPe(ComandoPe::SET_LIM, (int16_t)limiar);
     SerialPe.print("SETLIM:");
-    SerialPe.println(msg.substring(7));
+    SerialPe.println(v);
   } else if (msg.startsWith("busref:")) {
     String v = msg.substring(7);
     v.trim();
@@ -739,10 +799,7 @@ void enviarEstadoParaPeSemDelay() {
 
   // Envia 3x para garantir que Pe receba mesmo com perda de byte
   for (int i = 0; i < 3; i++) {
-    SerialPe.write(BYTE_INICIA);
-    SerialPe.write(ID_PLACA_PE);
-    SerialPe.write((uint8_t*)&estado, sizeof(PacoteEstado));
-    SerialPe.write(BYTE_PARA);
+    enviarStruct(SerialPe, Rota::CABECA_PARA_PE, estado);
     delay(2);
   }
 
@@ -761,15 +818,8 @@ void enviarEstadoParaPlacas() {
   estado.atacante = atacanteCfg;
   estado.corGolAzul = corGolAzulCfg;
 
-  SerialOlho.write(BYTE_INICIA);
-  SerialOlho.write(ID_PLACA_OLHO);
-  SerialOlho.write((uint8_t*)&estado, sizeof(PacoteEstado));
-  SerialOlho.write(BYTE_PARA);
-
-  SerialPe.write(BYTE_INICIA);
-  SerialPe.write(ID_PLACA_PE);
-  SerialPe.write((uint8_t*)&estado, sizeof(PacoteEstado));
-  SerialPe.write(BYTE_PARA);
+  enviarStruct(SerialOlho, Rota::CABECA_PARA_OLHO, estado);
+  enviarStruct(SerialPe, Rota::CABECA_PARA_PE, estado);
 
   SerialMusculo.print("ATC:");
   SerialMusculo.println(atacanteCfg ? 1 : 0);
@@ -1034,6 +1084,18 @@ bool processarLinhaLimiarPe(String &buffer) {
 
 // Le serial da placa Olho, decodifica pacote binario e fallback textual.
 void lerRespostaOlho() {
+  Frame frame;
+  while (receptorOlho.poll(SerialOlho, frame)) {
+    if (frame.rota != Rota::OLHO_PARA_CABECA) {
+      continue;
+    }
+
+    PacoteOlho pacote;
+    if (lerStruct(frame, pacote)) {
+      aplicarPacoteOlhoRecebido(pacote);
+    }
+  }
+
   while (SerialOlho.available() > 0) {
     if (SerialOlho.peek() == BYTE_INICIA) {
       if (SerialOlho.available() < (int)(sizeof(PacoteOlho) + 3)) {
@@ -1096,6 +1158,48 @@ void lerRespostaPe() {
       return;
     }
     ignorarPacotesPeAteMs = 0;
+  }
+
+  Frame frame;
+  while (receptorPe.poll(SerialPe, frame)) {
+    if (frame.rota == Rota::PE_PARA_CABECA_SENSORES && frame.tamanho == sizeof(PeSensoresPayload)) {
+      PeSensoresPayload sens;
+      if (lerStruct(frame, sens)) {
+        sensorPeBruto1 = sens.sensor1;
+        sensorPeBruto9 = sens.sensor9;
+        sensorPeBruto17 = sens.sensor17;
+        sensorPeBruto25 = sens.sensor25;
+        comunicacaoPeOK = true;
+        enviarSensoresPeParaMusculo();
+      }
+      continue;
+    }
+
+    if (frame.rota == Rota::PE_PARA_CABECA_LIMIAR && frame.tamanho == sizeof(PeLimiarPayload)) {
+      PeLimiarPayload lim;
+      if (lerStruct(frame, lim) && lim.limiar > 0) {
+        SerialMusculo.print("LIM:");
+        SerialMusculo.println(lim.limiar);
+        comunicacaoPeOK = true;
+      }
+      continue;
+    }
+
+    if (frame.rota != Rota::PE_PARA_CABECA) {
+      continue;
+    }
+
+    if (frame.tamanho == sizeof(PacotePe)) {
+      PacotePe pacote;
+      if (lerStruct(frame, pacote)) {
+        aplicarPacotePeAtacante(pacote);
+      }
+    } else if (frame.tamanho == sizeof(PacotePeDefensor)) {
+      PacotePeDefensor pacoteDef;
+      if (lerStruct(frame, pacoteDef)) {
+        aplicarPacotePeDefensor(pacoteDef);
+      }
+    }
   }
 
   while (SerialPe.available() > 0) {

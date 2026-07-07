@@ -6,6 +6,7 @@
 #include <Arduino.h>
 #include <math.h>
 #include <EEPROM.h>
+#include "comunicacao_unificada.hpp"
 #define BYTE_INICIA 0xAA
 #define BYTE_PARA 0x55
 #include <HCSR04.h>    // <-- Biblioteca Ultrassonico
@@ -248,6 +249,9 @@ struct PacoteEstado {
   bool corGolAzul; // true = azul, false = amarelo
 };
 
+using namespace ComunicacaoUnificada;
+Receptor receptorCabeca;
+
 // Dados recebidos da camera:
 // [BALL_A(int16)][BALL_D(uint16)][BLUE_A(int16)][BLUE_D(uint16)][YELLOW_A(int16)][YELLOW_D(uint16)]
 int16_t ballCameraAngle = 0;
@@ -368,6 +372,25 @@ void CarregarCorGolEEPROM() {
 
 // Le estado enviado pela Cabeca e aplica mudancas de atacante/cor de gol.
 void LeituraSerial() {
+  Frame frame;
+  while (receptorCabeca.poll(Serial1, frame)) {
+    if (frame.rota != Rota::CABECA_PARA_OLHO && frame.rota != Rota::CABECA_PARA_TODOS) {
+      continue;
+    }
+
+    PacoteEstado temp;
+    if (!lerStruct(frame, temp)) {
+      continue;
+    }
+
+    atacante = temp.atacante;
+    bool novaCorGol = temp.corGolAzul;
+    if (novaCorGol != corGolAzul) {
+      corGolAzul = novaCorGol;
+      SalvarCorGolEEPROM();
+    }
+  }
+
   while (Serial1.available() >= 2) {
     if (Serial1.read() == BYTE_INICIA) {
       byte id = Serial1.read();
@@ -510,10 +533,7 @@ void enviarDados() {
   
   p.cameraOK = (!cameraOffline && (ultimaAtividadeCameraMs > 0) && ((millis() - ultimaAtividadeCameraMs) <= CAMERA_TIMEOUT_MS)) ? 1 : 0;
 
-  Serial1.write(BYTE_INICIA);
-  Serial1.write(ID_PLACA_OLHO);
-  Serial1.write((uint8_t*)&p, sizeof(Pacote));
-  Serial1.write(BYTE_PARA);
+  enviarStruct(Serial1, Rota::OLHO_PARA_CABECA, p);
 }
 
 //--------------------------------------//
