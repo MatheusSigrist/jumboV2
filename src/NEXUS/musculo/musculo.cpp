@@ -96,8 +96,6 @@ const unsigned long TIMEOUT_BUSSOLA_MS = 800;
 // --- Sensor IR (detecção de bola) ---
 float  anguloIr              = -1.0;    // Ângulo atual do IR (° ou -1 se sem bola)
 bool   irDetectado           = false;
-float  ultimoAnguloIrValido  = -1.0f;
-unsigned long ultimoIrValidoMs = 0;
 
 // --- Câmera (bola + 2 gols: azul e amarelo) ---
 bool   cameraOK          = false;   // Câmera se comunicando com o Olho
@@ -308,11 +306,6 @@ float calcularErroReferenciaBussola();
 bool posicionamentoAlvoAtivo = false;
 float posicionamentoAlvoXcm = 91.0f;
 float posicionamentoAlvoYcm = 121.5f;
-float posicionamentoAtualXcm = 91.0f;
-float posicionamentoAtualYcm = 121.5f;
-float posicionamentoConfianca = 0.0f;
-float posicionamentoAnguloAlvoGraus = 0.0f;
-unsigned long posicionamentoUltimaEstimativaMs = 0;
 
 
 // =============================================================================
@@ -523,102 +516,6 @@ void cancelarPosicionamentoAlvo(bool manterMensagem = false) {
   }
 }
 
-bool ultraValidoParaPosicao(float v) {
-  return isfinite(v) && v > 1.0f && v < 350.0f;
-}
-
-float filtroComplementarPos(float anterior, float medicao, float confianca, float dtSec) {
-  float tau = (confianca >= 0.8f) ? POS_TAU_FAST : POS_TAU_SLOW;
-  if (tau < 0.02f) tau = 0.02f;
-  float alpha = expf(-dtSec / tau);
-  alpha = constrain(alpha + ((1.0f - confianca) * 0.18f), 0.08f, 0.96f);
-  return (alpha * anterior) + ((1.0f - alpha) * medicao);
-}
-
-struct EixoPosResultado {
-  float valor;
-  float medida;
-  float confianca;
-  float residual;
-};
-
-EixoPosResultado estimarEixoPosicao(float leituraA,
-                                    float leituraB,
-                                    float campo,
-                                    float ultimo,
-                                    float dtSec) {
-  const bool temA = ultraValidoParaPosicao(leituraA);
-  const bool temB = ultraValidoParaPosicao(leituraB);
-  const float minimo = ROBO_RAIO_CAMPO_CM;
-  const float maximo = campo - ROBO_RAIO_CAMPO_CM;
-  const float utilizavel = campo - (2.0f * ROBO_RAIO_CAMPO_CM);
-
-  float medida = ultimo;
-  float confianca = 0.05f;
-  float residual = 999.0f;
-
-  if (temA && temB) {
-    float diretoA = constrain(leituraA + ROBO_RAIO_CAMPO_CM, minimo, maximo);
-    float diretoB = constrain(campo - (leituraB + ROBO_RAIO_CAMPO_CM), minimo, maximo);
-    float soma = leituraA + leituraB;
-    if (soma < 1.0f) soma = 1.0f;
-    residual = fabsf((leituraA + leituraB + (2.0f * ROBO_RAIO_CAMPO_CM)) - campo);
-    if (residual <= POS_COMP_TOL_CM) {
-      medida = 0.5f * (diretoA + diretoB);
-      confianca = 0.95f;
-    } else {
-      float fracA = constrain(leituraA / soma, 0.0f, 1.0f);
-      float fracB = constrain(leituraB / soma, 0.0f, 1.0f);
-      float mapaA = minimo + (fracA * utilizavel);
-      float mapaB = minimo + ((1.0f - fracB) * utilizavel);
-      medida = 0.5f * (mapaA + mapaB);
-      confianca = 0.56f;
-    }
-  } else if (temA) {
-    medida = constrain(leituraA + ROBO_RAIO_CAMPO_CM, minimo, maximo);
-    confianca = 0.62f;
-  } else if (temB) {
-    medida = constrain(campo - (leituraB + ROBO_RAIO_CAMPO_CM), minimo, maximo);
-    confianca = 0.62f;
-  }
-
-  float salto = medida - ultimo;
-  float medidaLimitada = ultimo + constrain(salto, -POS_JUMP_MAX_CM, POS_JUMP_MAX_CM);
-  float filtrada = filtroComplementarPos(ultimo, medidaLimitada, confianca, dtSec);
-
-  EixoPosResultado out;
-  out.valor = constrain(filtrada, minimo, maximo);
-  out.medida = constrain(medida, minimo, maximo);
-  out.confianca = confianca;
-  out.residual = residual;
-  return out;
-}
-
-bool estimarPosicaoCampoAtual(float &xCm, float &yCm, float &confianca) {
-  unsigned long agora = millis();
-  float dtSec = 0.08f;
-  if (posicionamentoUltimaEstimativaMs > 0 && agora > posicionamentoUltimaEstimativaMs) {
-    dtSec = (agora - posicionamentoUltimaEstimativaMs) / 1000.0f;
-    if (dtSec < 0.05f) dtSec = 0.05f;
-    if (dtSec > 0.8f) dtSec = 0.8f;
-  }
-  posicionamentoUltimaEstimativaMs = agora;
-
-  EixoPosResultado eixoX = estimarEixoPosicao(ultraEcm, ultraDcm, CAMPO_LARGURA_CM,
-                                              posicionamentoAtualXcm, dtSec);
-  EixoPosResultado eixoY = estimarEixoPosicao(ultraFcm, ultraTcm, CAMPO_ALTURA_CM,
-                                              posicionamentoAtualYcm, dtSec);
-
-  xCm = eixoX.valor;
-  yCm = eixoY.valor;
-  confianca = 0.5f * (eixoX.confianca + eixoY.confianca);
-
-  posicionamentoAtualXcm = xCm;
-  posicionamentoAtualYcm = yCm;
-  posicionamentoConfianca = confianca;
-  return (eixoX.confianca > 0.1f) && (eixoY.confianca > 0.1f);
-}
-
 bool dentroToleranciaPos(float erroX, float erroY, float tolerancia) {
   return (fabsf(erroX) <= tolerancia) && (fabsf(erroY) <= tolerancia);
 }
@@ -650,20 +547,23 @@ bool executarPosicionamentoAlvo() {
     return true;
   }
 
-  float atualX = posicionamentoAtualXcm;
-  float atualY = posicionamentoAtualYcm;
-  float confianca = 0.0f;
-  if (!estimarPosicaoCampoAtual(atualX, atualY, confianca)) {
+  atualizarLeiturasPosicionamento(ultraEcm, ultraDcm, ultraFcm, ultraTcm, ultrasValidos);
+  if (!atualizarPosicaoAtual()) {
     pararMotores();
     mensagemBotao = "POS SEM POSICAO";
     mostrarStatusAte = millis() + 1200;
     return true;
   }
 
+  float atualX = obterPosicaoX();
+  float atualY = obterPosicaoY();
+
   const float erroX = posicionamentoAlvoXcm - atualX;
   const float erroY = posicionamentoAlvoYcm - atualY;
-  const float erroXBruto = posicionamentoAlvoXcm - constrain((ultraValidoParaPosicao(ultraEcm) ? (ultraEcm + ROBO_RAIO_CAMPO_CM) : atualX), ROBO_RAIO_CAMPO_CM, CAMPO_LARGURA_CM - ROBO_RAIO_CAMPO_CM);
-  const float erroYBruto = posicionamentoAlvoYcm - constrain((ultraValidoParaPosicao(ultraFcm) ? (ultraFcm + ROBO_RAIO_CAMPO_CM) : atualY), ROBO_RAIO_CAMPO_CM, CAMPO_ALTURA_CM - ROBO_RAIO_CAMPO_CM);
+  const bool ultraEValido = isfinite(ultraEcm) && ultraEcm > 1.0f && ultraEcm < 350.0f;
+  const bool ultraFValido = isfinite(ultraFcm) && ultraFcm > 1.0f && ultraFcm < 350.0f;
+  const float erroXBruto = posicionamentoAlvoXcm - constrain((ultraEValido ? (ultraEcm + ROBO_RAIO_CAMPO_CM) : atualX), ROBO_RAIO_CAMPO_CM, CAMPO_LARGURA_CM - ROBO_RAIO_CAMPO_CM);
+  const float erroYBruto = posicionamentoAlvoYcm - constrain((ultraFValido ? (ultraFcm + ROBO_RAIO_CAMPO_CM) : atualY), ROBO_RAIO_CAMPO_CM, CAMPO_ALTURA_CM - ROBO_RAIO_CAMPO_CM);
   bool emTolerancia = dentroToleranciaPos(erroX, erroY, POS_TOLERANCIA_CM) ||
                       dentroToleranciaPos(erroXBruto, erroYBruto, POS_TOLERANCIA_STOP_BRUTA_CM);
 
@@ -682,45 +582,28 @@ bool executarPosicionamentoAlvo() {
     dentroTolDesdeMs = 0;
   }
 
-  posicionamentoAnguloAlvoGraus = normalizarAngulo360(atan2f(erroX, -erroY) * 180.0f / PI);
-  float distAlvoCm = sqrtf((erroX * erroX) + (erroY * erroY));
-  float velPosMapeada = mapearFaixaClamped(distAlvoCm,
-                                           POS_TOLERANCIA_CM,
-                                           POS_DIST_RAMP_CM,
-                                           (float)POS_VELOCIDADE_PWM_MIN,
-                                           (float)POS_VELOCIDADE_PWM);
-  int velocidadePosPwm = constrain((int)roundf(velPosMapeada),
-                                   POS_VELOCIDADE_PWM_MIN,
-                                   POS_VELOCIDADE_PWM);
-
-  int cmdGiroPos = 0;
   bool usarGiroPos = false;
   if (bussolaTemReferenciaValida()) {
     float erroBussolaPos = calcularErroReferenciaBussola();
     if (fabsf(erroBussolaPos) > 5.0f) {
-      int cmdPidPos = calcularSaidaPidBussola(erroBussolaPos);
-      cmdGiroPos = SINAL_GIRO_PID * cmdPidPos;
       usarGiroPos = true;
     }
   }
 
-  float anguloMov = normalizarAngulo360(posicionamentoAnguloAlvoGraus);
-  bool faixaNormal = (anguloMov >= 315.0f || anguloMov <= 45.0f ||
-                      (anguloMov >= 135.0f && anguloMov <= 225.0f));
-
-  if (faixaNormal) {
-    if (usarGiroPos) {
-      seguirDirecaoComGiro(anguloMov, velocidadePosPwm, cmdGiroPos);
-    } else {
-      seguirDirecaoPorAngulo(anguloMov, velocidadePosPwm);
-    }
+  bool movimentoOk = false;
+  if (usarGiroPos) {
+    movimentoOk = moverParaComGiro(posicionamentoAlvoXcm, posicionamentoAlvoYcm);
   } else {
-    if (usarGiroPos) {
-      seguirDirecaoComGiroLaterais(anguloMov, velocidadePosPwm, cmdGiroPos);
-    } else {
-      seguirDirecaoPorAngulo(anguloMov, velocidadePosPwm);
-    }
+    movimentoOk = moverParaSemGiro(posicionamentoAlvoXcm, posicionamentoAlvoYcm);
   }
+
+  if (!movimentoOk) {
+    pararMotores();
+    mensagemBotao = "POS SEM POSICAO";
+    mostrarStatusAte = millis() + 1200;
+    return true;
+  }
+
   return true;
 }
 
@@ -812,10 +695,27 @@ float calcularErroGolPorPapel(float anguloGolGraus) {
 
 // Calcula o erro angular atual em relação à referência salva da bússola
 float calcularErroReferenciaBussola() {
+  static bool headingFiltradoInicializado = false;
+  static float headingBussolaFiltrado = 0.0f;
+  const float ALPHA_FILTRO_COMPLEMENTAR_BUSSOLA = 0.2f;
+
   if (!bussolaValida) {
+    headingFiltradoInicializado = false;
     return 0.0f;
   }
-  return normalizarErro180((float)headingBussolaSalvo - (float)headingBussolaTeste);
+
+  float headingAtual = normalizarAngulo360((float)headingBussolaTeste);
+
+  if (!headingFiltradoInicializado) {
+    headingBussolaFiltrado = headingAtual;
+    headingFiltradoInicializado = true;
+  } else {
+    float erroCircular = normalizarErro180(headingAtual - headingBussolaFiltrado);
+    headingBussolaFiltrado = normalizarAngulo360(
+        headingBussolaFiltrado + (ALPHA_FILTRO_COMPLEMENTAR_BUSSOLA * erroCircular));
+  }
+
+  return normalizarErro180((float)headingBussolaSalvo - headingBussolaFiltrado);
 }
 
 // Gera ângulo local de translação para voltar ao gol pela bússola
@@ -1166,8 +1066,6 @@ void processarMensagemCabeca(String msg) {
         irDetectado = false; anguloIr = -1.0f;
       } else {
         irDetectado = true; anguloIr = novoAngulo;
-        ultimoAnguloIrValido = normalizarAngulo360(novoAngulo);
-        ultimoIrValidoMs = millis();
       }
     }
     comunicacaoCabecaOK = true; ultimoRxCabeca = millis(); return;
@@ -1463,9 +1361,6 @@ const float ATACANTE_ULTRA_FREIO_CRITICO_CM   = 35.0f;   // Distância de freio 
 const int   ATACANTE_ULTRA_FREIO_VELOCIDADE_MIN = 125;   // Velocidade mínima com freio
 const int   ATACANTE_ULTRA_FREIO_PWM_POR_CM   = 3;       // Incremento de PWM por cm
 
-// --- Buffer de perda de sinal IR ---
-const unsigned long IR_BUFFER_PERDA_MS = 160; // Tempo que o último ângulo IR é mantido após perda
-
 // --- Confirmação de linha + parede (evita falso positivo único) ---
 const uint8_t ATACANTE_LINHA_PAREDE_CONFIRMACAO = 3;
 
@@ -1609,29 +1504,6 @@ bool irNaFaixaFrontal(float anguloBolaGraus) {
   return (ang > 328.0f || ang < 32.0f);
 }
 
-// Retorna true e ângulo do IR (com buffer de retenção após perda de sinal)
-bool obterAnguloIrComBuffer(float &anguloIrSaida, bool &usandoBuffer)
-{
-    if (irDetectado && anguloIr >= 0.0f)
-    {
-        usandoBuffer = false;
-        anguloIrSaida = normalizarAngulo360(anguloIr);
-        return true;
-    }
-
-    if ((ultimoAnguloIrValido >= 0.0f) &&
-        (ultimoIrValidoMs > 0) &&
-        ((millis() - ultimoIrValidoMs) <= IR_BUFFER_PERDA_MS))
-    {
-        usandoBuffer = true;
-        anguloIrSaida = normalizarAngulo360(ultimoAnguloIrValido);
-        return true;
-    }
-
-    usandoBuffer = false;
-    return false;
-}
-
 // Retorna true se algum ultrassônico lateral do atacante está em nível crítico
 bool ultraLateralCriticoAtacante() {
   bool ultraDireitoCritico  = (ultraDcm >= 0.0f) && (ultraDcm <= ATACANTE_ULTRA_FREIO_CRITICO_CM);
@@ -1688,74 +1560,16 @@ int aplicarFreioUltrassonicoAtacante(int velocidadeDesejada) {
 // *** ALTERE AQUI para modificar o comportamento de contorno da bola pelo atacante ***
 float mapearAnguloBolaParaMovimento(float anguloBolaGraus)
 {
-  static unsigned long inicioOrbita = 0;
-  static bool emOrbitaEspecial = false;
-
   float ang = normalizarAngulo360(anguloBolaGraus);
 
-  if(ang >= 32.0f && ang <= 60.0f)
-  {
-    emOrbitaEspecial = false;
-    return 100.0f;
-  }
-
-  if(ang >= 300.0f && ang <= 328.0f)
-  {
-    emOrbitaEspecial = false;
-    return 260.0f;
-  }
-
-  // ==========================================
-  // 60 -> 90
-  // 135 vai fechando até 90
-  // ==========================================
-  if(ang > 60.0f && ang < 90.0f)
-  {
-    if(!emOrbitaEspecial)
-    {
-      inicioOrbita = millis();
-      emOrbitaEspecial = true;
-    }
-
-    float t = (millis() - inicioOrbita) / 1000.0f;
-
-    float anguloMov = 135.0f - (t * 20.0f);
-
-    if(anguloMov < 90.0f)
-      anguloMov = 90.0f;
-
-    return anguloMov;
-  }
-
-  // ==========================================
-  // 270 -> 300
-  // 225 vai abrindo até 270
-  // ==========================================
-  if(ang >= 270.0f && ang < 300.0f)
-  {
-    if(!emOrbitaEspecial)
-    {
-      inicioOrbita = millis();
-      emOrbitaEspecial = true;
-    }
-
-    float t = (millis() - inicioOrbita) / 1000.0f;
-
-    float anguloMov = 225.0f + (t * 20.0f);
-
-    if(anguloMov > 270.0f)
-      anguloMov = 270.0f;
-
-    return anguloMov;
-  }
-
-  // saiu das zonas especiais
-  emOrbitaEspecial = false;
-
-  if(ang >= 90.0f && ang < 135.0f)  return 180.0f;
-  if(ang >= 225.0f && ang < 270.0f) return 180.0f;
-  if(ang >= 180.0f && ang < 225.0f) return 135.0f;
-  if(ang >= 135.0f && ang < 180.0f) return 225.0f;
+  if (ang >= 32.0f  && ang <= 60.0f)  return 100.0f;
+  if (ang >  60.0f  && ang <  90.0f)  return 90.0f;
+  if (ang >= 90.0f  && ang < 135.0f)  return 180.0f;
+  if (ang >= 135.0f && ang < 180.0f)  return 225.0f;
+  if (ang >= 180.0f && ang < 225.0f)  return 135.0f;
+  if (ang >= 225.0f && ang < 270.0f)  return 180.0f;
+  if (ang >= 270.0f && ang < 300.0f)  return 270.0f;
+  if (ang >= 300.0f && ang <= 328.0f) return 260.0f;
 
   return ang;
 }
@@ -1810,169 +1624,89 @@ float suavizadorMegaAnguloMovimento(float anguloNovo)
 
 float PIDZIMBUSSOLANOVINHA(float erro)
 {
-    static float erroAnterior = 0;
-    static float integral = 0;
+  static float erroAnterior = 0.0f;
+  static float integral = 0.0f;
+  static unsigned long ultimoMs = 0;
 
-    const float Kp = 1.2;
-    const float Ki = 0.01;
-    const float Kd = 0.8;
+  const float Kp = 1.2f;
+  const float Ki = 0.01f;
+  const float Kd = 0.8f;
 
-    integral += erro;
+  unsigned long agora = millis();
+  float dt = 0.02f;
+  if (ultimoMs != 0) {
+    dt = (agora - ultimoMs) / 1000.0f;
+    if (dt < 0.005f) dt = 0.005f;
+    if (dt > 0.2f) dt = 0.2f;
+  }
+  ultimoMs = agora;
 
-    // Anti-windup
-    integral = constrain(integral, -100, 100);
+  integral += erro * dt;
 
-    float derivada = erro - erroAnterior;
+  // Anti-windup
+  integral = constrain(integral, -100.0f, 100.0f);
 
-    float saida =
-        (Kp * erro) +
-        (Ki * integral) +
-        (Kd * derivada);
+  float derivada = (erro - erroAnterior) / dt;
 
-    erroAnterior = erro;
+  float saida =
+    (Kp * erro) +
+    (Ki * integral) +
+    (Kd * derivada);
 
-    // Corrige o sentido da sua bússola
-    return -saida;
+  erroAnterior = erro;
+
+  // Corrige o sentido da sua bússola
+  return -saida;
 }
 
 
 // *** FUNCAO PRINCIPAL DO ATACANTE ***
 // Alinha ao gol, segue bola por IR/câmera, foge da linha e chuta quando alinhado
 void atacante() {
+  float anguloBussolaAlvo = 0.0f;
+  float errobussola = 0.0f;
+  int cmdGiro = 0;
 
-  float erroBussola = calcularErroReferenciaBussola();
-  Serial.println(erroBussola);
-
-  int errobussolaCorretoMovi = PIDZIMBUSSOLANOVINHA(erroBussola);
-
-
-
-
-
-
-  float anguloIrBufferizado = -1.0f;
-  bool usandoBuffer = false;
-
-  bool irDisponivel =
-      obterAnguloIrComBuffer(
-          anguloIrBufferizado,
-          usandoBuffer
-      );
-
-  // -------------------------------
-  // ALINHAMENTO (SEM TRAVAR FLUXO)
-  // -------------------------------
-  
-
-  // -------------------------------
-  // PRIORIDADE 1: BÚSSOLA FORTE
-  // -------------------------------
-  if (fabsf(erroBussola) > 80.0f) {
-    girarNoEixo(errobussolaCorretoMovi);
-    return;
-  }
-
-  // -------------------------------
-  // PRIORIDADE 2: LINHA (USANDO SUA FUNÇÃO NOVA)
-  // -------------------------------
-    float anguloFuga = 0.0f;
-    if (sairDaLinha(linhaDetectada, anguloLinhaPe,
-            aplicarFreioUltrassonicoAtacante(VELOCIDADE_FUGA_LINHA),
-            &anguloFuga)) {
-    fugindoLinhaAgora = true;
-    anguloFugaLinhaCmd = anguloFuga;
-    return;
-    }
-
-  // -------------------------------
-  // PRIORIDADE 3: IR + ATAQUE
-  // -------------------------------
-  else if (irDisponivel) {
-
-    float ang;
-
-    if (usandoBuffer) {
-      ang = anguloIrBufferizado;
-    } else {
-      ang = mapearAnguloBolaParaMovimento(
-          anguloIrBufferizado
-      );
-    }
-
-    float angSuave =
-        suavizadorMegaAnguloMovimento(ang);
-
-    // -----------------------
-    // FRONTAL
-    // -----------------------
-    if ((irNaFaixaFrontal(obterAnguloIrSuavizado(anguloIrBufferizado))) ||
-        irNaFaixaFrontal(anguloIrBufferizado)) {
-
-      if (fabs(errobussolaCorretoMovi) > 5) {
-
-        if (ultraDcm < ultraEcm) {
-          seguirDirecaoComGiro(353, velocidade_maxima, errobussolaCorretoMovi);
-        } else {
-          seguirDirecaoComGiro(7, velocidade_maxima, errobussolaCorretoMovi);
-        }
-
-      } else {
-
-        if (ultraDcm < ultraEcm) {
-          seguirDirecaoPorAngulo(353, velocidade_maxima);
-        } else {
-          seguirDirecaoPorAngulo(7, velocidade_maxima);
-        }
-      }
-    }
-
-    // -----------------------
-    // NÃO FRONTAL
-    // -----------------------
-    else {
-
-      if (((ang > 32) && (ang < 135)) ||
-          ((ang < 328) && (ang > 225))) {
-
-        seguirDirecaoComGiroLaterais(
-            angSuave,
-            velocidade_maxima,
-            errobussolaCorretoMovi
-        );
-
-      } else {
-
-        if (fabs(errobussolaCorretoMovi) > 5) {
-
-          seguirDirecaoComGiro(
-              angSuave,
-              velocidade_maxima,
-              errobussolaCorretoMovi
-          );
-
-        } else {
-
-          seguirDirecaoPorAngulo(
-              angSuave,
-              velocidade_maxima
-          );
-        }
-      }
-    }
-  }
-
-  // -------------------------------
-  // SEM INFORMAÇÃO
-  // -------------------------------
-  else {
-
-    if (fabsf(errobussolaCorretoMovi) > 15.0f) {
-      girarNoEixo(errobussolaCorretoMovi);
-    }
-
+  if (!bussolaTemReferenciaValida()) {
     pararMotores();
-    delay(10);
+    return;
   }
+
+  anguloBussolaAlvo = calcularErroReferenciaBussola();
+  errobussola = normalizarErro180(-anguloBussolaAlvo);
+  cmdGiro = constrain((int)roundf(-PIDZIMBUSSOLANOVINHA(errobussola)), -255, 255);
+
+  if (fabsf(errobussola) > 40.0f) {
+    girarNoEixo(cmdGiro);
+    return;
+  }
+
+  if (irDetectado && anguloIr >= 0.0f) {
+    float anguloIrAtual = normalizarAngulo360(anguloIr);
+    float anguloMovimento = mapearAnguloBolaParaMovimento(anguloIrAtual);
+
+    int velocidade = 220;
+    if (irNaFaixaFrontal(anguloIrAtual)) {
+      moverFrenteComGiro(velocidade, cmdGiro);
+      return;
+
+    } else {
+      bool usarFaixaNormal =
+        (anguloMovimento >= 315.0f || anguloMovimento <= 45.0f) ||
+        (anguloMovimento >= 135.0f && anguloMovimento <= 225.0f);
+      if (usarFaixaNormal) {
+        seguirDirecaoComGiro(anguloMovimento, velocidade, cmdGiro);
+      } else {
+        seguirDirecaoComGiroLaterais(anguloMovimento, velocidade, cmdGiro);
+      }
+
+      return;
+    }
+  } else {
+    girarNoEixo(cmdGiro);
+    return;
+  }
+
 }
 
 
@@ -2485,11 +2219,8 @@ void defensor() {
 
 
 
-  float anguloIrBufferizado = -1.0f;
-bool usandoBuffer = false;
-
-  if (obterAnguloIrComBuffer(anguloIrBufferizado, usandoBuffer)) {
-    anguloBola = anguloIrBufferizado;
+  if (irDetectado && anguloIr >= 0.0f) {
+    anguloBola = normalizarAngulo360(anguloIr);
     bolaDisponivel = true;
   } else if (cameraTemBolaValida()) {
     anguloBola = normalizarAngulo360((float)cameraBallAngle);
@@ -2575,6 +2306,27 @@ void setup() {
   motoresCfg.passoRampaPwm = PASSO_RAMPA_PWM;
   motoresCfg.ganhoGiroMisto = GANHO_GIRO_MISTO;
   inicializarMotoresMovimentacao(motoresCfg);
+
+  MotoresPosicionamentoConfig posCfg;
+  posCfg.campoLarguraCm = CAMPO_LARGURA_CM;
+  posCfg.campoAlturaCm = CAMPO_ALTURA_CM;
+  posCfg.roboRaioCm = ROBO_RAIO_CAMPO_CM;
+  posCfg.compToleranciaCm = POS_COMP_TOL_CM;
+  posCfg.filtroTauRapido = POS_TAU_FAST;
+  posCfg.filtroTauLento = POS_TAU_SLOW;
+  posCfg.saltoMaximoCm = POS_JUMP_MAX_CM;
+  posCfg.velocidadePwmMax = POS_VELOCIDADE_PWM;
+  posCfg.velocidadePwmMin = POS_VELOCIDADE_PWM_MIN;
+  posCfg.distanciaRampaCm = POS_DIST_RAMP_CM;
+  posCfg.toleranciaGiroGraus = POS_TOLERANCIA_GIRO_GRAUS;
+  posCfg.giroSomenteEixoGraus = POS_GIRO_SO_EIXO_GRAUS;
+  posCfg.velocidadeGiroEixoPwm = VELOCIDADE_GIRO_ALINHAMENTO;
+  posCfg.sinalGiro = SINAL_GIRO_PID;
+  posCfg.erroMinimoAtivarGiroGraus = 5.0f;
+  posCfg.hookTemReferenciaOrientacao = bussolaTemReferenciaValida;
+  posCfg.hookObterErroOrientacaoGraus = calcularErroReferenciaBussola;
+  posCfg.hookCalcularComandoGiro = calcularSaidaPidBussola;
+  inicializarMotoresPosicionamento(posCfg);
 
   // Inicializa I2C e display OLED
   Wire.begin(SDA_PIN, SCL_PIN);
