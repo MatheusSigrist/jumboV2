@@ -96,6 +96,8 @@ const unsigned long TIMEOUT_BUSSOLA_MS = 800;
 // --- Sensor IR (detecção de bola) ---
 float  anguloIr              = -1.0;    // Ângulo atual do IR (° ou -1 se sem bola)
 bool   irDetectado           = false;
+float  ultimoAnguloIrValido  = -1.0f;
+unsigned long ultimoRxIrValidoMs = 0;
 
 // --- Câmera (bola + 2 gols: azul e amarelo) ---
 bool   cameraOK          = false;   // Câmera se comunicando com o Olho
@@ -382,6 +384,7 @@ const int   SINAL_GIRO_PID                 = SINAL_GIRO;
 const unsigned long RETENCAO_FUGA_LINHA_MS          = 250;
 const unsigned long RETENCAO_ZONA_LINHA_DEFENSOR_MS  = 300;
 const unsigned long TEMPO_CAMERA_SEM_IR_PARA_IGNORAR_LINHA_MS = 1000;
+const unsigned long RETENCAO_IR_VALIDO_MS = 500;
 
 
 // =============================================================================
@@ -697,7 +700,7 @@ float calcularErroGolPorPapel(float anguloGolGraus) {
 float calcularErroReferenciaBussola() {
   static bool headingFiltradoInicializado = false;
   static float headingBussolaFiltrado = 0.0f;
-  const float ALPHA_FILTRO_COMPLEMENTAR_BUSSOLA = 0.2f;
+  const float ALPHA_FILTRO_COMPLEMENTAR_BUSSOLA = 0.8f;
 
   if (!bussolaValida) {
     headingFiltradoInicializado = false;
@@ -1066,6 +1069,8 @@ void processarMensagemCabeca(String msg) {
         irDetectado = false; anguloIr = -1.0f;
       } else {
         irDetectado = true; anguloIr = novoAngulo;
+        ultimoAnguloIrValido = normalizarAngulo360(novoAngulo);
+        ultimoRxIrValidoMs = millis();
       }
     }
     comunicacaoCabecaOK = true; ultimoRxCabeca = millis(); return;
@@ -1504,6 +1509,21 @@ bool irNaFaixaFrontal(float anguloBolaGraus) {
   return (ang > 328.0f || ang < 32.0f);
 }
 
+// Retém por poucos milissegundos o último ângulo IR válido para evitar parada em falhas curtas.
+bool obterAnguloIrDisponivel(float &anguloBolaGraus) {
+  if (irDetectado && anguloIr >= 0.0f) {
+    anguloBolaGraus = normalizarAngulo360(anguloIr);
+    return true;
+  }
+
+  if (ultimoAnguloIrValido >= 0.0f && (millis() - ultimoRxIrValidoMs) <= RETENCAO_IR_VALIDO_MS) {
+    anguloBolaGraus = normalizarAngulo360(ultimoAnguloIrValido);
+    return true;
+  }
+
+  return false;
+}
+
 // Retorna true se algum ultrassônico lateral do atacante está em nível crítico
 bool ultraLateralCriticoAtacante() {
   bool ultraDireitoCritico  = (ultraDcm >= 0.0f) && (ultraDcm <= ATACANTE_ULTRA_FREIO_CRITICO_CM);
@@ -1666,6 +1686,7 @@ void atacante() {
   float anguloBussolaAlvo = 0.0f;
   float errobussola = 0.0f;
   int cmdGiro = 0;
+  unsigned long agora = millis();
 
   if (!bussolaTemReferenciaValida()) {
     pararMotores();
@@ -1681,8 +1702,27 @@ void atacante() {
     return;
   }
 
-  if (irDetectado && anguloIr >= 0.0f) {
-    float anguloIrAtual = normalizarAngulo360(anguloIr);
+  bool linhaAtualValida = linhaDetectada && (anguloLinhaPe >= 0.0f);
+  bool linhaRetidaValida = (!linhaAtualValida) && (ultimoAnguloLinhaValido >= 0.0f) &&
+                          ((agora - ultimoComandoLinhaMs) <= RETENCAO_FUGA_LINHA_MS);
+  if (linhaAtualValida || linhaRetidaValida) {
+    float anguloLinhaUsado = linhaAtualValida ? anguloLinhaPe : ultimoAnguloLinhaValido;
+    float anguloFuga = 0.0f;
+    if (sairDaLinha(true,
+                    anguloLinhaUsado,
+                    aplicarFreioUltrassonicoAtacante(VELOCIDADE_FUGA_LINHA),
+                    &anguloFuga)) {
+      alinhandoAgora = false;
+      fugindoLinhaAgora = true;
+      anguloFugaLinhaCmd = anguloFuga;
+      return;
+    }
+  }
+
+  fugindoLinhaAgora = false;
+
+  float anguloIrAtual = -1.0f;
+  if (obterAnguloIrDisponivel(anguloIrAtual)) {
     float anguloMovimento = mapearAnguloBolaParaMovimento(anguloIrAtual);
 
     int velocidade = 220;
@@ -2219,8 +2259,7 @@ void defensor() {
 
 
 
-  if (irDetectado && anguloIr >= 0.0f) {
-    anguloBola = normalizarAngulo360(anguloIr);
+  if (obterAnguloIrDisponivel(anguloBola)) {
     bolaDisponivel = true;
   } else if (cameraTemBolaValida()) {
     anguloBola = normalizarAngulo360((float)cameraBallAngle);

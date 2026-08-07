@@ -301,8 +301,8 @@ bool sairDaLinha(bool linhaDetectada, float anguloLinhaGraus, int velocidadePwm,
     g_confirmacoesLinha = 0;
   }
 
-  // Requer confirmacao minima para reduzir falso positivo de frame unico.
-  if (g_confirmacoesLinha < 2) {
+  // Ação imediata no primeiro frame válido para priorizar segurança de fuga da linha.
+  if (g_confirmacoesLinha < 1) {
     return false;
   }
 
