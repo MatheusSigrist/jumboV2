@@ -218,6 +218,9 @@ void seguirDirecaoComGiro(float anguloGraus, int velocidade, int cmdGiro) {
   aplicarComandoMotoresComRampa((int)v1, (int)v2, (int)v3, (int)v4);
 }
 
+
+
+
 void seguirDirecaoComGiroLaterais(float anguloGraus, int velocidade, int cmdGiro) {
   if (!g_inicializado) {
     return;
@@ -243,11 +246,22 @@ void seguirDirecaoComGiroLaterais(float anguloGraus, int velocidade, int cmdGiro
   float v3 = vx * cosf(theta3) + vy * sinf(theta3);
   float v4 = vx * cosf(theta4) + vy * sinf(theta4);
 
-  float termoGiro = -g_cfg.ganhoGiroMisto * (float)velocidadeAlvo * prioridadeGiro * (float)sinalGiro;
-  v1 += termoGiro;
-  v2 -= termoGiro;
-  v3 -= termoGiro;
-  v4 += termoGiro;
+  float termoGiro = (-g_cfg.ganhoGiroMisto * (float)velocidadeAlvo * prioridadeGiro * (float)sinalGiro) + 10;
+  
+  
+  
+  if((anguloGraus > 0) && (anguloGraus < 180)){
+  v1 += termoGiro - 50; // 315
+  v2 += termoGiro; // 225
+  v3 += termoGiro; // 135
+  v4 += termoGiro - 50; //45
+  }else{
+  v1 += termoGiro + 15; // 315
+  v2 += termoGiro; // 225
+  v3 += termoGiro; // 135
+  v4 += termoGiro + 15; //45
+  }
+
 
   float maxVel = max(max(fabsf(v1), fabsf(v2)), max(fabsf(v3), fabsf(v4)));
   if (maxVel > g_cfg.velocidadeMaxima) {
@@ -258,8 +272,15 @@ void seguirDirecaoComGiroLaterais(float anguloGraus, int velocidade, int cmdGiro
     v4 *= escala;
   }
 
-  aplicarComandoMotoresComRampa((int)v1, (int)v2, (int)v3, (int)v4);
+ // corrige certo
+ // aplicarComandoMotoresComRampa((int)termoGiro, (int)termoGiro, (int)termoGiro, (int)termoGiro);
+    aplicarComandoMotoresComRampa((int)v1, (int)v2, (int)v3, (int)v4);
 }
+
+
+
+
+
 
 void moverFrenteComGiro(int velocidadePwm, int cmdGiro) {
   moverFrenteComGiro(velocidadePwm, cmdGiro, g_cfg.ganhoGiroMisto);

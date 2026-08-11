@@ -1,6 +1,3 @@
-
-
-
 // =============================================================================
 // MUSCULO.CPP — Placa de Atuadores e Estratégias do Cronos
 // =============================================================================
@@ -386,6 +383,33 @@ const unsigned long RETENCAO_ZONA_LINHA_DEFENSOR_MS  = 300;
 const unsigned long TEMPO_CAMERA_SEM_IR_PARA_IGNORAR_LINHA_MS = 1000;
 const unsigned long RETENCAO_IR_VALIDO_MS = 500;
 
+// --- Direcionamento do ataque pelo gol da câmera ---
+// A câmera NÃO é usada para localizar a bola. Ela só corrige a direção
+// de translação quando a bola já está na faixa frontal do IR.
+const bool CAMERA_GOL_ATAQUE_HABILITADA = true;
+
+// Faixa de distância na qual o ganho angular do gol varia.
+// Longe = correção menor; perto = correção maior.
+const float CAMERA_GOL_DISTANCIA_LONGE_CM = 350.0f;
+const float CAMERA_GOL_DISTANCIA_PERTO_CM = 80.0f;
+const float CAMERA_GOL_GANHO_MIN = 0.25f;
+const float CAMERA_GOL_GANHO_MAX = 1.00f;
+
+// Limita quanto o gol pode deslocar o vetor de avanço.
+const float CAMERA_GOL_CORRECAO_MAX_GRAUS = 35.0f;
+
+// Filtro temporal do ângulo do gol. Quanto menor, mais suave e menos sensível
+// a oscilações da visão; quanto maior, mais responsivo.
+const float CAMERA_GOL_ALPHA_FILTRO = 0.25f;
+const float CAMERA_GOL_SALTO_MAX_GRAUS = 18.0f;
+
+// Se a visão perder o gol por poucos frames, mantém a última correção válida.
+const unsigned long CAMERA_GOL_RETENCAO_MS = 300;
+
+float cameraGolAnguloFiltrado = 0.0f;
+bool cameraGolFiltroInicializado = false;
+unsigned long cameraGolUltimaLeituraValidaMs = 0;
+
 
 // =============================================================================
 // SECAO 7 — PID GERAL DE ALINHAMENTO (BUSSOLA)
@@ -698,27 +722,159 @@ float calcularErroGolPorPapel(float anguloGolGraus) {
 
 // Calcula o erro angular atual em relação à referência salva da bússola
 float calcularErroReferenciaBussola() {
+
   static bool headingFiltradoInicializado = false;
-  static float headingBussolaFiltrado = 0.0f;
+  static float headingBussolaComplementar = 0.0f;
+
+  // Buffer das 5 leituras após o filtro complementar
+  static float buffer5[5] = {0, 0, 0, 0, 0};
+  static uint8_t indiceBuffer = 0;
+  static uint8_t quantidadeBuffer = 0;
+
   const float ALPHA_FILTRO_COMPLEMENTAR_BUSSOLA = 0.8f;
 
   if (!bussolaValida) {
     headingFiltradoInicializado = false;
+    indiceBuffer = 0;
+    quantidadeBuffer = 0;
     return 0.0f;
   }
 
-  float headingAtual = normalizarAngulo360((float)headingBussolaTeste);
+  // ============================================================
+  // 1. LEITURA BRUTA DA BÚSSOLA
+  // ============================================================
+
+  float headingAtual =
+      normalizarAngulo360((float)headingBussolaTeste);
+
+
+  // ============================================================
+  // 2. FILTRO COMPLEMENTAR
+  // ============================================================
 
   if (!headingFiltradoInicializado) {
-    headingBussolaFiltrado = headingAtual;
+
+    headingBussolaComplementar = headingAtual;
     headingFiltradoInicializado = true;
+
   } else {
-    float erroCircular = normalizarErro180(headingAtual - headingBussolaFiltrado);
-    headingBussolaFiltrado = normalizarAngulo360(
-        headingBussolaFiltrado + (ALPHA_FILTRO_COMPLEMENTAR_BUSSOLA * erroCircular));
+
+    float erroCircular =
+        normalizarErro180(
+            headingAtual - headingBussolaComplementar
+        );
+
+    headingBussolaComplementar =
+        normalizarAngulo360(
+            headingBussolaComplementar +
+            (ALPHA_FILTRO_COMPLEMENTAR_BUSSOLA * erroCircular)
+        );
   }
 
-  return normalizarErro180((float)headingBussolaSalvo - headingBussolaFiltrado);
+
+  // ============================================================
+  // 3. COLOCA A LEITURA FILTRADA NO BUFFER DE 5
+  // ============================================================
+
+  buffer5[indiceBuffer] = headingBussolaComplementar;
+
+  indiceBuffer++;
+
+  if (indiceBuffer >= 5) {
+    indiceBuffer = 0;
+  }
+
+  if (quantidadeBuffer < 5) {
+    quantidadeBuffer++;
+  }
+
+
+  // ============================================================
+  // 4. ENQUANTO NÃO TIVER 5 LEITURAS
+  // ============================================================
+
+  if (quantidadeBuffer < 5) {
+
+    // Ainda não temos amostras suficientes.
+    // Usa a leitura do filtro complementar.
+    return normalizarErro180(
+        (float)headingBussolaSalvo -
+        headingBussolaComplementar
+    );
+  }
+
+
+  // ============================================================
+  // 5. CALCULA A LEITURA MAIS DIFERENTE
+  // ============================================================
+
+  int indiceMaisDiferente = 0;
+  float maiorDiferenca = -1.0f;
+
+  for (int i = 0; i < 5; i++) {
+
+    float somaDistancias = 0.0f;
+
+    for (int j = 0; j < 5; j++) {
+
+      if (i == j) {
+        continue;
+      }
+
+      float diferenca =
+          fabsf(
+              normalizarErro180(
+                  buffer5[i] - buffer5[j]
+              )
+          );
+
+      somaDistancias += diferenca;
+    }
+
+    if (somaDistancias > maiorDiferenca) {
+
+      maiorDiferenca = somaDistancias;
+      indiceMaisDiferente = i;
+    }
+  }
+
+
+  // ============================================================
+  // 6. MÉDIA CIRCULAR DAS 4 LEITURAS RESTANTES
+  // ============================================================
+
+  float somaSeno = 0.0f;
+  float somaCosseno = 0.0f;
+
+  for (int i = 0; i < 5; i++) {
+
+    if (i == indiceMaisDiferente) {
+      continue;
+    }
+
+    float rad =
+        buffer5[i] * DEG_TO_RAD;
+
+    somaSeno += sinf(rad);
+    somaCosseno += cosf(rad);
+  }
+
+
+  float headingFinal =
+      atan2f(somaSeno, somaCosseno) * RAD_TO_DEG;
+
+  headingFinal =
+      normalizarAngulo360(headingFinal);
+
+
+  // ============================================================
+  // 7. RETORNA O ERRO FINAL
+  // ============================================================
+
+  return normalizarErro180(
+      (float)headingBussolaSalvo -
+      headingFinal
+  );
 }
 
 // Gera ângulo local de translação para voltar ao gol pela bússola
@@ -1406,6 +1562,92 @@ void resetControleMovimentoAtacante() {
   ultimoTempoPidMovimento         = 0;
 }
 
+// Reseta o filtro do gol quando o robô troca de papel/estratégia.
+void resetFiltroCameraGolAtaque() {
+  cameraGolAnguloFiltrado = 0.0f;
+  cameraGolFiltroInicializado = false;
+  cameraGolUltimaLeituraValidaMs = 0;
+}
+
+// Calcula quanto da correção angular do gol deve ser aplicada com base
+// na distância informada pela câmera. A distância não é somada ao ângulo:
+// ela controla o ganho da correção.
+float calcularGanhoCameraGol(float distanciaCm) {
+  if (distanciaCm <= CAMERA_GOL_DISTANCIA_PERTO_CM) {
+    return CAMERA_GOL_GANHO_MAX;
+  }
+
+  if (distanciaCm >= CAMERA_GOL_DISTANCIA_LONGE_CM) {
+    return CAMERA_GOL_GANHO_MIN;
+  }
+
+  return mapearFaixaClamped(
+    distanciaCm,
+    CAMERA_GOL_DISTANCIA_LONGE_CM,
+    CAMERA_GOL_DISTANCIA_PERTO_CM,
+    CAMERA_GOL_GANHO_MIN,
+    CAMERA_GOL_GANHO_MAX
+  );
+}
+
+// Obtém o deslocamento angular de ataque em relação à frente do robô.
+// Retorno: ângulo relativo [-35,+35] graus.
+// 0 graus = frente pura.
+// Positivo/negativo = deslocamento lateral em direção ao gol.
+float calcularCorrecaoCameraGolAtaque() {
+  if (!CAMERA_GOL_ATAQUE_HABILITADA) {
+    return 0.0f;
+  }
+
+  unsigned long agora = millis();
+
+  if (cameraGolSelecionadoValido) {
+    float leitura = normalizarErro180((float)cameraGolSelecionadoAngle);
+
+    // Primeiro valor: inicialização direta.
+    if (!cameraGolFiltroInicializado) {
+      cameraGolAnguloFiltrado = leitura;
+      cameraGolFiltroInicializado = true;
+    } else {
+      // Limita saltos isolados da visão antes do filtro exponencial.
+      float delta = normalizarErro180(leitura - cameraGolAnguloFiltrado);
+      delta = constrain(delta, -CAMERA_GOL_SALTO_MAX_GRAUS, CAMERA_GOL_SALTO_MAX_GRAUS);
+      cameraGolAnguloFiltrado = normalizarErro180(
+        cameraGolAnguloFiltrado + (CAMERA_GOL_ALPHA_FILTRO * delta)
+      );
+    }
+
+    cameraGolUltimaLeituraValidaMs = agora;
+
+    float ganho = calcularGanhoCameraGol((float)cameraGolSelecionadoDist);
+    float correcao = cameraGolAnguloFiltrado * ganho;
+    return constrain(correcao, -CAMERA_GOL_CORRECAO_MAX_GRAUS, CAMERA_GOL_CORRECAO_MAX_GRAUS);
+  }
+
+  // Pequena retenção para evitar que um frame perdido do gol faça o robô
+  // voltar instantaneamente para frente pura.
+  if (cameraGolFiltroInicializado &&
+      cameraGolUltimaLeituraValidaMs > 0 &&
+      (agora - cameraGolUltimaLeituraValidaMs) <= CAMERA_GOL_RETENCAO_MS) {
+    return constrain(cameraGolAnguloFiltrado * CAMERA_GOL_GANHO_MIN,
+                      -CAMERA_GOL_CORRECAO_MAX_GRAUS,
+                      CAMERA_GOL_CORRECAO_MAX_GRAUS);
+  }
+
+  return 0.0f;
+}
+
+// Frente com giro da bússola, mas com pequeno deslocamento lateral para o gol.
+// O cmdGiro continua vindo EXCLUSIVAMENTE da bússola.
+void moverFrenteComGiroParaGol(int velocidade, int cmdGiro) {
+  float correcaoGol = calcularCorrecaoCameraGolAtaque();
+  float anguloMovimento = normalizarAngulo360(correcaoGol);
+
+  // 0 graus mantém exatamente a frente; os demais valores deslocam
+  // o vetor de translação sem alterar a referência de orientação.
+  seguirDirecaoComGiro(anguloMovimento, velocidade, cmdGiro);
+}
+
 // PID de transição angular do atacante (suaviza ângulo de movimento)
 float calcularPidMovimento(float erro) {
   unsigned long agora = millis();
@@ -1727,7 +1969,10 @@ void atacante() {
 
     int velocidade = 220;
     if (irNaFaixaFrontal(anguloIrAtual)) {
-      moverFrenteComGiro(velocidade, cmdGiro);
+      // A bola está à frente: mantém a orientação pela bússola e,
+      // somente neste movimento de avanço, direciona a translação
+      // para o gol visto pela câmera.
+      moverFrenteComGiroParaGol(velocidade, cmdGiro);
       return;
 
     } else {
@@ -2253,18 +2498,10 @@ void defensor() {
     vetorY += cosf(anguloCentroLinhaRad) * pesoAtracaoLinha;
   }
 
-  // Bola: mantem a mesma logica de peso, mas usa a camera quando o IR nao estiver vendo.
+  // Bola: somente IR.
+  // A câmera não participa da perseguição da bola nesta estratégia.
   float anguloBola = -1.0f;
-  bool bolaDisponivel = false;
-
-
-
-  if (obterAnguloIrDisponivel(anguloBola)) {
-    bolaDisponivel = true;
-  } else if (cameraTemBolaValida()) {
-    anguloBola = normalizarAngulo360((float)cameraBallAngle);
-    bolaDisponivel = true;
-  }
+  bool bolaDisponivel = obterAnguloIrDisponivel(anguloBola);
 
   if (bolaDisponivel) {
     if (anguloBola >= bolaDireitaMin && anguloBola <= bolaDireitaMax) {
@@ -2438,6 +2675,7 @@ void loop() {
     if (papelAtacante != papelAtacanteAnterior) {
       // Reinicia transição angular ao mudar de papel (evita carregar estado antigo)
       resetControleMovimentoAtacante();
+      resetFiltroCameraGolAtaque();
       papelAtacanteAnterior = papelAtacante;
     }
     if (papelAtacante) atacante();
@@ -2446,6 +2684,7 @@ void loop() {
     // Fora do modo de jogo: zera controles e para os motores
     alinhandoAgora = false; fugindoLinhaAgora = false;
     resetControleMovimentoAtacante();
+    resetFiltroCameraGolAtaque();
     resetPidBussola();
     pararMotores();
   }
