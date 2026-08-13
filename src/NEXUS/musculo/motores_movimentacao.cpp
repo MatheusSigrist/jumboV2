@@ -219,8 +219,6 @@ void seguirDirecaoComGiro(float anguloGraus, int velocidade, int cmdGiro) {
 }
 
 
-
-
 void seguirDirecaoComGiroLaterais(float anguloGraus, int velocidade, int cmdGiro) {
   if (!g_inicializado) {
     return;
@@ -276,6 +274,17 @@ void seguirDirecaoComGiroLaterais(float anguloGraus, int velocidade, int cmdGiro
  // aplicarComandoMotoresComRampa((int)termoGiro, (int)termoGiro, (int)termoGiro, (int)termoGiro);
     aplicarComandoMotoresComRampa((int)v1, (int)v2, (int)v3, (int)v4);
 }
+
+
+
+
+
+
+
+
+
+
+
 
 
 

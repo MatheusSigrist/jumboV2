@@ -378,7 +378,7 @@ const int   VELOCIDADE_GIRO_ALINHAMENTO    = VELOCIDADE_GIRO;
 const int   SINAL_GIRO_PID                 = SINAL_GIRO;
 
 // --- Tempo de retenção de dados de linha e zona (evita perda por frame único) ---
-const unsigned long RETENCAO_FUGA_LINHA_MS          = 250;
+const unsigned long RETENCAO_FUGA_LINHA_MS          = 500;
 const unsigned long RETENCAO_ZONA_LINHA_DEFENSOR_MS  = 300;
 const unsigned long TEMPO_CAMERA_SEM_IR_PARA_IGNORAR_LINHA_MS = 1000;
 const unsigned long RETENCAO_IR_VALIDO_MS = 500;
@@ -1578,6 +1578,8 @@ int aplicarFreioUltrassonicoAtacante(int velocidadeDesejada) {
 float mapearAnguloBolaParaMovimento(float anguloBolaGraus)
 {
   float ang = normalizarAngulo360(anguloBolaGraus);
+  
+
 
   if (ang >= 32.0f  && ang <= 60.0f)  return 100.0f;
   if (ang >  60.0f  && ang <  90.0f)  return 90.0f;
@@ -1930,99 +1932,23 @@ void moverFrenteComGiroParaGol(int velocidade)
 }
 
 
+
+
+
+
+
+
+
 // *** FUNCAO PRINCIPAL DO ATACANTE ***
 // Alinha ao gol, segue bola por IR, foge da linha e usa a câmera como
 // referência de rotação somente quando a bola está na faixa frontal.
 void atacante() {
-  unsigned long agora = millis();
+  int velo = 255;
 
-  if (!bussolaTemReferenciaValida()) {
-    pararMotores();
-    return;
-  }
 
-  // ==========================================================
-  // FUGA DE LINHA — continua tendo prioridade
-  // ==========================================================
 
-  bool linhaAtualValida =
-    linhaDetectada && (anguloLinhaPe >= 0.0f);
-
-  bool linhaRetidaValida =
-    (!linhaAtualValida) &&
-    (ultimoAnguloLinhaValido >= 0.0f) &&
-    ((agora - ultimoComandoLinhaMs) <= RETENCAO_FUGA_LINHA_MS);
-
-  if (linhaAtualValida || linhaRetidaValida)
-  {
-    float anguloLinhaUsado =
-      linhaAtualValida
-      ? anguloLinhaPe
-      : ultimoAnguloLinhaValido;
-
-    float anguloFuga = 0.0f;
-
-    if (sairDaLinha(
-          true,
-          anguloLinhaUsado,
-          aplicarFreioUltrassonicoAtacante(VELOCIDADE_FUGA_LINHA),
-          &anguloFuga))
-    {
-      alinhandoAgora = false;
-      fugindoLinhaAgora = true;
-      anguloFugaLinhaCmd = anguloFuga;
-
-      // Saiu do ataque frontal.
-      resetControleGolCamera();
-
-      return;
-    }
-  }
-
-  fugindoLinhaAgora = false;
-
-  // ==========================================================
-  // LEITURA DA BOLA PELO IR
-  // ==========================================================
 
   float anguloIrAtual = -1.0f;
-
-  if (obterAnguloIrDisponivel(anguloIrAtual))
-  {
-    int velocidade = 220;
-
-    // ========================================================
-    // ATAQUE FRONTAL
-    // ========================================================
-    //
-    // A bola está na frente.
-    //
-    // Movimento:
-    //     IR  -> determina o avanço para frente
-    //     CÂMERA -> determina a rotação do robô para o gol
-    //
-    // A bússola NÃO controla o giro neste trecho.
-    // ========================================================
-
-if (irNaFaixaFrontal(anguloIrAtual)) {
-
-    velocidade = aplicarFreioUltrassonicoAtacanteFrente(velocidade);
-
-    moverFrenteComGiroParaGol(velocidade);
-
-    return;
-}
-
-    // ========================================================
-    // BOLA NÃO ESTÁ FRONTAL
-    // ========================================================
-    //
-    // Saiu do modo de ataque para o gol.
-    // O PID/filtro da câmera é zerado para não carregar
-    // estado para uma próxima entrada frontal.
-    // ========================================================
-
-    resetControleGolCamera();
 
     float anguloBussolaAlvo =
       calcularErroReferenciaBussola();
@@ -2039,52 +1965,45 @@ if (irNaFaixaFrontal(anguloIrAtual)) {
         255
       );
 
-    // Se estiver muito desalinhado da referência normal,
-    // primeiro recupera a orientação pela bússola.
-    if (fabsf(erroBussola) > 40.0f)
+
+
+
+          float anguloFuga = 0.0f;
+    if (sairDaLinha(linhaDetectada, anguloLinhaPe,
+            aplicarFreioUltrassonicoAtacante(VELOCIDADE_FUGA_LINHA),
+            &anguloFuga)) {
+    fugindoLinhaAgora = true;
+    anguloFugaLinhaCmd = anguloFuga;
+    return;
+    }else{
+
+  if (obterAnguloIrDisponivel(anguloIrAtual)){
+    if (irNaFaixaFrontal(anguloIrAtual))
     {
-      girarNoEixo(cmdGiro);
-      return;
-    }
+     moverFrenteComGiroParaGol(velo);
+    }else{
+    resetControleGolCamera();
+
+
+
+
 
     float anguloMovimento =
       mapearAnguloBolaParaMovimento(anguloIrAtual);
 
+
     seguirDirecaoComGiroLaterais(
       anguloMovimento,
-      velocidade,
+      velo,
       cmdGiro
     );
-
+  }
+}
+    }
     return;
+
   }
 
-  // ==========================================================
-  // SEM BOLA
-  // ==========================================================
-  //
-  // Sai do modo de ataque e volta a procurar usando a bússola.
-  // ==========================================================
-
-  resetControleGolCamera();
-
-  float anguloBussolaAlvo =
-    calcularErroReferenciaBussola();
-
-  float erroBussola =
-    normalizarErro180(-anguloBussolaAlvo);
-
-  int cmdGiro =
-    constrain(
-      (int)roundf(
-        -PIDZIMBUSSOLANOVINHA(erroBussola)
-      ),
-      -255,
-      255
-    );
-
-  girarNoEixo(cmdGiro);
-}
 
 
 
