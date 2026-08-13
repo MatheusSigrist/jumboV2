@@ -2104,6 +2104,7 @@ const float PID_LINHA_GOL_INTEGRAL_MAX = 90.0f;
 const int   PID_LINHA_GOL_SAIDA_MIN    = 60;
 const int   PID_LINHA_GOL_SAIDA_MAX    = 220;
 
+
 // Estado interno do PID de linha do goleiro
 float        pidLinhaGolIntegral      = 0.0f;
 float        pidLinhaGolErroAnterior  = 0.0f;
