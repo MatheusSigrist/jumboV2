@@ -441,7 +441,7 @@ EixoPosResultado estimarEixoPosicao(float leituraA,
   } else if (temA) {
     medida = constrain(leituraA + g_posCfg.roboRaioCm, minimo, maximo);
     confianca = 0.62f;
-  } else if (temB) {
+  } else if (temB) { // Teste para o commit
     medida = constrain(campo - (leituraB + g_posCfg.roboRaioCm), minimo, maximo);
     confianca = 0.62f;
   }
