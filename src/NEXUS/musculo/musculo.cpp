@@ -160,7 +160,7 @@ unsigned long entradaTelaLimiarMs        = 0;
 const int  LIMIAR_LINHA_MIN              = 100;
 const int  LIMIAR_LINHA_MAX              = 4000;
 const int  LIMIAR_LINHA_PASSO            = 100;
-const unsigned long INTERVALO_REQ_LIMIAR_LINHA_MS = 400;
+const unsigned long INTERVALO_REQ_LIMIAR_LINHA_MS = 200;
 
 // --- Linha (atacante: ângulo único; defensor: zonas A e B) ---
 float  anguloLinhaPe        = -1.0f;
@@ -1358,9 +1358,9 @@ const int VELOCIDADE_IR_FRONTAL_PWM       = 200;   // PWM na faixa frontal do IR
 const int VELOCIDADE_IR_FAIXA_REDUZIDA_PWM = 140;  // PWM em faixas laterais do IR
 
 // --- Freio ultrassônico do atacante (laterais) ---
-const float ATACANTE_ULTRA_FREIO_INICIO_CM    = 55.0f;   // Distância onde o freio começa
-const float ATACANTE_ULTRA_FREIO_CRITICO_CM   = 35.0f;   // Distância de freio máximo
-const int   ATACANTE_ULTRA_FREIO_VELOCIDADE_MIN = 125;   // Velocidade mínima com freio
+const float ATACANTE_ULTRA_FREIO_INICIO_CM    = 70.0f;   // Distância onde o freio começa
+const float ATACANTE_ULTRA_FREIO_CRITICO_CM   = 50.0f;   // Distância de freio máximo
+const int   ATACANTE_ULTRA_FREIO_VELOCIDADE_MIN = 80;   // Velocidade mínima com freio
 const int   ATACANTE_ULTRA_FREIO_PWM_POR_CM   = 3;       // Incremento de PWM por cm
 
 // --- Confirmação de linha + parede (evita falso positivo único) ---
@@ -1998,6 +1998,11 @@ void atacante() {
       cmdGiro
     );
   }
+}
+
+else {
+   girarNoEixo(cmdGiro);
+   return;
 }
     }
     return;
@@ -2716,3 +2721,19 @@ void loop() {
 
  // delay(5);
 }
+
+
+/* MEXI NOS CARAS ABAIXO:
+
+const unsigned long INTERVALO_REQ_LIMIAR_LINHA_MS = 200;
+// --- Freio ultrassônico do atacante (laterais) ---
+const float ATACANTE_ULTRA_FREIO_INICIO_CM    = 70.0f;   // Distância onde o freio começa
+const float ATACANTE_ULTRA_FREIO_CRITICO_CM   = 50.0f;   // Distância de freio máximo
+const int   ATACANTE_ULTRA_FREIO_VELOCIDADE_MIN = 80;   // Velocidade mínima com freio
+
+else {
+   girarNoEixo(cmdGiro);
+   return;
+}
+   */
+  
