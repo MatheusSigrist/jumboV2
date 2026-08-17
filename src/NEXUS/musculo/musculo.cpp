@@ -78,7 +78,7 @@ const unsigned long INTERVALO_ENVIO_ESTADO_JOGO_MS = 500;
 // --- Botão de ação longa (pino físico) ---
 const uint8_t BOTAO_MEIO_LONGO = 23;
 
-
+extern const int VELOCIDADE_FUGA_LINHA = 255;
 // =============================================================================
 // SECAO 3 — VARIAVEIS DE SENSORES E TELEMETRIA (recebidos da Cabeça)
 // =============================================================================
@@ -351,7 +351,7 @@ float  erroAlinhamentoGraus = 0.0f; // Erro de alinhamento com o gol (°)
 bool   alinhandoAgora     = false;  // true quando executando giro de alinhamento
 bool   fugindoLinhaAgora  = false;  // true quando executando fuga de linha
 float  anguloFugaLinhaCmd = 0.0f;   // Ângulo do comando de fuga enviado aos motores
-const int VELOCIDADE_FUGA_LINHA = 255;
+
 
 const float CAMPO_LARGURA_CM = 182.0f;
 const float CAMPO_ALTURA_CM = 243.0f;
@@ -1942,73 +1942,7 @@ void moverFrenteComGiroParaGol(int velocidade)
 // *** FUNCAO PRINCIPAL DO ATACANTE ***
 // Alinha ao gol, segue bola por IR, foge da linha e usa a câmera como
 // referência de rotação somente quando a bola está na faixa frontal.
-void atacante() {
-  int velo = 255;
-
-
-
-
-  float anguloIrAtual = -1.0f;
-
-    float anguloBussolaAlvo =
-      calcularErroReferenciaBussola();
-
-    float erroBussola =
-      normalizarErro180(-anguloBussolaAlvo);
-
-    int cmdGiro =
-      constrain(
-        (int)roundf(
-          -PIDZIMBUSSOLANOVINHA(erroBussola)
-        ),
-        -255,
-        255
-      );
-
-
-
-
-          float anguloFuga = 0.0f;
-    if (sairDaLinha(linhaDetectada, anguloLinhaPe,
-            aplicarFreioUltrassonicoAtacante(VELOCIDADE_FUGA_LINHA),
-            &anguloFuga)) {
-    fugindoLinhaAgora = true;
-    anguloFugaLinhaCmd = anguloFuga;
-    return;
-    }else{
-
-  if (obterAnguloIrDisponivel(anguloIrAtual)){
-    if (irNaFaixaFrontal(anguloIrAtual))
-    {
-     moverFrenteComGiroParaGol(velo);
-    }else{
-    resetControleGolCamera();
-
-
-
-
-
-    float anguloMovimento =
-      mapearAnguloBolaParaMovimento(anguloIrAtual);
-
-
-    seguirDirecaoComGiroLaterais(
-      anguloMovimento,
-      velo,
-      cmdGiro
-    );
-  }
-}
-
-else {
-   girarNoEixo(cmdGiro);
-   return;
-}
-    }
-    return;
-
-  }
-
+#include "atacante.hpp"
 
 
 

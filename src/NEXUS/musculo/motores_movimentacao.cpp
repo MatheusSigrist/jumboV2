@@ -316,35 +316,137 @@ void moverFrenteComGiro(int velocidadePwm, int cmdGiro, float ganhoGiroMisto) {
   aplicarComandoMotoresComRampa((int)v1, (int)v2, (int)v3, (int)v4);
 }
 
+bool g_fugindoDaLinha = false;
+float g_anguloFugaTravado = 0.0f;
+unsigned long g_ultimaLinhaDetectadaMs = 0;
+
+const unsigned long TEMPO_PERDA_LINHA_MS = 100;
+
+
 bool sairDaLinha(bool linhaDetectada, float anguloLinhaGraus, int velocidadePwm,
                  float* anguloComandoSaida) {
+
   if (!g_inicializado) {
     return false;
   }
 
   bool linhaAtiva = linhaDetectada && (anguloLinhaGraus >= 0.0f);
-  if (linhaAtiva) {
+
+  // ============================================================
+  // PRIMEIRA DETECÇÃO DA LINHA
+  // ============================================================
+  if (!g_fugindoDaLinha) {
+
+    if (!linhaAtiva) {
+      g_confirmacoesLinha = 0;
+      return false;
+    }
+
     if (g_confirmacoesLinha < 3) {
       g_confirmacoesLinha++;
     }
-  } else {
-    g_confirmacoesLinha = 0;
+
+    // Ação imediata no primeiro frame válido.
+    if (g_confirmacoesLinha < 1) {
+      return false;
+    }
+
+    // Salva o PRIMEIRO ângulo detectado.
+    g_anguloFugaTravado = anguloLinhaGraus;
+
+    // Normaliza o ângulo entre 0° e 360°.
+    while (g_anguloFugaTravado >= 360.0f) {
+      g_anguloFugaTravado -= 360.0f;
+    }
+
+    while (g_anguloFugaTravado < 0.0f) {
+      g_anguloFugaTravado += 360.0f;
+    }
+
+    // Marca que estamos em fuga.
+    g_fugindoDaLinha = true;
+
+    // Marca o momento da última detecção válida da linha.
+    g_ultimaLinhaDetectadaMs = millis();
+
+    if (anguloComandoSaida != nullptr) {
+      *anguloComandoSaida = g_anguloFugaTravado;
+    }
+
+    seguirDirecaoPorAngulo(
+        g_anguloFugaTravado,
+        velocidadePwm
+    );
+
+    return true;
   }
 
-  // Ação imediata no primeiro frame válido para priorizar segurança de fuga da linha.
-  if (g_confirmacoesLinha < 1) {
-    return false;
+  // ============================================================
+  // JÁ ESTÁ EM FUGA
+  // ============================================================
+
+  if (linhaAtiva) {
+
+    // A linha continua sendo detectada.
+    // Atualiza somente o tempo da última detecção.
+    //
+    // IMPORTANTE:
+    // O novo anguloLinhaGraus NÃO substitui
+    // g_anguloFugaTravado.
+    g_ultimaLinhaDetectadaMs = millis();
+
+    if (anguloComandoSaida != nullptr) {
+      *anguloComandoSaida = g_anguloFugaTravado;
+    }
+
+    seguirDirecaoPorAngulo(
+        g_anguloFugaTravado,
+        velocidadePwm
+    );
+
+    return true;
   }
 
-  float anguloFuga = anguloLinhaGraus;
-  while (anguloFuga >= 360.0f) anguloFuga -= 360.0f;
-  while (anguloFuga < 0.0f) anguloFuga += 360.0f;
+  // ============================================================
+  // LINHA NÃO ESTÁ SENDO DETECTADA AGORA
+  // ============================================================
+
+  // Verifica há quanto tempo a linha não é detectada.
+  unsigned long tempoSemLinha =
+      millis() - g_ultimaLinhaDetectadaMs;
+
+  // Se ficou sem linha por menos de 100 ms,
+  // ainda considera que é a MESMA fuga.
+  if (tempoSemLinha < TEMPO_PERDA_LINHA_MS) {
+
+    if (anguloComandoSaida != nullptr) {
+      *anguloComandoSaida = g_anguloFugaTravado;
+    }
+
+    seguirDirecaoPorAngulo(
+        g_anguloFugaTravado,
+        velocidadePwm
+    );
+
+    return true;
+  }
+
+  // ============================================================
+  // PERDEU A LINHA POR PELO MENOS 100 ms
+  // ============================================================
+
+  // Agora sim a fuga terminou.
+  // O próximo ângulo detectado será considerado uma nova fuga.
+  g_fugindoDaLinha = false;
+  g_confirmacoesLinha = 0;
+  g_anguloFugaTravado = 0.0f;
+  g_ultimaLinhaDetectadaMs = 0;
+
   if (anguloComandoSaida != nullptr) {
-    *anguloComandoSaida = anguloFuga;
+    *anguloComandoSaida = 0.0f;
   }
 
-  seguirDirecaoPorAngulo(anguloFuga, velocidadePwm);
-  return true;
+  return false;
 }
 
 void resetSairDaLinha() {
