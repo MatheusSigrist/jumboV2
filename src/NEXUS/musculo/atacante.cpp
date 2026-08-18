@@ -15,6 +15,7 @@
 
 void atacante() {
     int velo = 255;
+    int veloFrente = 255;
 
     float anguloIrAtual = -1.0f;
 
@@ -51,21 +52,31 @@ void atacante() {
 
             if (irNaFaixaFrontal(anguloIrAtual)) {
 
-                moverFrenteComGiroParaGol(velo);
+                moverFrenteComGiroParaGol(veloFrente);
+                
 
             } else {
                  
+                if (sairDaLinha(
+                    linhaDetectada,
+                       anguloLinhaPe,
+                       VELOCIDADE_FUGA_LINHA,
+                           &anguloFuga)) {
 
+                        fugindoLinhaAgora = true;
+                       anguloFugaLinhaCmd = anguloFuga;
+                         return;
+
+                          }
                 resetControleGolCamera();
+                        
+          float anguloMovimento = mapearAnguloBolaParaMovimento(anguloIrAtual);
 
-                float anguloMovimento =
-                    mapearAnguloBolaParaMovimento(anguloIrAtual);
-
-                seguirDirecaoComGiroLaterais(
-                    anguloMovimento,
-                    velo,
-                    cmdGiro
-                );
+            seguirDirecaoComGiroLaterais(
+                anguloMovimento,
+                velo,
+                cmdGiro
+            );
             }
 
         } else {

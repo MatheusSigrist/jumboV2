@@ -1,5 +1,5 @@
 // =============================================================================
-// MUSCULO.CPP — Placa de Atuadores e Estratégias do Cronos
+// MUSCULO.CPP — Placa de Atuadores e Estratégias do Nexus
 // =============================================================================
 // Responsabilidades:
 //   • Controle de movimento (motores DC via ponte H)
@@ -176,15 +176,15 @@ float  ultimoAnguloLinhaZonaAValido       = -1.0f;
 float  ultimoAnguloLinhaZonaBValido       = -1.0f;
 unsigned long ultimoRxLinhaZonaAMs        = 0;
 unsigned long ultimoRxLinhaZonaBMs        = 0;
-const unsigned long TIMEOUT_LINHA_MS      = 50;
+const unsigned long TIMEOUT_LINHA_MS      = 100;
 
 // --- Cor do gol de referência e envio pendente à Cabeça ---
 bool corGolAzul             = false;
 bool corGolPendenteEnvio    = true;
 unsigned long ultimoEnvioCorGolMs         = 0;
-const unsigned long INTERVALO_ENVIO_COR_GOL_MS = 500;
+const unsigned long INTERVALO_ENVIO_COR_GOL_MS = 200;
 unsigned long ultimoEnvioRefBussolaMs = 0;
-const unsigned long INTERVALO_ENVIO_REF_BUSSOLA_MS = 500;
+const unsigned long INTERVALO_ENVIO_REF_BUSSOLA_MS = 200;
 
 // --- Kicker ---
 bool kickerRecebido         = false;
@@ -1403,6 +1403,8 @@ void resetControleMovimentoAtacante() {
   ultimoTempoPidMovimento         = 0;
 }
 
+
+
 // PID de transição angular do atacante (suaviza ângulo de movimento)
 float calcularPidMovimento(float erro) {
   unsigned long agora = millis();
@@ -1695,11 +1697,11 @@ float PIDZIMBUSSOLANOVINHA(float erro)
 // A bússola continua sendo usada normalmente fora do ataque frontal.
 // =============================================================================
 
-const float PID_GOL_CAMERA_KP = 0.8f;
+const float PID_GOL_CAMERA_KP = 1.0f;
 const float PID_GOL_CAMERA_KI = 0.01f;
-const float PID_GOL_CAMERA_KD = 0.5f;
+const float PID_GOL_CAMERA_KD = 0.8f;
 
-const float PID_GOL_CAMERA_INTEGRAL_MAX = 120.0f;
+const float PID_GOL_CAMERA_INTEGRAL_MAX = 100.0f;
 
 const int PID_GOL_CAMERA_SAIDA_MIN = 30;
 const int PID_GOL_CAMERA_SAIDA_MAX = 180;
@@ -1709,7 +1711,7 @@ const float TOLERANCIA_GOL_CAMERA_GRAUS = 3.0f;
 
 // Mantém a última leitura válida por este período se a câmera perder
 // o gol momentaneamente.
-const unsigned long RETENCAO_GOL_CAMERA_ATAQUE_MS = 250;
+const unsigned long RETENCAO_GOL_CAMERA_ATAQUE_MS = 100;
 
 // Limita saltos muito grandes entre duas leituras da câmera.
 const float SALTO_MAX_GOL_CAMERA_GRAUS = 20.0f;
@@ -1943,7 +1945,7 @@ void moverFrenteComGiroParaGol(int velocidade)
 // Alinha ao gol, segue bola por IR, foge da linha e usa a câmera como
 // referência de rotação somente quando a bola está na faixa frontal.
 #include "atacante.hpp"
-
+#include "defensor.hpp"
 
 
 
@@ -2242,279 +2244,7 @@ bool ultrassonico_defensor() {
 
 // *** FUNCAO PRINCIPAL DO DEFENSOR ***
 // Mantém posição no gol usando linha, bola e ultrassônicos como entradas do vetor de movimento
-void defensor() {
-  int16_t anguloGolSelecionadoMenu = -999;
-  uint16_t distanciaGolSelecionadoMenu = 0;
-  bool golSelecionadoMenuVisivel = cameraLerGolSelecionadoMenu(anguloGolSelecionadoMenu, distanciaGolSelecionadoMenu);
-  bool retornoDefensorPorBussolaValido = bussolaTemReferenciaValida();
-  float anguloRetornoDefensor = retornoDefensorPorBussolaValido ? calcularAnguloRetornoGolPorBussola() : 0.0f;
-  static unsigned long ultimoPrintGolSelecionadoMs = 0;
 
-  if ((millis() - ultimoPrintGolSelecionadoMs) >= 200) {
-    Serial.print("DEF GOL MENU: ");
-    Serial.print(corGolAzul ? "AZUL" : "AMARELO");
-    Serial.print(" ANG=");
-    Serial.print(anguloGolSelecionadoMenu);
-    Serial.print(" DIST=");
-    Serial.print(distanciaGolSelecionadoMenu);
-    Serial.print(" VIS=");
-    Serial.println(golSelecionadoMenuVisivel ? 1 : 0);
-    ultimoPrintGolSelecionadoMs = millis();
-  }
-
-
-
-  static float vetorXSuave = 0.0f;
-  static float vetorYSuave = 0.0f;
-  static float cmdGiroSuave = 0.0f;
-  static bool retornoAoGolPorBussolaAtivo = false;
-  static bool alinhamentoAntesRetornoBussolaPendente = false;
-  static bool alinhamentoUnicoBussolaPendente = false;
-  static unsigned long inicioAlinhamentoAntesRetornoBussolaMs = 0;
-  static unsigned long inicioAlinhamentoUnicoBussolaMs = 0;
-
-  bool temZonaAAtual = linhaZonaAValida && (anguloLinhaZonaA >= 0.0f);
-  bool temZonaBAtual = linhaZonaBValida && (anguloLinhaZonaB >= 0.0f);
-  float anguloZonaAUsado = temZonaAAtual ? anguloLinhaZonaA : -1.0f;
-  float anguloZonaBUsado = temZonaBAtual ? anguloLinhaZonaB : -1.0f;
-
-  unsigned long agora = millis();
-  bool temZonaARetida = (!temZonaAAtual) && (ultimoAnguloLinhaZonaAValido >= 0.0f) &&
-                        ((agora - ultimoRxLinhaZonaAMs) <= RETENCAO_ZONA_LINHA_DEFENSOR_MS);
-  bool temZonaBRetida = (!temZonaBAtual) && (ultimoAnguloLinhaZonaBValido >= 0.0f) &&
-                        ((agora - ultimoRxLinhaZonaBMs) <= RETENCAO_ZONA_LINHA_DEFENSOR_MS);
-
-  if (temZonaARetida) {
-    anguloZonaAUsado = ultimoAnguloLinhaZonaAValido;
-  }
-  if (temZonaBRetida) {
-    anguloZonaBUsado = ultimoAnguloLinhaZonaBValido;
-  }
-
-  bool temZonaA = temZonaAAtual || temZonaARetida;
-  bool temZonaB = temZonaBAtual || temZonaBRetida;
-  bool linhaDefensorDisponivel = temZonaA || temZonaB;
-
-  alinhandoAgora = false;
-  fugindoLinhaAgora = false;
-
-  float erroAngularLinha = 0.0f;
-  int quantidadeErros = 0;
-
-  if (temZonaA) {
-    erroAngularLinha += normalizarErro180(anguloZonaAUsado - DEFENSOR_REFERENCIA_ZONA_A);
-    quantidadeErros++;
-  }
-
-  if (temZonaB) {
-    erroAngularLinha += normalizarErro180(anguloZonaBUsado - DEFENSOR_REFERENCIA_ZONA_B);
-    quantidadeErros++;
-  }
-
-  if (quantidadeErros > 0) {
-    erroAngularLinha /= (float)quantidadeErros;
-  } else {
-    resetPidLinhaGoleiro();
-  }
-
-  erroAngularLinha = aplicarDeadzoneDefensor(erroAngularLinha, 0.5f);
-  erroAlinhamentoGraus = erroAngularLinha;
-
-  int cmdPid = calcularSaidaPidLinhaGoleiro(erroAngularLinha);
-  if (fabsf(erroAngularLinha) < DEFENSOR_TOLERANCIA_GIRO_GRAUS) {
-    cmdPid = 0;
-  }
-  cmdPid = constrain(cmdPid, -180, 180);
-
-  float cmdGiroAlvo = (float)(SINAL_GIRO_PID * cmdPid);
-  if (fabsf(cmdGiroAlvo) < DEFENSOR_DEADZONE_GIRO) {
-    cmdGiroAlvo = 0.0f;
-  }
-  cmdGiroSuave = suavizarDefensor(cmdGiroSuave, cmdGiroAlvo, DEFENSOR_SUAVIZACAO_GIRO);
-  int cmdGiro = (int)roundf(cmdGiroSuave);
-  alinhandoAgora = (fabsf(erroAngularLinha) >= DEFENSOR_TOLERANCIA_GIRO_GRAUS);
-
-  float vetorX = 0.0f;
-  float vetorY = 0.0f;
-  const bool centroLinhaValido = temZonaA && temZonaB;
-  const float pesoAtracaoLinha = 35.0f;
-  const float fatorBolaComLinha = centroLinhaValido ? 0.9f : 1.78f;
-  const float fatorUltra = centroLinhaValido ? 0.75f : 1.0f;
-  const float bolaDireitaMin = 15.0f;
-  const float bolaDireitaMax = 115.0f;
-  const float bolaEsquerdaMin = 245.0f;
-  const float bolaEsquerdaMax = 345.0f;
-  const unsigned long TEMPO_MAX_ALINHAMENTO_UNICO_BUSSOLA_MS = 2000;
-  bool ultrasRecentes = ultrasValidos && (ultimoRxUltraMs > 0) && ((agora - ultimoRxUltraMs) <= TIMEOUT_ULTRA_MS);
-
-  if (executarAvancoFrontalTemporizadoDefensor(agora, vetorXSuave, vetorYSuave, cmdGiroSuave)) {
-    return;
-  }
-
-  if (!linhaDefensorDisponivel && retornoDefensorPorBussolaValido) {
-    if (!retornoAoGolPorBussolaAtivo) {
-      retornoAoGolPorBussolaAtivo = true;
-      alinhamentoAntesRetornoBussolaPendente = true;
-      alinhamentoUnicoBussolaPendente = true;
-      inicioAlinhamentoAntesRetornoBussolaMs = 0;
-      inicioAlinhamentoUnicoBussolaMs = 0;
-      erroAlinhamentoGraus = 0.0f;
-      alinhandoAgora = false;
-      resetPidLinhaGoleiro();
-      resetPidBussola();
-      vetorXSuave = 0.0f;
-      vetorYSuave = 0.0f;
-      cmdGiroSuave = 0.0f;
-    }
-
-    if (alinhamentoAntesRetornoBussolaPendente) {
-      if (inicioAlinhamentoAntesRetornoBussolaMs == 0) {
-        inicioAlinhamentoAntesRetornoBussolaMs = agora;
-      }
-
-      float erroBussolaRetorno = calcularErroReferenciaBussola();
-      erroAlinhamentoGraus = erroBussolaRetorno;
-      bool tempoAlinhamentoAtivo = (agora - inicioAlinhamentoAntesRetornoBussolaMs) < TEMPO_MAX_ALINHAMENTO_UNICO_BUSSOLA_MS;
-
-      if (tempoAlinhamentoAtivo && (fabsf(erroBussolaRetorno) > TOLERANCIA_ALINHAMENTO_GRAUS)) {
-        alinhandoAgora = true;
-        resetPidLinhaGoleiro();
-        vetorXSuave = 0.0f;
-        vetorYSuave = 0.0f;
-        cmdGiroSuave = 0.0f;
-
-        int cmdPidBussola = calcularSaidaPidBussola(erroBussolaRetorno);
-        int cmdGiroBussola = SINAL_GIRO_PID * cmdPidBussola;
-        girarNoEixo(cmdGiroBussola);
-        return;
-      }
-
-      alinhamentoAntesRetornoBussolaPendente = false;
-      inicioAlinhamentoAntesRetornoBussolaMs = 0;
-      resetPidBussola();
-    }
-
-    erroAlinhamentoGraus = 0.0f;
-    alinhandoAgora = false;
-    float anguloRetornoComUltra = comporAnguloRetornoBussolaComUltraLaterais(anguloRetornoDefensor, ultrasRecentes);
-    seguirDirecaoPorAngulo(anguloRetornoComUltra,
-                           (int)DEFENSOR_VELOCIDADE_RETORNO_GOL_PWM);
-    return;
-  }
-
-  if (linhaDefensorDisponivel && alinhamentoUnicoBussolaPendente) {
-    if (retornoDefensorPorBussolaValido) {
-      if (inicioAlinhamentoUnicoBussolaMs == 0) {
-        inicioAlinhamentoUnicoBussolaMs = agora;
-      }
-
-      float erroBussolaRetorno = calcularErroReferenciaBussola();
-      erroAlinhamentoGraus = erroBussolaRetorno;
-      bool tempoAlinhamentoAtivo = (agora - inicioAlinhamentoUnicoBussolaMs) < TEMPO_MAX_ALINHAMENTO_UNICO_BUSSOLA_MS;
-
-      if (tempoAlinhamentoAtivo && (fabsf(erroBussolaRetorno) > TOLERANCIA_ALINHAMENTO_GRAUS)) {
-        alinhandoAgora = true;
-        resetPidLinhaGoleiro();
-        vetorXSuave = 0.0f;
-        vetorYSuave = 0.0f;
-        cmdGiroSuave = 0.0f;
-
-        int cmdPidBussola = calcularSaidaPidBussola(erroBussolaRetorno);
-        int cmdGiroBussola = SINAL_GIRO_PID * cmdPidBussola;
-        girarNoEixo(cmdGiroBussola);
-        return;
-      }
-    }
-
-    alinhamentoUnicoBussolaPendente = false;
-    retornoAoGolPorBussolaAtivo = false;
-    alinhamentoAntesRetornoBussolaPendente = false;
-    inicioAlinhamentoAntesRetornoBussolaMs = 0;
-    inicioAlinhamentoUnicoBussolaMs = 0;
-    resetPidBussola();
-  }
-
-  if (!retornoAoGolPorBussolaAtivo) {
-    alinhamentoAntesRetornoBussolaPendente = false;
-    alinhamentoUnicoBussolaPendente = false;
-    inicioAlinhamentoAntesRetornoBussolaMs = 0;
-    inicioAlinhamentoUnicoBussolaMs = 0;
-  }
-
-  if (centroLinhaValido) {
-    float anguloCentroLinha = calcularVetorAtracaoLinha(anguloZonaAUsado, anguloZonaBUsado);
-    float anguloCentroLinhaRad = anguloCentroLinha * PI / 180.0f;
-
-    // O centro entre A e B passa a ser a prioridade maxima de translacao do defensor.
-    vetorX += sinf(anguloCentroLinhaRad) * pesoAtracaoLinha;
-    vetorY += cosf(anguloCentroLinhaRad) * pesoAtracaoLinha;
-  }
-
-  // Bola: mantem a mesma logica de peso, mas usa a camera quando o IR nao estiver vendo.
-  float anguloBola = -1.0f;
-  bool bolaDisponivel = false;
-
-
-
-  if (obterAnguloIrDisponivel(anguloBola)) {
-    bolaDisponivel = true;
-  } else if (cameraTemBolaValida()) {
-    anguloBola = normalizarAngulo360((float)cameraBallAngle);
-    bolaDisponivel = true;
-  }
-
-  if (bolaDisponivel) {
-    if (anguloBola >= bolaDireitaMin && anguloBola <= bolaDireitaMax) {
-      vetorX += mapearFaixaClamped(anguloBola, bolaDireitaMin, bolaDireitaMax, DEFENSOR_PESO_MIN_BOLA, DEFENSOR_PESO_MAX_BOLA) * fatorBolaComLinha;
-    }
-    if (anguloBola >= bolaEsquerdaMin && anguloBola <= bolaEsquerdaMax) {
-      vetorX -= mapearFaixaClamped(anguloBola, bolaEsquerdaMax, bolaEsquerdaMin, DEFENSOR_PESO_MIN_BOLA, DEFENSOR_PESO_MAX_BOLA) * fatorBolaComLinha;
-    }
-  }else{
-        if ((ultraDcm >= 0.0f) && (ultraDcm < 80) && (ultraEcm > 40)) {
-      vetorX -= mapearFaixaClamped(ultraDcm, DEFENSOR_ULTRA_LATERAL_ATIVO_CM, DEFENSOR_ULTRA_LATERAL_CRITICO_CM, 0.0f, DEFENSOR_PESO_MAX_ULTRA) * fatorUltra;
-    }else{
-              if ((ultraEcm >= 0.0f) && (ultraEcm < 80) && (ultraDcm > 40)) {
-vetorX += mapearFaixaClamped(ultraEcm, DEFENSOR_ULTRA_LATERAL_ATIVO_CM, DEFENSOR_ULTRA_LATERAL_CRITICO_CM, 0.0f, DEFENSOR_PESO_MAX_ULTRA) * fatorUltra;
-    }
-    }
-  }
-
-  // Ultrassons: vetores de contencao, nunca mais como prioridade bloqueante.
-  if (ultrasRecentes) {
-    if ((ultraDcm >= 0.0f) && (ultraDcm < DEFENSOR_ULTRA_LATERAL_ATIVO_CM) && (ultraEcm > DEFENSOR_ULTRA_LATERAL_CONFIRMADOR_CM)) {
-      vetorX -= mapearFaixaClamped(ultraDcm, DEFENSOR_ULTRA_LATERAL_ATIVO_CM, DEFENSOR_ULTRA_LATERAL_CRITICO_CM, 0.0f, DEFENSOR_PESO_MAX_ULTRA) * fatorUltra;
-    }
-    if ((ultraEcm >= 0.0f) && (ultraEcm < DEFENSOR_ULTRA_LATERAL_ATIVO_CM) && (ultraDcm > DEFENSOR_ULTRA_LATERAL_CONFIRMADOR_CM)) {
-      vetorX += mapearFaixaClamped(ultraEcm, DEFENSOR_ULTRA_LATERAL_ATIVO_CM, DEFENSOR_ULTRA_LATERAL_CRITICO_CM, 0.0f, DEFENSOR_PESO_MAX_ULTRA) * fatorUltra;
-    }
-    if ((ultraTcm > DEFENSOR_ULTRA_FRENTE_LIMITE_CM) && (ultraFcm > DEFENSOR_ULTRA_FRONTAL_CONFIRMADOR_CM)) {
-      vetorY -= mapearFaixaClamped(ultraTcm, DEFENSOR_ULTRA_FRENTE_LIMITE_CM, DEFENSOR_ULTRA_PROFUNDIDADE_MAX_CM, 0.0f, DEFENSOR_PESO_MAX_ULTRA_PROFUNDIDADE) * fatorUltra;
-    }
-    if ((ultraTcm >= 0.0f) && (ultraTcm < DEFENSOR_ULTRA_TRAS_LIMITE_CM) && (ultraFcm > DEFENSOR_ULTRA_FRONTAL_CONFIRMADOR_CM)) {
-      vetorY += mapearFaixaClamped(ultraTcm, DEFENSOR_ULTRA_TRAS_LIMITE_CM, DEFENSOR_ULTRA_PROFUNDIDADE_MIN_CM, 0.0f, DEFENSOR_PESO_MAX_ULTRA_PROFUNDIDADE) * fatorUltra;
-    }
-  }
-
-  vetorX = aplicarDeadzoneDefensor(vetorX, DEFENSOR_DEADZONE_VETOR);
-  vetorY = aplicarDeadzoneDefensor(vetorY, DEFENSOR_DEADZONE_VETOR);
-
-  // Suavizacao exponencial para reduzir jitter entre frames.
-  vetorXSuave = suavizarDefensor(vetorXSuave, vetorX, DEFENSOR_SUAVIZACAO_VETOR);
-  vetorYSuave = suavizarDefensor(vetorYSuave, vetorY, DEFENSOR_SUAVIZACAO_VETOR);
-  vetorXSuave = aplicarDeadzoneDefensor(vetorXSuave, DEFENSOR_DEADZONE_VETOR * 0.5f);
-  vetorYSuave = aplicarDeadzoneDefensor(vetorYSuave, DEFENSOR_DEADZONE_VETOR * 0.5f);
-
-  // Resultado final: soma de linha, bola e ultras em um unico comando de translacao.
-  float magnitudeVetor = calcularMagnitudeVetorDefensor(vetorXSuave, vetorYSuave);
-  int velocidadeFinal = (int)roundf(constrain(magnitudeVetor, 0.0f, (float)velocidade_maxima));
-  if (velocidadeFinal > 0 && velocidadeFinal < DEFENSOR_VELOCIDADE_MIN_PWM) {
-    velocidadeFinal = (int)DEFENSOR_VELOCIDADE_MIN_PWM;
-  }
-
-  float anguloFinal = calcularAnguloVetorDefensor(vetorXSuave, vetorYSuave);
-  seguirDirecaoComGiro(anguloFinal, velocidadeFinal, cmdGiro);
-}
 
 // =============================================================================
 // SECAO 21 — SETUP: INICIALIZACAO DO HARDWARE E HANDSHAKE INICIAL

@@ -28,7 +28,7 @@ void moverFrenteComGiroParaGol(int velocidade);
 bool obterAnguloIrDisponivel(float &anguloBolaGraus);
 
 bool irNaFaixaFrontal(float anguloBolaGraus);
-
+float suavizarAnguloMovimento2(float anguloAlvo, float passo); 
 int aplicarFreioUltrassonicoAtacante(int velocidadeDesejada);
 
 
