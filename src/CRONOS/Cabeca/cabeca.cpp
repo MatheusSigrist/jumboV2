@@ -1,4 +1,3 @@
-
 // Arquivo principal da placa Cabeca.
 // Funcao: concentrador de comunicacao entre Musculo, Olho e Pe,
 // leitura de botoes e bussola, e repasse de dados para o Musculo.
@@ -9,10 +8,14 @@
 #include <math.h>
 #include <WiFi.h>
 #include <esp_now.h>
+#include "cabeca_web_server.hpp"
+#include "comunicacao_unificada.hpp"
+#include "comunicacao_nexus_payloads.hpp"
+#include "pacotes_dados_html.hpp"
 
 // ===================== ESP-NOW - ALTERE O MAC AQUI =====================
 // MAC da Cabeca do outro robo (CRONOS). Use o ambiente descobridor_mac para encontrar.
-#define ESPNOW_TARGET_MAC_STR "90:70:69:07:40:E8"
+#define ESPNOW_TARGET_MAC_STR "AC:A7:04:2B:9B:60"
 // =======================================================================
 
 #define RX_MUSCULO 44
@@ -36,6 +39,7 @@
 #define I2C_SDA 8
 #define I2C_SCL 9
 #define I2C_FREQ 100000
+//teste
 
 // Inicializacao e configuracao da bussola.
 const uint8_t QMC5883P_ADDR = 0x2C;
@@ -46,7 +50,9 @@ const float yOffset = -1624.00;
 const float xScale  = 1.013703;
 const float yScale  = 0.986663;
 
+
 int head = 0;
+
 
 bool writeReg(uint8_t reg, uint8_t value) {
   Wire.beginTransmission(QMC5883P_ADDR);
@@ -77,7 +83,7 @@ bool readReg(uint8_t reg, uint8_t &value) {
     return false;
   }
 
-  size_t n = Wire.requestFrom((int)QMC5883P_ADDR, 1, true);
+  size_t n = Wire.requestFrom((uint8_t)QMC5883P_ADDR, (uint8_t)1, (uint8_t)true);
   if (n != 1) {
     Serial.print("Erro I2C readReg(requestFrom) reg 0x");
     Serial.print(reg, HEX);
@@ -143,7 +149,7 @@ bool readQMC5883PData(int16_t &x, int16_t &y, int16_t &z) {
     return false;
   }
 
-  size_t n = Wire.requestFrom((int)QMC5883P_ADDR, 6, true);
+  size_t n = Wire.requestFrom((uint8_t)QMC5883P_ADDR, (uint8_t)6, (uint8_t)true);
   if (n != 6) {
     Serial.print("Leitura incompleta: ");
     Serial.println((int)n);
@@ -185,6 +191,9 @@ const unsigned long INTERVALO_BUSSOLA_MS = 50;
 HardwareSerial SerialMusculo(0);
 HardwareSerial SerialOlho(1);
 HardwareSerial SerialPe(2);
+
+using namespace ComunicacaoUnificada;
+using namespace ComunicacaoNexus;
 
 struct PacoteOlho {
   int16_t uD;
@@ -245,7 +254,7 @@ bool comunicacaoMusculoOK = false;
 bool comunicacaoOlhoOK = false;
 bool comunicacaoPeOK = false;
 //==============================//
-bool atacanteCfg = false;
+bool atacanteCfg = true;
 //==============================//
 bool corGolAzulCfg = false;
 bool jogoEmExecucao = false;
@@ -292,6 +301,80 @@ bool kickerAtivado = false;
 int ultimoKickerEnviado = -1;
 float ultimoHeadingBussola = 0.0f;
 bool bussolaOK = false;
+int16_t headingReferenciaBussola = -1;
+unsigned long ultimoRxHeadingBussolaMs = 0;
+unsigned long ultimoRxReferenciaBussolaMs = 0;
+uint16_t mapa32Seq = 0;
+uint16_t mapa32Limiar = 0;
+uint16_t mapa32Sensores[PacotesDadosHtml::MAP32_SENSOR_COUNT] = {0};
+unsigned long mapa32UltimoRxMs = 0;
+bool mapa32Valido = false;
+unsigned long ultimoLoopWebStatusMs = 0;
+float loopFpsFiltrado = 0.0f;
+
+CabecaWebServer webServerCabeca;
+Receptor receptorOlho;
+Receptor receptorPe;
+
+void aplicarPacoteOlhoRecebido(const PacoteOlho& pacote) {
+  comunicacaoOlhoOK = true;
+  ultimoRxOlhoMs = millis();
+  ultimoUltraDX10 = pacote.uD;
+  ultimoUltraEX10 = pacote.uE;
+  ultimoUltraFX10 = pacote.uF;
+  ultimoUltraTX10 = pacote.uT;
+  ultimoAnguloIrX10 = pacote.angulo;
+  ultimaIntensidadeIrX10 = pacote.intensidade;
+  ultimoBallAngle = pacote.ballAngle;
+  ultimoBallDist = pacote.ballDist;
+  ultimoBlueAngle = pacote.blueAngle;
+  ultimoBlueDist = pacote.blueDist;
+  ultimoYellowAngle = pacote.yellowAngle;
+  ultimoYellowDist = pacote.yellowDist;
+  cameraOlhoOK = (pacote.cameraOK != 0);
+}
+
+void aplicarPacotePeAtacante(const PacotePe& pacote) {
+  comunicacaoPeOK = true;
+  ultimoAnguloLinhaX10 = pacote.angulo;
+}
+
+void aplicarPacotePeDefensor(const PacotePeDefensor& pacoteDef) {
+  comunicacaoPeOK = true;
+  linhaZonaAValida = (pacoteDef.temLinhaZonaA == 1);
+  linhaZonaBValida = (pacoteDef.temLinhaZonaB == 1);
+  ultimoAnguloLinhaZonaAX10 = linhaZonaAValida ? pacoteDef.anguloZonaA : -10;
+  ultimoAnguloLinhaZonaBX10 = linhaZonaBValida ? pacoteDef.anguloZonaB : -10;
+
+  if (linhaZonaAValida) {
+    ultimoAnguloLinhaX10 = ultimoAnguloLinhaZonaAX10;
+  } else if (linhaZonaBValida) {
+    ultimoAnguloLinhaX10 = ultimoAnguloLinhaZonaBX10;
+  } else {
+    ultimoAnguloLinhaX10 = -10;
+  }
+}
+
+bool encaminharAlvoPosicionamentoMusculo(float xCm, float yCm) {
+  if (!comunicacaoMusculoOK) {
+    return false;
+  }
+
+  SerialMusculo.print("POS:");
+  SerialMusculo.print(xCm, 1);
+  SerialMusculo.print("/");
+  SerialMusculo.println(yCm, 1);
+  return true;
+}
+
+void enviarComandoPe(ComandoPe comando, int16_t valor = 0) {
+  PeComandoPayload payload;
+  payload.comando = (uint8_t)comando;
+  payload.valor = valor;
+  enviarStruct(SerialPe, Rota::CABECA_PARA_PE_COMANDO, payload);
+}
+const char* WEB_AP_SSID = "NEXUS_CABECA";
+const char* WEB_AP_PASS = "12345678";
 
 void prepararTrocaPapelPe() {
   // Durante a troca de papel, o Pe ainda pode emitir alguns frames no formato anterior.
@@ -308,7 +391,7 @@ void prepararTrocaPapelPe() {
 const unsigned long INTERVALO_ENVIO_IR_MS = 120;
 const unsigned long INTERVALO_ENVIO_BUSSOLA_MS = 120;
 const unsigned long INTERVALO_ENVIO_GOL_MS = 120;
-const unsigned long INTERVALO_ENVIO_LINHA_MS = 20;
+const unsigned long INTERVALO_ENVIO_LINHA_MS = 2;
 const unsigned long INTERVALO_ENVIO_INT_MS = 120;
 const unsigned long INTERVALO_ENVIO_ULTRA_MS = 120;
 const unsigned long INTERVALO_ENVIO_KICKER_MS = 120;
@@ -593,6 +676,7 @@ void atualizarBussola() {
 
   head = calcularHead(rawX, rawY);
   ultimoHeadingBussola = (float)head;
+  ultimoRxHeadingBussolaMs = millis();
 
   Serial.print("BUS X:");
   Serial.print(rawX);
@@ -657,12 +741,27 @@ void processarMensagem(String msg) {
       }
     }
   } else if (msg == "req:sens") {
+    enviarComandoPe(ComandoPe::REQ_SENS, 0);
     SerialPe.println("REQ:SENS");
   } else if (msg == "req:lim") {
+    enviarComandoPe(ComandoPe::REQ_LIM, 0);
     SerialPe.println("REQ:LIM");
   } else if (msg.startsWith("setlim:")) {
+    String v = msg.substring(7);
+    v.trim();
+    int limiar = v.toInt();
+    if (limiar < 0) limiar = 0;
+    enviarComandoPe(ComandoPe::SET_LIM, (int16_t)limiar);
     SerialPe.print("SETLIM:");
-    SerialPe.println(msg.substring(7));
+    SerialPe.println(v);
+  } else if (msg.startsWith("busref:")) {
+    String v = msg.substring(7);
+    v.trim();
+    int ref = v.toInt();
+    if (ref < 0) ref = 0;
+    if (ref >= 360) ref %= 360;
+    headingReferenciaBussola = (int16_t)ref;
+    ultimoRxReferenciaBussolaMs = millis();
   } else if (msg.length() > 0) {
     Serial.print("Recebido do musculo: ");
     Serial.println(msg);
@@ -701,10 +800,7 @@ void enviarEstadoParaPeSemDelay() {
 
   // Envia 3x para garantir que Pe receba mesmo com perda de byte
   for (int i = 0; i < 3; i++) {
-    SerialPe.write(BYTE_INICIA);
-    SerialPe.write(ID_PLACA_PE);
-    SerialPe.write((uint8_t*)&estado, sizeof(PacoteEstado));
-    SerialPe.write(BYTE_PARA);
+    enviarStruct(SerialPe, Rota::CABECA_PARA_PE, estado);
     delay(2);
   }
 
@@ -723,15 +819,8 @@ void enviarEstadoParaPlacas() {
   estado.atacante = atacanteCfg;
   estado.corGolAzul = corGolAzulCfg;
 
-  SerialOlho.write(BYTE_INICIA);
-  SerialOlho.write(ID_PLACA_OLHO);
-  SerialOlho.write((uint8_t*)&estado, sizeof(PacoteEstado));
-  SerialOlho.write(BYTE_PARA);
-
-  SerialPe.write(BYTE_INICIA);
-  SerialPe.write(ID_PLACA_PE);
-  SerialPe.write((uint8_t*)&estado, sizeof(PacoteEstado));
-  SerialPe.write(BYTE_PARA);
+  enviarStruct(SerialOlho, Rota::CABECA_PARA_OLHO, estado);
+  enviarStruct(SerialPe, Rota::CABECA_PARA_PE, estado);
 
   SerialMusculo.print("ATC:");
   SerialMusculo.println(atacanteCfg ? 1 : 0);
@@ -775,7 +864,7 @@ void enviarBussolaParaMusculo() {
   ultimoEnvioBussolaMusculoMs = millis();
 }
 
-// Publica bola e gols (ângulo e distância) detectados pela camera para o Musculo.
+// Publica bola, gols e intensidade IR para o Musculo.
 void enviarCameraParaMusculo() {
   if ((millis() - ultimoEnvioGolMusculoMs) < INTERVALO_ENVIO_GOL_MS) {
     return;
@@ -794,7 +883,9 @@ void enviarCameraParaMusculo() {
   SerialMusculo.print(",");
   SerialMusculo.print(ultimoYellowDist);
   SerialMusculo.print(",");
-  SerialMusculo.println(cameraOlhoOK ? 1 : 0);
+  SerialMusculo.print(cameraOlhoOK ? 1 : 0);
+  SerialMusculo.print(",");
+  SerialMusculo.println(ultimaIntensidadeIrX10 / 10.0f, 1);
   ultimoEnvioGolMusculoMs = millis();
 }
 
@@ -908,6 +999,25 @@ void enviarEstadoKickerParaMusculo() {
   ultimoEnvioKickerMusculoMs = millis();
 }
 
+void processarPacoteMapa32(const PacotesDadosHtml::Mapa32Payload& payload) {
+  mapa32Seq = payload.seq;
+  mapa32Limiar = payload.limiar;
+
+  for (uint8_t i = 0; i < PacotesDadosHtml::MAP32_SENSOR_COUNT; i++) {
+    mapa32Sensores[i] = payload.sensores[i];
+  }
+
+  mapa32UltimoRxMs = millis();
+  mapa32Valido = true;
+
+  webServerCabeca.updateMap32Snapshot(
+      mapa32Seq,
+      mapa32Limiar,
+      mapa32Sensores,
+      mapa32Valido,
+      mapa32UltimoRxMs);
+}
+
 // Valida respostas textuais de vida e marca comunicacao ativa.
 void processarTextoResposta(String &buffer, bool &flagResposta) {
   buffer.trim();
@@ -975,6 +1085,18 @@ bool processarLinhaLimiarPe(String &buffer) {
 
 // Le serial da placa Olho, decodifica pacote binario e fallback textual.
 void lerRespostaOlho() {
+  Frame frame;
+  while (receptorOlho.poll(SerialOlho, frame)) {
+    if (frame.rota != Rota::OLHO_PARA_CABECA) {
+      continue;
+    }
+
+    PacoteOlho pacote;
+    if (lerStruct(frame, pacote)) {
+      aplicarPacoteOlhoRecebido(pacote);
+    }
+  }
+
   while (SerialOlho.available() > 0) {
     if (SerialOlho.peek() == BYTE_INICIA) {
       if (SerialOlho.available() < (int)(sizeof(PacoteOlho) + 3)) {
@@ -1039,10 +1161,80 @@ void lerRespostaPe() {
     ignorarPacotesPeAteMs = 0;
   }
 
+  Frame frame;
+  while (receptorPe.poll(SerialPe, frame)) {
+    if (frame.rota == Rota::PE_PARA_CABECA_SENSORES && frame.tamanho == sizeof(PeSensoresPayload)) {
+      PeSensoresPayload sens;
+      if (lerStruct(frame, sens)) {
+        sensorPeBruto1 = sens.sensor1;
+        sensorPeBruto9 = sens.sensor9;
+        sensorPeBruto17 = sens.sensor17;
+        sensorPeBruto25 = sens.sensor25;
+        comunicacaoPeOK = true;
+        enviarSensoresPeParaMusculo();
+      }
+      continue;
+    }
+
+    if (frame.rota == Rota::PE_PARA_CABECA_LIMIAR && frame.tamanho == sizeof(PeLimiarPayload)) {
+      PeLimiarPayload lim;
+      if (lerStruct(frame, lim) && lim.limiar > 0) {
+        SerialMusculo.print("LIM:");
+        SerialMusculo.println(lim.limiar);
+        comunicacaoPeOK = true;
+      }
+      continue;
+    }
+
+    if (frame.rota != Rota::PE_PARA_CABECA) {
+      continue;
+    }
+
+    if (frame.tamanho == sizeof(PacotePe)) {
+      PacotePe pacote;
+      if (lerStruct(frame, pacote)) {
+        aplicarPacotePeAtacante(pacote);
+      }
+    } else if (frame.tamanho == sizeof(PacotePeDefensor)) {
+      PacotePeDefensor pacoteDef;
+      if (lerStruct(frame, pacoteDef)) {
+        aplicarPacotePeDefensor(pacoteDef);
+      }
+    }
+  }
+
   while (SerialPe.available() > 0) {
     if (SerialPe.peek() == BYTE_INICIA) {
+      if (SerialPe.available() < 2) {
+        return;
+      }
+
       SerialPe.read();
       byte id = SerialPe.read();
+
+      if (id == PacotesDadosHtml::MAP32_ID) {
+        if (SerialPe.available() < (int)(sizeof(PacotesDadosHtml::Mapa32Payload) + 2)) {
+          return;
+        }
+
+        PacotesDadosHtml::Mapa32Payload payload;
+        SerialPe.readBytes((uint8_t*)&payload, sizeof(PacotesDadosHtml::Mapa32Payload));
+        uint8_t crcRx = (uint8_t)SerialPe.read();
+        byte stop = SerialPe.read();
+
+        if (stop != PacotesDadosHtml::MAP32_STOP) {
+          continue;
+        }
+
+        uint8_t crcEsperado = PacotesDadosHtml::crcMapa32(payload);
+        if (crcEsperado != crcRx) {
+          continue;
+        }
+
+        processarPacoteMapa32(payload);
+        continue;
+      }
+
       if (id != ID_PLACA_PE) {
         continue;
       }
@@ -1056,6 +1248,7 @@ void lerRespostaPe() {
         SerialPe.readBytes((uint8_t*)&pacote, sizeof(PacotePe));
         byte stop = SerialPe.read();
         if (stop != BYTE_PARA) {
+          // Stop byte errado: flush buffer para resincronizar
           while (SerialPe.available() > 0) SerialPe.read();
           return;
         }
@@ -1070,6 +1263,7 @@ void lerRespostaPe() {
         SerialPe.readBytes((uint8_t*)&pacoteDef, sizeof(PacotePeDefensor));
         byte stop = SerialPe.read();
         if (stop != BYTE_PARA) {
+          // Stop byte errado: flush buffer para resincronizar
           while (SerialPe.available() > 0) SerialPe.read();
           return;
         }
@@ -1231,6 +1425,8 @@ void setup() {
   }
 
   iniciarEspNow();
+  webServerCabeca.setPositionTargetSender(encaminharAlvoPosicionamentoMusculo);
+  webServerCabeca.begin(WEB_AP_SSID, WEB_AP_PASS);
 
   unsigned long inicioHandshake = millis();
   while ((millis() - inicioHandshake) < 3000 && !comunicacaoMusculoOK) {
@@ -1248,6 +1444,30 @@ void setup() {
 
 // Laco principal da Cabeca: coleta entradas e redistribui dados para o Musculo.
 void loop() {
+  unsigned long agoraLoopMs = millis();
+  if (ultimoLoopWebStatusMs == 0) {
+    ultimoLoopWebStatusMs = agoraLoopMs;
+    loopFpsFiltrado = 0.0f;
+  } else {
+    unsigned long dt = agoraLoopMs - ultimoLoopWebStatusMs;
+    if (dt > 0) {
+      float fpsInst = 1000.0f / (float)dt;
+      if (loopFpsFiltrado <= 0.01f) {
+        loopFpsFiltrado = fpsInst;
+      } else {
+        loopFpsFiltrado = (0.88f * loopFpsFiltrado) + (0.12f * fpsInst);
+      }
+    }
+    ultimoLoopWebStatusMs = agoraLoopMs;
+  }
+
+  webServerCabeca.updateRuntimeStatus(
+      atacanteCfg,
+      loopFpsFiltrado,
+      WiFi.RSSI(),
+      (uint8_t)WiFi.softAPgetStationNum(),
+      agoraLoopMs);
+
   if (millis() - ultimoEnvioOiMs >= INTERVALO_OI_MS) {
     SerialMusculo.println("oi");
     ultimoEnvioOiMs = millis();
@@ -1257,8 +1477,23 @@ void loop() {
   lerSerialMusculo();
   lerRespostaOlho();
   lerRespostaPe();
+  webServerCabeca.updateUltrasSnapshot(
+      ultimoUltraDX10,
+      ultimoUltraEX10,
+      ultimoUltraFX10,
+      ultimoUltraTX10,
+      ultimoRxOlhoMs);
   enviarIrParaMusculo();
   atualizarBussola();
+  bool refValida = (ultimoRxReferenciaBussolaMs > 0) && ((millis() - ultimoRxReferenciaBussolaMs) < 8000);
+  int16_t refAtual = refValida ? headingReferenciaBussola : (int16_t)ultimoHeadingBussola;
+  webServerCabeca.updateBussolaSnapshot(
+      ultimoHeadingBussola,
+      bussolaOK,
+      refAtual,
+      refValida,
+      ultimoRxHeadingBussolaMs,
+      ultimoRxReferenciaBussolaMs);
   enviarBussolaParaMusculo();
   enviarCameraParaMusculo();  // Envia dados de camera (bola + 2 gols)
   enviarLinhaParaMusculo();
@@ -1268,6 +1503,7 @@ void loop() {
   enviarEstadoKickerParaMusculo();
   enviarEstadoParaPlacas();
   atualizarEspNow();
+  webServerCabeca.handleClient();
 
-  delay(5);
+  delay(1);
 }

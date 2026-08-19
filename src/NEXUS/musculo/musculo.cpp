@@ -24,6 +24,8 @@
 #include <EEPROM.h>
 #include "motores_movimentacao.hpp"
 #include "display/ihm_display.hpp"
+#include "atacante.hpp"
+#include "defensor.hpp"
 
 
 // =============================================================================
@@ -110,6 +112,7 @@ int16_t  cameraBlueAngle   = -999;
 uint16_t cameraBlueDist    = 0;
 int16_t  cameraYellowAngle = -999;
 uint16_t cameraYellowDist  = 0;
+
 
 // Gol selecionado (calculado a partir de corGolAzul)
 int16_t  cameraGolSelecionadoAngle = -999;
@@ -311,9 +314,7 @@ float posicionamentoAlvoYcm = 121.5f;
 // SECAO 6 — CONTROLE DE MOVIMENTO: PARAMETROS GERAIS
 // =============================================================================
 
-// --- Velocidade máxima global dos motores (0–255) ---
-// *** AJUSTE AQUI para alterar a velocidade máxima do robô ***
-const int velocidade_maxima = 255;
+int velocidade_maxima = 255;
 
 // --- Habilita/desabilita o movimento baseado em bola (teste) ---
 const bool MOVIMENTO_BOLA_HABILITADO = false;
@@ -609,7 +610,7 @@ bool executarPosicionamentoAlvo() {
 
 
 // =============================================================================
-// SECAO 10 — KICKER (SOLENOIDE)
+// SECAO 9 — KICKER (SOLENOIDE)
 // =============================================================================
 
 // Solicita chute manual pelo submenu kicker
@@ -665,7 +666,7 @@ void atualizarKicker() {
 
 
 // =============================================================================
-// SECAO 11 — FUNCOES DE GOL, BUSSOLA E ANGULO DE CAMPO (compartilhadas)
+// SECAO 10 — FUNCOES DE GOL, BUSSOLA E ANGULO DE CAMPO (compartilhadas)
 // =============================================================================
 
 // Retorna true se o gol selecionado é o azul
@@ -765,7 +766,7 @@ bool calcularComandoLateralPorBolaCorrigida(float anguloBolaCorrigido,
 
 
 // =============================================================================
-// SECAO 12 — FUNCOES DE CAMERA (compartilhadas)
+// SECAO 11 — FUNCOES DE CAMERA (compartilhadas)
 // =============================================================================
 
 // Retorna true se o pacote de câmera está dentro do timeout
@@ -854,7 +855,7 @@ bool cameraTemGolRetornoDefensorValido(int16_t &anguloGol) {
 
 
 // =============================================================================
-// SECAO 13 — FUNCOES DE LINHA (compartilhadas)
+// SECAO 12 — FUNCOES DE LINHA (compartilhadas)
 // =============================================================================
 
 // Declarações antecipadas para uso interno nas funções de linha
@@ -886,7 +887,7 @@ float calcularDirecaoCentroLinhaTeste() {
 
 
 // =============================================================================
-// SECAO 14 — FUNCOES ESP-NOW E PAPEL AUTOMATICO
+// SECAO 13 — FUNCOES ESP-NOW E PAPEL AUTOMATICO
 // =============================================================================
 
 // Retorna true se ESP-NOW está conectado e com pacote recente
@@ -947,7 +948,7 @@ void atualizarPapelAutomaticoPorParceria() {
 
 
 // =============================================================================
-// SECAO 15 — FUNCOES DE ENVIO PARA A CABECA
+// SECAO 14 — FUNCOES DE ENVIO PARA A CABECA
 // =============================================================================
 
 // Envia periodicamente a cor de gol selecionada para a Cabeça
@@ -1014,7 +1015,7 @@ void enviarLimiarLinhaParaPe() {
 
 
 // =============================================================================
-// SECAO 18 — PROCESSAMENTO DE MENSAGENS DA CABECA (Serial1)
+// SECAO 15 — PROCESSAMENTO DE MENSAGENS DA CABECA (Serial1)
 // =============================================================================
 
 // Interpreta mensagens recebidas da Cabeça e atualiza estados locais
@@ -1053,23 +1054,17 @@ void processarMensagemCabeca(String msg) {
     return;
   }
 
-  // Ângulo IR: negativo = sem bola; 30° exato é descartado como ruído
+  // Ângulo IR: negativo = sem bola;
   if (msg.startsWith("IR:")) {
     String valorIr = msg.substring(3); valorIr.trim();
     float novoAngulo = valorIr.toFloat();
     if (novoAngulo < 0.0f) {
       irDetectado = false; anguloIr = -1.0f;
     } else {
-      bool eh30Graus = fabsf(novoAngulo - 30.0f) <= 1.0f;
-      if (eh30Graus) {
-        // Descarta imediatamente como sem sinal de bola
-        irDetectado = false; anguloIr = -1.0f;
-      } else {
         irDetectado = true; anguloIr = novoAngulo;
         ultimoAnguloIrValido = normalizarAngulo360(novoAngulo);
         ultimoRxIrValidoMs = millis();
       }
-    }
     comunicacaoCabecaOK = true; ultimoRxCabeca = millis(); return;
   }
 
@@ -1338,916 +1333,9 @@ void lerSerialCabeca() {
 }
 
 
-// =============================================================================
-// SECAO 19 — ESTRATEGIA DO ATACANTE
-// =============================================================================
-//
-// Responsabilidades:
-//   • Alinhar o robô ao gol via câmera (PID de bússola)
-//   • Seguir a bola por IR com rampa angular suave
-//   • Usar câmera como fallback quando IR está ausente
-//   • Fugir da linha branca com prioridade máxima
-//   • Frear ao se aproximar de paredes (ultrassônicos)
-//   • Chutar ao se alinhar (kicker automático via atualizarKicker)
-//
-// Parâmetros de ajuste — *** ALTERE APENAS AQUI para tunar o atacante ***
-// =============================================================================
-
-// --- Velocidades do atacante ---
-const int VELOCIDADE_IR_FRONTAL_PWM       = 200;   // PWM na faixa frontal do IR (±32°)
-const int VELOCIDADE_IR_FAIXA_REDUZIDA_PWM = 140;  // PWM em faixas laterais do IR
-
-// --- Freio ultrassônico do atacante (laterais) ---
-const float ATACANTE_ULTRA_FREIO_INICIO_CM    = 70.0f;   // Distância onde o freio começa
-const float ATACANTE_ULTRA_FREIO_CRITICO_CM   = 50.0f;   // Distância de freio máximo
-const int   ATACANTE_ULTRA_FREIO_VELOCIDADE_MIN = 80;   // Velocidade mínima com freio
-const int   ATACANTE_ULTRA_FREIO_PWM_POR_CM   = 3;       // Incremento de PWM por cm
-
-// --- Confirmação de linha + parede (evita falso positivo único) ---
-const uint8_t ATACANTE_LINHA_PAREDE_CONFIRMACAO = 3;
-
-// --- Tempo mínimo sem bola na câmera para iniciar busca ---
-const unsigned long ATACANTE_ESPERA_SEM_BOLA_CAMERA_MS = 2000UL;
-
-// --- PID de suavização angular do atacante (transição entre ângulos de movimento) ---
-// *** AJUSTE AQUI para suavizar ou tornar mais responsiva a transição de direção ***
-const float PID_MOVIMENTO_KP           = 2.0f;
-const float PID_MOVIMENTO_KI           = 0.01f;
-const float PID_MOVIMENTO_KD           = 0.8f;
-const float PID_MOVIMENTO_INTEGRAL_MAX = 90.0f;
-const float PID_MOVIMENTO_SAIDA_MAX    = 15.0f;
-const float ALPHA_MOVIMENTO            = 0.15f;   // Suavização exponencial do ângulo atual
-const float ALPHA_MOVIMENTO_ALVO       = 0.11f;   // Suavização exponencial do ângulo alvo
-const float PASSO_MAX_MOVIMENTO_ALVO_GRAUS = 18.0f; // Passo máximo por ciclo no alvo filtrado
-
-// Estado interno do PID de movimento do atacante
-float        pidMovimentoIntegral              = 0.0f;
-float        pidMovimento                      = 0.0f;
-float        erroMovimento                     = 0.0f;
-float        erroAnteriorMovimento             = 0.0f;
-float        anguloMovimentoAtual              = -1.0f;
-float        anguloMovimentoSuavizado          = -1.0f;
-float        anguloMovimentoDesejadoFiltrado   = -1.0f;
-unsigned long ultimoTempoPidMovimento          = 0;
-unsigned long inicioCameraSemIrMs              = 0;
-
-// Zera o controlador angular do atacante
-void resetControleMovimentoAtacante() {
-  pidMovimentoIntegral            = 0.0f;
-  pidMovimento                    = 0.0f;
-  erroMovimento                   = 0.0f;
-  erroAnteriorMovimento           = 0.0f;
-  anguloMovimentoAtual            = -1.0f;
-  anguloMovimentoSuavizado        = -1.0f;
-  anguloMovimentoDesejadoFiltrado = -1.0f;
-  ultimoTempoPidMovimento         = 0;
-}
-
-
-
-// PID de transição angular do atacante (suaviza ângulo de movimento)
-float calcularPidMovimento(float erro) {
-  unsigned long agora = millis();
-  float dt = 0.02f;
-  if (ultimoTempoPidMovimento != 0) {
-    dt = (agora - ultimoTempoPidMovimento) / 1000.0f;
-    if (dt < 0.005f) dt = 0.005f;
-    if (dt > 0.2f)   dt = 0.2f;
-  }
-  ultimoTempoPidMovimento = agora;
-
-  pidMovimentoIntegral += erro * dt;
-  if (pidMovimentoIntegral >  PID_MOVIMENTO_INTEGRAL_MAX) pidMovimentoIntegral =  PID_MOVIMENTO_INTEGRAL_MAX;
-  if (pidMovimentoIntegral < -PID_MOVIMENTO_INTEGRAL_MAX) pidMovimentoIntegral = -PID_MOVIMENTO_INTEGRAL_MAX;
-
-  float derivada = (erro - erroAnteriorMovimento) / dt;
-  erroAnteriorMovimento = erro;
-
-  pidMovimento = PID_MOVIMENTO_KP * erro + PID_MOVIMENTO_KI * pidMovimentoIntegral + PID_MOVIMENTO_KD * derivada;
-  if (pidMovimento >  PID_MOVIMENTO_SAIDA_MAX) pidMovimento =  PID_MOVIMENTO_SAIDA_MAX;
-  if (pidMovimento < -PID_MOVIMENTO_SAIDA_MAX) pidMovimento = -PID_MOVIMENTO_SAIDA_MAX;
-
-  // Evita microcorreções perto do alvo
-  if (fabsf(erro) < 2.0f) pidMovimento = 0.0f;
-
-  return -pidMovimento;
-}
-
-// Aplica suavização exponencial circular ao ângulo de movimento do atacante
-float suavizarAnguloMovimentoAtacante(float anguloMovimentoDesejado) {
-  // Referencial deslocado 180°: o que era 0 passa a ser 180 e vice-versa
-  float alvoBruto = normalizarAngulo360(anguloMovimentoDesejado + 180.0f);
-
-  if ((anguloMovimentoAtual < 0.0f) || (anguloMovimentoSuavizado < 0.0f)) {
-    anguloMovimentoAtual            = alvoBruto;
-    anguloMovimentoSuavizado        = alvoBruto;
-    anguloMovimentoDesejadoFiltrado = alvoBruto;
-    erroMovimento = erroAnteriorMovimento = pidMovimentoIntegral = pidMovimento = 0.0f;
-    ultimoTempoPidMovimento = 0;
-    return anguloMovimentoSuavizado;
-  }
-
-  // Estabiliza o alvo em modo circular para evitar saltos (ex.: 90° para 270°)
-  float deltaAlvo = normalizarErro180(alvoBruto - anguloMovimentoDesejadoFiltrado);
-  deltaAlvo = constrain(deltaAlvo, -PASSO_MAX_MOVIMENTO_ALVO_GRAUS, PASSO_MAX_MOVIMENTO_ALVO_GRAUS);
-  anguloMovimentoDesejadoFiltrado = normalizarAngulo360(anguloMovimentoDesejadoFiltrado + deltaAlvo);
-  anguloMovimentoDesejadoFiltrado = normalizarAngulo360(
-      anguloMovimentoDesejadoFiltrado +
-      ALPHA_MOVIMENTO_ALVO * normalizarErro180(alvoBruto - anguloMovimentoDesejadoFiltrado));
-
-  // Erro: última direção realmente comandada como realimentação
-  erroMovimento = normalizarErro180(anguloMovimentoDesejadoFiltrado - anguloMovimentoAtual);
-  pidMovimento  = calcularPidMovimento(erroMovimento);
-
-  anguloMovimentoAtual = normalizarAngulo360(anguloMovimentoAtual + pidMovimento);
-  anguloMovimentoSuavizado = anguloMovimentoSuavizado +
-                             ALPHA_MOVIMENTO * normalizarErro180(anguloMovimentoAtual - anguloMovimentoSuavizado);
-  anguloMovimentoSuavizado = normalizarAngulo360(anguloMovimentoSuavizado);
-  return anguloMovimentoSuavizado;
-}
-
-// Faz rampa angular curta (100–300 ms) entre faixas do IR
-float obterAnguloIrSuavizado(float anguloAlvoGraus) {
-  float alvo  = normalizarAngulo360(anguloAlvoGraus);
-  unsigned long agora = millis();
-
-  if (!anguloIrSuaveInicializado) {
-    anguloIrSuaveAtual = anguloIrSuaveInicio = anguloIrSuaveAlvo = alvo;
-    inicioTransicaoIrMs = agora; duracaoTransicaoIrMs = TRANSICAO_ANGULO_IR_MIN_MS;
-    anguloIrSuaveInicializado = true;
-    return quantizarAnguloPasso(anguloIrSuaveAtual, PASSO_ANGULO_IR_GRAUS);
-  }
-
-  float erroNovoAlvo = fabsf(normalizarErro180(alvo - anguloIrSuaveAlvo));
-  if (erroNovoAlvo >= 1.0f) {
-    anguloIrSuaveInicio = anguloIrSuaveAtual;
-    anguloIrSuaveAlvo   = alvo;
-    inicioTransicaoIrMs = agora;
-    float delta             = fabsf(normalizarErro180(anguloIrSuaveAlvo - anguloIrSuaveInicio));
-    unsigned long duracaoCalculada = (unsigned long)(delta * TRANSICAO_ANGULO_IR_MS_POR_GRAU);
-    if (duracaoCalculada < TRANSICAO_ANGULO_IR_MIN_MS) duracaoCalculada = TRANSICAO_ANGULO_IR_MIN_MS;
-    if (duracaoCalculada > TRANSICAO_ANGULO_IR_MAX_MS) duracaoCalculada = TRANSICAO_ANGULO_IR_MAX_MS;
-    duracaoTransicaoIrMs = duracaoCalculada;
-  }
-
-  unsigned long decorridoMs = agora - inicioTransicaoIrMs;
-  if (decorridoMs >= duracaoTransicaoIrMs) {
-    anguloIrSuaveAtual = anguloIrSuaveAlvo;
-  } else {
-    float progresso = (float)decorridoMs / (float)duracaoTransicaoIrMs;
-    float delta     = normalizarErro180(anguloIrSuaveAlvo - anguloIrSuaveInicio);
-    anguloIrSuaveAtual = normalizarAngulo360(anguloIrSuaveInicio + delta * progresso);
-  }
-
-  return quantizarAnguloPasso(anguloIrSuaveAtual, PASSO_ANGULO_IR_GRAUS);
-}
-
-// Detecta faixa frontal do IR em torno de 0° (±32°), tratando wrap 360°->0°
-bool irNaFaixaFrontal(float anguloBolaGraus) {
-  float ang = normalizarAngulo360(anguloBolaGraus);
-  return (ang > 328.0f || ang < 32.0f);
-}
-
-// Retém por poucos milissegundos o último ângulo IR válido para evitar parada em falhas curtas.
-bool obterAnguloIrDisponivel(float &anguloBolaGraus) {
-  if (irDetectado && anguloIr >= 0.0f) {
-    anguloBolaGraus = normalizarAngulo360(anguloIr);
-    return true;
-  }
-
-  if (ultimoAnguloIrValido >= 0.0f && (millis() - ultimoRxIrValidoMs) <= RETENCAO_IR_VALIDO_MS) {
-    anguloBolaGraus = normalizarAngulo360(ultimoAnguloIrValido);
-    return true;
-  }
-
-  return false;
-}
-
-// Retorna true se algum ultrassônico lateral do atacante está em nível crítico
-bool ultraLateralCriticoAtacante() {
-  bool ultraDireitoCritico  = (ultraDcm >= 0.0f) && (ultraDcm <= ATACANTE_ULTRA_FREIO_CRITICO_CM);
-  bool ultraEsquerdoCritico = (ultraEcm >= 0.0f) && (ultraEcm <= ATACANTE_ULTRA_FREIO_CRITICO_CM);
-  return ultraDireitoCritico || ultraEsquerdoCritico;
-}
-
-// Limita velocidade por freio ultrassônico frontal (frente do robô)
-int aplicarFreioUltrassonicoAtacanteFrente(int velocidadeDesejada) {
-  int velocidadeBase = constrain(velocidadeDesejada, 0, 255);
-  bool ultrasRecentes = (ultimoRxUltraMs > 0) && ((millis() - ultimoRxUltraMs) <= TIMEOUT_ULTRA_MS);
-  if (!ultrasRecentes) return velocidadeBase;
-
-  float menorUltraCm = -1.0f;
-  // Usa apenas ultraF para o freio frontal; ultraT é ignorado se estiver próximo
-  float leituras[] = { ultraFcm };
-  for (float leitura : leituras) {
-    if (leitura < 0.0f) continue;
-    if (ultraTcm > 150) {
-      if ((menorUltraCm < 0.0f) || (leitura < menorUltraCm)) menorUltraCm = leitura;
-    }
-    if ((menorUltraCm < 0.0f) || (menorUltraCm > ATACANTE_ULTRA_FREIO_INICIO_CM)) return velocidadeBase;
-    int velocidadeLimite = ATACANTE_ULTRA_FREIO_VELOCIDADE_MIN;
-    if (menorUltraCm > ATACANTE_ULTRA_FREIO_CRITICO_CM)
-      velocidadeLimite += (int)((menorUltraCm - ATACANTE_ULTRA_FREIO_CRITICO_CM) * ATACANTE_ULTRA_FREIO_PWM_POR_CM);
-    if (velocidadeLimite > velocidade_maxima) velocidadeLimite = velocidade_maxima;
-    return min(velocidadeBase, velocidadeLimite);
-  }
-  return velocidadeBase;
-}
-
-// Limita velocidade por freio ultrassônico lateral do atacante (D e E)
-int aplicarFreioUltrassonicoAtacante(int velocidadeDesejada) {
-  int velocidadeBase = constrain(velocidadeDesejada, 0, 255);
-  bool ultrasRecentes = (ultimoRxUltraMs > 0) && ((millis() - ultimoRxUltraMs) <= TIMEOUT_ULTRA_MS);
-  if (!ultrasRecentes) return velocidadeBase;
-
-  float menorUltraCm = -1.0f;
-  float leituras[] = { ultraDcm, ultraEcm };
-  for (float leitura : leituras) {
-    if (leitura < 0.0f) continue;
-    if ((menorUltraCm < 0.0f) || (leitura < menorUltraCm)) menorUltraCm = leitura;
-  }
-  if ((menorUltraCm < 0.0f) || (menorUltraCm > ATACANTE_ULTRA_FREIO_INICIO_CM)) return velocidadeBase;
-
-  int velocidadeLimite = ATACANTE_ULTRA_FREIO_VELOCIDADE_MIN;
-  if (menorUltraCm > ATACANTE_ULTRA_FREIO_CRITICO_CM)
-    velocidadeLimite += (int)((menorUltraCm - ATACANTE_ULTRA_FREIO_CRITICO_CM) * ATACANTE_ULTRA_FREIO_PWM_POR_CM);
-  if (velocidadeLimite > velocidade_maxima) velocidadeLimite = velocidade_maxima;
-  return min(velocidadeBase, velocidadeLimite);
-}
-
-// Ajusta o ângulo da bola para o ângulo de comando de movimento (mapeamento por faixas)
-// *** ALTERE AQUI para modificar o comportamento de contorno da bola pelo atacante ***
-float mapearAnguloBolaParaMovimento(float anguloBolaGraus)
-{
-  float ang = normalizarAngulo360(anguloBolaGraus);
-  
-
-
-  if (ang >= 32.0f  && ang <= 60.0f)  return 100.0f;
-  if (ang >  60.0f  && ang <  90.0f)  return 90.0f;
-  if (ang >= 90.0f  && ang < 135.0f)  return 180.0f;
-  if (ang >= 135.0f && ang < 180.0f)  return 225.0f;
-  if (ang >= 180.0f && ang < 225.0f)  return 135.0f;
-  if (ang >= 225.0f && ang < 270.0f)  return 180.0f;
-  if (ang >= 270.0f && ang < 300.0f)  return 270.0f;
-  if (ang >= 300.0f && ang <= 328.0f) return 260.0f;
-
-  return ang;
-}
-
-// Reduz velocidade em faixas próximas do frontal para melhorar controle lateral
-int calcularVelocidadeIrPorAngulo(float anguloBolaGraus) {
-  float ang = normalizarAngulo360(anguloBolaGraus);
-  if ((ang >= 33.0f && ang <= 60.0f) || (ang >= 300.0f && ang <= 328.0f)) return VELOCIDADE_IR_FAIXA_REDUZIDA_PWM;
-  if (ang >= 140.0f && ang < 220.0f) return VELOCIDADE_IR_FAIXA_REDUZIDA_PWM;
-  return velocidade_maxima;
-}
-
-// Calcula ângulo de busca quando a câmera perdeu a bola (usa ultrassônicos laterais)
-float calcularAnguloBuscaSemBolaCameraAtacante() {
-  bool ultrasRecentes = ultrasValidos && (ultimoRxUltraMs > 0) && ((millis() - ultimoRxUltraMs) <= TIMEOUT_ULTRA_MS);
-  if (ultrasRecentes) {
-    bool esquerdaPerto = (ultraEcm >= 0.0f) && (ultraEcm < 60.0f);
-    bool direitaPerto  = (ultraDcm >= 0.0f) && (ultraDcm < 60.0f);
-    bool esquerdaLivre = ultraEcm > 50.0f;
-    bool direitaLivre  = ultraDcm > 50.0f;
-    if (esquerdaPerto && direitaLivre)  return  90.0f;
-    if (direitaPerto  && esquerdaLivre) return 270.0f;
-  }
-  return 0.0f;
-}
-
-
-
-
-
-
-float suavizadorMegaAnguloMovimento(float anguloNovo)
-{
-    static float anguloFiltrado = 0.0f;
-    const float ALFA = 0.18f; // quanto menor, mais suave
-
-    // normalização básica de salto de ângulo (evita pulo 359->0)
-    float diff = anguloNovo - anguloFiltrado;
-
-    if (diff > 180.0f) diff -= 360.0f;
-    if (diff < -180.0f) diff += 360.0f;
-
-    anguloFiltrado += ALFA * diff;
-
-    // normaliza 0–360
-    if (anguloFiltrado < 0) anguloFiltrado += 360.0f;
-    if (anguloFiltrado >= 360.0f) anguloFiltrado -= 360.0f;
-
-    return anguloFiltrado;
-}
-
-
-float PIDZIMBUSSOLANOVINHA(float erro)
-{
-  static float erroAnterior = 0.0f;
-  static float integral = 0.0f;
-  static unsigned long ultimoMs = 0;
-
-  const float Kp = 1.2f;
-  const float Ki = 0.01f;
-  const float Kd = 0.8f;
-
-  unsigned long agora = millis();
-  float dt = 0.02f;
-  if (ultimoMs != 0) {
-    dt = (agora - ultimoMs) / 1000.0f;
-    if (dt < 0.005f) dt = 0.005f;
-    if (dt > 0.2f) dt = 0.2f;
-  }
-  ultimoMs = agora;
-
-  integral += erro * dt;
-
-  // Anti-windup
-  integral = constrain(integral, -100.0f, 100.0f);
-
-  float derivada = (erro - erroAnterior) / dt;
-
-  float saida =
-    (Kp * erro) +
-    (Ki * integral) +
-    (Kd * derivada);
-
-  erroAnterior = erro;
-
-  // Corrige o sentido da sua bússola
-  return -saida;
-}
-
-
 
 // =============================================================================
-// CONTROLE DE GIRO PARA O GOL DURANTE ATAQUE FRONTAL
-// =============================================================================
-// Quando a bola está na faixa frontal do IR, o robô continua avançando para
-// frente, mas o comando de rotação passa a ser calculado pelo ângulo do gol
-// fornecido pela câmera.
-//
-// Referência:
-//   cameraGolSelecionadoAngle = 0°  -> gol alinhado com a frente do robô
-//   valor positivo              -> gol de um lado
-//   valor negativo              -> gol do outro lado
-//
-// A bússola continua sendo usada normalmente fora do ataque frontal.
-// =============================================================================
-
-const float PID_GOL_CAMERA_KP = 1.0f;
-const float PID_GOL_CAMERA_KI = 0.01f;
-const float PID_GOL_CAMERA_KD = 0.8f;
-
-const float PID_GOL_CAMERA_INTEGRAL_MAX = 100.0f;
-
-const int PID_GOL_CAMERA_SAIDA_MIN = 30;
-const int PID_GOL_CAMERA_SAIDA_MAX = 180;
-
-// Dentro desta faixa o robô considera o gol alinhado.
-const float TOLERANCIA_GOL_CAMERA_GRAUS = 3.0f;
-
-// Mantém a última leitura válida por este período se a câmera perder
-// o gol momentaneamente.
-const unsigned long RETENCAO_GOL_CAMERA_ATAQUE_MS = 100;
-
-// Limita saltos muito grandes entre duas leituras da câmera.
-const float SALTO_MAX_GOL_CAMERA_GRAUS = 20.0f;
-
-// Estado do PID específico da câmera.
-// NÃO compartilha integral/derivada com o PID da bússola.
-float pidGolCameraIntegral = 0.0f;
-float pidGolCameraErroAnterior = 0.0f;
-unsigned long pidGolCameraUltimoMs = 0;
-
-// Estado do filtro do ângulo do gol.
-float cameraGolAnguloFiltrado = 0.0f;
-bool cameraGolFiltroInicializado = false;
-unsigned long cameraGolUltimaLeituraValidaMs = 0;
-
-
-// Zera completamente o controlador de giro para o gol.
-void resetPidGolCamera()
-{
-  pidGolCameraIntegral = 0.0f;
-  pidGolCameraErroAnterior = 0.0f;
-  pidGolCameraUltimoMs = 0;
-}
-
-
-// Zera filtro e PID do gol.
-void resetControleGolCamera()
-{
-  cameraGolAnguloFiltrado = 0.0f;
-  cameraGolFiltroInicializado = false;
-  cameraGolUltimaLeituraValidaMs = 0;
-
-  resetPidGolCamera();
-}
-
-
-// Obtém o ângulo do gol selecionado e aplica filtro circular.
-// Se a câmera perder o gol por poucos milissegundos, mantém a última
-// leitura válida durante RETENCAO_GOL_CAMERA_ATAQUE_MS.
-bool obterAnguloGolCameraAtaque(float &anguloGol)
-{
-  const unsigned long agora = millis();
-
-  int16_t leituraGol = -999;
-
-  if (cameraTemGolSelecionadoValido(leituraGol))
-  {
-    float leitura = normalizarErro180((float)leituraGol);
-
-    if (!cameraGolFiltroInicializado)
-    {
-      cameraGolAnguloFiltrado = leitura;
-      cameraGolFiltroInicializado = true;
-    }
-    else
-    {
-      float delta = normalizarErro180(
-        leitura - cameraGolAnguloFiltrado
-      );
-
-      // Rejeita mudanças instantâneas muito grandes.
-      delta = constrain(
-        delta,
-        -SALTO_MAX_GOL_CAMERA_GRAUS,
-         SALTO_MAX_GOL_CAMERA_GRAUS
-      );
-
-      // Filtro exponencial circular.
-      const float ALPHA_GOL_CAMERA = 0.25f;
-
-      cameraGolAnguloFiltrado = normalizarErro180(
-        cameraGolAnguloFiltrado +
-        (ALPHA_GOL_CAMERA * delta)
-      );
-    }
-
-    cameraGolUltimaLeituraValidaMs = agora;
-    anguloGol = cameraGolAnguloFiltrado;
-
-    return true;
-  }
-
-  // Câmera perdeu o gol momentaneamente:
-  // mantém a última leitura por um curto período.
-  if (cameraGolFiltroInicializado &&
-      cameraGolUltimaLeituraValidaMs > 0 &&
-      (agora - cameraGolUltimaLeituraValidaMs) <= RETENCAO_GOL_CAMERA_ATAQUE_MS)
-  {
-    anguloGol = cameraGolAnguloFiltrado;
-    return true;
-  }
-
-  return false;
-}
-
-
-// Calcula o comando de rotação usando SOMENTE o erro angular do gol.
-// O objetivo é fazer:
-//       anguloGol = 0°
-//
-// Portanto:
-//       erro = -anguloGol
-//
-// SINAL_GIRO_PID é utilizado para manter a mesma convenção de sentido
-// de rotação já utilizada no restante do robô.
-int calcularCmdGiroGolCamera(float anguloGol)
-{
-  const unsigned long agora = millis();
-
-  float dt = 0.02f;
-
-  if (pidGolCameraUltimoMs != 0)
-  {
-    dt = (agora - pidGolCameraUltimoMs) / 1000.0f;
-
-    if (dt < 0.005f) dt = 0.005f;
-    if (dt > 0.2f)   dt = 0.2f;
-  }
-
-  pidGolCameraUltimoMs = agora;
-
-  // Queremos que o ângulo do gol chegue a 0°.
-  float erroGol = normalizarErro180(-anguloGol);
-
-  // Zona morta para evitar oscilação quando já estiver alinhado.
-  if (fabsf(erroGol) <= TOLERANCIA_GOL_CAMERA_GRAUS)
-  {
-    pidGolCameraIntegral = 0.0f;
-    pidGolCameraErroAnterior = erroGol;
-
-    return 0;
-  }
-
-  // Integral.
-  pidGolCameraIntegral += erroGol * dt;
-
-  pidGolCameraIntegral = constrain(
-    pidGolCameraIntegral,
-    -PID_GOL_CAMERA_INTEGRAL_MAX,
-     PID_GOL_CAMERA_INTEGRAL_MAX
-  );
-
-  // Derivada.
-  float derivada =
-    (erroGol - pidGolCameraErroAnterior) / dt;
-
-  pidGolCameraErroAnterior = erroGol;
-
-  // PID.
-  float saida =
-      PID_GOL_CAMERA_KP * erroGol
-    + PID_GOL_CAMERA_KI * pidGolCameraIntegral
-    + PID_GOL_CAMERA_KD * derivada;
-
-  // Magnitude.
-  int magnitude = (int)fabsf(saida);
-
-  magnitude = constrain(
-    magnitude,
-    PID_GOL_CAMERA_SAIDA_MIN,
-    PID_GOL_CAMERA_SAIDA_MAX
-  );
-
-  // Mantém o mesmo limite geral utilizado no alinhamento.
-  magnitude = min(magnitude, VELOCIDADE_GIRO_ALINHAMENTO);
-
-  // Convenção de sentido do robô.
-  int cmdGiro = (saida >= 0.0f)
-              ? magnitude
-              : -magnitude;
-
-  cmdGiro *= SINAL_GIRO_PID;
-
-  return constrain(cmdGiro, -255, 255);
-}
-
-
-// Avança para frente enquanto gira o chassi para alinhar com o gol.
-// Se a câmera perder o gol definitivamente, volta temporariamente para
-// a referência da bússola, evitando deixar o robô sem controle de rotação.
-void moverFrenteComGiroParaGol(int velocidade)
-{
-  float anguloGol = 0.0f;
-
-  if (obterAnguloGolCameraAtaque(anguloGol))
-  {
-    int cmdGiroGol =
-      calcularCmdGiroGolCamera(anguloGol);
-
-    // TRANSLADA PARA FRENTE + ROTACIONA PARA O GOL.
-    moverFrenteComGiro(
-      velocidade,
-      cmdGiroGol
-    );
-
-    return;
-  }
-
-  // Sem gol válido na câmera: fallback seguro para a bússola.
-  resetPidGolCamera();
-
-  float erroBussola =
-    normalizarErro180(
-      -calcularErroReferenciaBussola()
-    );
-
-  int cmdGiroBussola =
-    constrain(
-      (int)roundf(
-        -PIDZIMBUSSOLANOVINHA(erroBussola)
-      ),
-      -255,
-      255
-    );
-
-  moverFrenteComGiro(
-    velocidade,
-    cmdGiroBussola
-  );
-}
-
-
-
-
-
-
-
-
-
-// *** FUNCAO PRINCIPAL DO ATACANTE ***
-// Alinha ao gol, segue bola por IR, foge da linha e usa a câmera como
-// referência de rotação somente quando a bola está na faixa frontal.
-#include "atacante.hpp"
-#include "defensor.hpp"
-
-
-
-
-
-
-
-
-
-
-
-
-// =============================================================================
-// SECAO 20 — ESTRATEGIA DO DEFENSOR (GOLEIRO)
-// =============================================================================
-//
-// Responsabilidades:
-//   • Manter posição na frente do gol usando linha como referência (zonas A e B)
-//   • Acompanhar a bola lateralmente via IR / câmera
-//   • Conter a bola com ultrassônicos laterais e de profundidade
-//   • Retornar ao gol pela bússola quando sem linha
-//   • Avançar sobre a bola quando ela fica frontal por tempo suficiente
-//
-// Parâmetros de ajuste — *** ALTERE APENAS AQUI para tunar o defensor ***
-// =============================================================================
-
-// --- Referências de zona (ângulos esperados das linhas A e B no referencial do defensor) ---
-constexpr float DEFENSOR_REFERENCIA_ZONA_A = 90.0f;
-constexpr float DEFENSOR_REFERENCIA_ZONA_B = 270.0f;
-
-// --- Tolerâncias angulares do defensor ---
-constexpr float DEFENSOR_TOLERANCIA_GIRO_GRAUS     = 5.0f;   // Deadzone de giro
-constexpr float DEFENSOR_TOLERANCIA_ALINHAMENTO_BOLA_GRAUS = 3.0f;  // Alinhamento antes do avanço frontal
-
-// --- Pesos de atração lateral por bola ---
-constexpr float DEFENSOR_PESO_MIN_BOLA = 75.0f;
-constexpr float DEFENSOR_PESO_MAX_BOLA = 200.0f;
-
-// --- Limites dos ultrassônicos do defensor ---
-constexpr float DEFENSOR_ULTRA_LATERAL_ATIVO_CM       = 65.0f;   // Distância onde começa a repulsão lateral
-constexpr float DEFENSOR_ULTRA_LATERAL_CRITICO_CM     = 45.0f;   // Distância de repulsão máxima
-constexpr float DEFENSOR_ULTRA_LATERAL_CONFIRMADOR_CM = 60.0f;   // Confirma a parede oposta livre
-constexpr float DEFENSOR_ULTRA_FRENTE_LIMITE_CM       = 40.0f;   // Limite para repulsão de profundidade (frente)
-constexpr float DEFENSOR_ULTRA_TRAS_LIMITE_CM         = 35.0f;   // Limite para repulsão de profundidade (trás)
-constexpr float DEFENSOR_ULTRA_FRONTAL_CONFIRMADOR_CM = 100.0f;  // Confirmador de campo frontal livre
-constexpr float DEFENSOR_ULTRA_PROFUNDIDADE_MAX_CM    = 60.0f;
-constexpr float DEFENSOR_ULTRA_PROFUNDIDADE_MIN_CM    = 10.0f;
-constexpr float DEFENSOR_PESO_MAX_ULTRA               = 100.0f;
-constexpr float DEFENSOR_PESO_MAX_ULTRA_PROFUNDIDADE  = 38.0f;
-
-// --- Deadzones do defensor ---
-constexpr float DEFENSOR_DEADZONE_VETOR = 6.0f;
-constexpr float DEFENSOR_DEADZONE_GIRO  = 5.0f;
-
-// --- Velocidades do defensor ---
-constexpr float DEFENSOR_VELOCIDADE_MIN_PWM        = 145.0f;
-constexpr float DEFENSOR_VELOCIDADE_RETORNO_GOL_PWM = 165.0f;
-
-// --- Suavização do defensor (fator exponencial) ---
-constexpr float DEFENSOR_SUAVIZACAO_VETOR = 0.45f;
-constexpr float DEFENSOR_SUAVIZACAO_GIRO  = 0.35f;
-
-// --- Parâmetros do avanço frontal temporizado do defensor ---
-const float         DEFENSOR_TOLERANCIA_IR_FRONTAL_GRAUS      = 45.0f;
-const int           DEFENSOR_VELOCIDADE_AVANCO_IR_FRONTAL_PWM = 255;
-const unsigned long DEFENSOR_TEMPO_GATILHO_IR_FRONTAL_MS      = 3000;
-const unsigned long DEFENSOR_TEMPO_AVANCO_IR_FRONTAL_MS       = 2500;
-
-// --- Controle proporcional lateral do defensor por IR ---
-int calcularVelocidadeLateralDefensorPorIr(float anguloBolaGraus) {
-  const float ANG_DIREITA_MIN  = 20.0f;
-  const float ANG_DIREITA_MAX  = 160.0f;  /// 
-  const float ANG_ESQUERDA_MIN = 200.0f;  /// 
-  const float ANG_ESQUERDA_MAX = 340.0f;
-  const int   VEL_MIN = 130;
-  const int   VEL_MAX = 255;
-
-  float ang = normalizarAngulo360(anguloBolaGraus);
-  if ((ang >= 0.0f && ang <= ANG_DIREITA_MIN) || (ang >= ANG_ESQUERDA_MAX && ang <= 360.0f)) return 0;
-  if (ang > ANG_DIREITA_MIN && ang <= ANG_DIREITA_MAX) {
-    float ganho = (float)(VEL_MAX - VEL_MIN) / (ANG_DIREITA_MAX - ANG_DIREITA_MIN);
-    return constrain((int)(VEL_MIN + ganho * (ang - ANG_DIREITA_MIN)), VEL_MIN, VEL_MAX);
-  }
-  if (ang >= ANG_ESQUERDA_MIN && ang < ANG_ESQUERDA_MAX) {
-    float ganho = (float)(VEL_MAX - VEL_MIN) / (ANG_ESQUERDA_MAX - ANG_ESQUERDA_MIN);
-    return constrain((int)(VEL_MIN + ganho * (ANG_ESQUERDA_MAX - ang)), VEL_MIN, VEL_MAX);
-  }
-  return 0;
-}
-
-// --- PID do giro do goleiro usando zonas A e B da linha ---
-// *** AJUSTE AQUI para tunar o giro do defensor ***
-const float PID_LINHA_GOL_KP           = 0.9f;
-const float PID_LINHA_GOL_KI           = 0.01f;
-const float PID_LINHA_GOL_KD           = 0.55f;
-const float PID_LINHA_GOL_INTEGRAL_MAX = 90.0f;
-const int   PID_LINHA_GOL_SAIDA_MIN    = 60;
-const int   PID_LINHA_GOL_SAIDA_MAX    = 220;
-
-
-
-
-
-
-// Estado interno do PID de linha do goleiro
-float        pidLinhaGolIntegral      = 0.0f;
-float        pidLinhaGolErroAnterior  = 0.0f;
-unsigned long pidLinhaGolUltimoMs     = 0;
-
-// Zera o PID do goleiro por linha
-void resetPidLinhaGoleiro() {
-  pidLinhaGolIntegral     = 0.0f;
-  pidLinhaGolErroAnterior = 0.0f;
-  pidLinhaGolUltimoMs     = 0;
-}
-
-// Calcula saída do PID do goleiro para o giro por linha
-int calcularSaidaPidLinhaGoleiro(float erroGraus) {
-  unsigned long agora = millis();
-  float dt = 0.02f;
-  if (pidLinhaGolUltimoMs != 0) {
-    dt = (agora - pidLinhaGolUltimoMs) / 1000.0f;
-    if (dt < 0.005f) dt = 0.005f;
-    if (dt > 0.2f)   dt = 0.2f;
-  }
-  pidLinhaGolUltimoMs = agora;
-
-  pidLinhaGolIntegral += erroGraus * dt;
-  if (pidLinhaGolIntegral >  PID_LINHA_GOL_INTEGRAL_MAX) pidLinhaGolIntegral =  PID_LINHA_GOL_INTEGRAL_MAX;
-  if (pidLinhaGolIntegral < -PID_LINHA_GOL_INTEGRAL_MAX) pidLinhaGolIntegral = -PID_LINHA_GOL_INTEGRAL_MAX;
-
-  float derivada = (erroGraus - pidLinhaGolErroAnterior) / dt;
-  pidLinhaGolErroAnterior = erroGraus;
-
-  float u    = PID_LINHA_GOL_KP * erroGraus + PID_LINHA_GOL_KI * pidLinhaGolIntegral + PID_LINHA_GOL_KD * derivada;
-  int   saida = (int)fabsf(u);
-  if (saida < PID_LINHA_GOL_SAIDA_MIN)           saida = PID_LINHA_GOL_SAIDA_MIN;
-  if (saida > PID_LINHA_GOL_SAIDA_MAX)           saida = PID_LINHA_GOL_SAIDA_MAX;
-  if (saida > VELOCIDADE_GIRO_ALINHAMENTO)       saida = VELOCIDADE_GIRO_ALINHAMENTO;
-  return (u >= 0.0f) ? saida : -saida;
-}
-
-// --- Funções auxiliares do defensor ---
-
-// Aplica suavização exponencial a um valor do defensor
-float suavizarDefensor(float atual, float alvo, float fator) {
-  float fatorClamped = constrain(fator, 0.0f, 1.0f);
-  return atual + ((alvo - atual) * fatorClamped);
-}
-
-// Aplica deadzone a um valor do defensor
-float aplicarDeadzoneDefensor(float valor, float deadzone) {
-  return (fabsf(valor) < deadzone) ? 0.0f : valor;
-}
-
-// Calcula a magnitude do vetor de movimento do defensor
-float calcularMagnitudeVetorDefensor(float vetorX, float vetorY) {
-  return sqrtf((vetorX * vetorX) + (vetorY * vetorY));
-}
-
-// Calcula o ângulo do vetor de movimento do defensor (0 = frente, 90 = direita)
-float calcularAnguloVetorDefensor(float vetorX, float vetorY) {
-  return normalizarAngulo360(atan2f(vetorX, vetorY) * 180.0f / PI);
-}
-
-// Retorna o sinal do erro angular do defensor com deadzone
-int sinalErroDefensor(float erro, float toleranciaZero) {
-  if (erro >  toleranciaZero) return  1;
-  if (erro < -toleranciaZero) return -1;
-  return 0;
-}
-
-// Calcula comando de giro do defensor com base no desequilíbrio entre zonas A e B
-int calcularGiroDefensor(float erroA, float erroB, float toleranciaIgual, int giroMaximo) {
-  float deltaMag = fabsf(erroA) - fabsf(erroB);
-  if (fabsf(deltaMag) <= toleranciaIgual) return 0;
-  float ganho  = 2.0f;
-  int   cmdGiro = (int)(fabsf(deltaMag) * ganho);
-  if (cmdGiro < 35)          cmdGiro = 35;
-  if (cmdGiro > giroMaximo)  cmdGiro = giroMaximo;
-  return (deltaMag >= 0.0f) ? cmdGiro : -cmdGiro;
-}
-
-// Calcula velocidade proporcional de translação (frente/trás) pelo erro de linha
-int calcularVelocidadeLinhaDefensor(float erroA, float erroB, bool temZonaA, bool temZonaB,
-                                    float toleranciaZero, float erroMaxRef,
-                                    int velocidadeMinima, int velocidadeMaxima) {
-  float intensidade = 0.0f;
-  if (temZonaA) { float magA = fabsf(erroA) - toleranciaZero; if (magA > intensidade) intensidade = magA; }
-  if (temZonaB) { float magB = fabsf(erroB) - toleranciaZero; if (magB > intensidade) intensidade = magB; }
-  if (intensidade <= 0.0f) return 0;
-  if (intensidade > erroMaxRef) intensidade = erroMaxRef;
-  float t = intensidade / erroMaxRef;
-  return constrain((int)(velocidadeMinima + t * (float)(velocidadeMaxima - velocidadeMinima)), velocidadeMinima, velocidadeMaxima);
-}
-
-// Calcula vetor de atração média entre duas leituras de linha
-float calcularVetorAtracaoLinha(float anguloA, float anguloB) {
-  float aRad = anguloA * PI / 180.0f;
-  float bRad = anguloB * PI / 180.0f;
-  float mx   = cosf(aRad) + cosf(bRad);
-  float my   = sinf(aRad) + sinf(bRad);
-  return normalizarAngulo360(atan2f(my, mx) * 180.0f / PI);
-}
-
-// Compõe ângulo de retorno pela bússola com vetor de repulsão dos ultrassônicos laterais
-float comporAnguloRetornoBussolaComUltraLaterais(float anguloRetornoBase, bool ultrasRecentes) {
-  float anguloBaseRad = anguloRetornoBase * PI / 180.0f;
-  float vetorX = sinf(anguloBaseRad) * DEFENSOR_VELOCIDADE_RETORNO_GOL_PWM;
-  float vetorY = cosf(anguloBaseRad) * DEFENSOR_VELOCIDADE_RETORNO_GOL_PWM;
-
-  if (ultrasRecentes) {
-    if ((ultraDcm >= 0.0f) && (ultraDcm < DEFENSOR_ULTRA_LATERAL_ATIVO_CM) && (ultraEcm > DEFENSOR_ULTRA_LATERAL_CONFIRMADOR_CM))
-      vetorX -= mapearFaixaClamped(ultraDcm, DEFENSOR_ULTRA_LATERAL_ATIVO_CM, DEFENSOR_ULTRA_LATERAL_CRITICO_CM, 0.0f, DEFENSOR_PESO_MAX_ULTRA);
-    if ((ultraEcm >= 0.0f) && (ultraEcm < DEFENSOR_ULTRA_LATERAL_ATIVO_CM) && (ultraDcm > DEFENSOR_ULTRA_LATERAL_CONFIRMADOR_CM))
-      vetorX += mapearFaixaClamped(ultraEcm, DEFENSOR_ULTRA_LATERAL_ATIVO_CM, DEFENSOR_ULTRA_LATERAL_CRITICO_CM, 0.0f, DEFENSOR_PESO_MAX_ULTRA);
-  }
-  return calcularAnguloVetorDefensor(vetorX, vetorY);
-}
-
-// Executa avanço frontal temporizado quando a bola fica na frente por tempo suficiente
-bool executarAvancoFrontalTemporizadoDefensor(unsigned long agora,
-                                              float &vetorXSuave,
-                                              float &vetorYSuave,
-                                              float &cmdGiroSuave) {
-  static unsigned long inicioDeteccaoIrFrontalMs  = 0;
-  static unsigned long inicioAvancoIrFrontalMs    = 0;
-  static bool avancoIrFrontalAtivo                = false;
-  static bool alinhamentoIrFrontalAtivo           = false;
-  static bool aguardarSaidaJanelaIrFrontal        = false;
-  static float ultimoAnguloAvancoIrFrontal        = 0.0f;
-
-  bool irFrontalAtivo = irDetectado &&
-                        (fabsf(normalizarErro180(anguloIr)) <= DEFENSOR_TOLERANCIA_IR_FRONTAL_GRAUS);
-
-  // Executa avanço enquanto dentro do tempo
-  if (avancoIrFrontalAtivo) {
-    if ((agora - inicioAvancoIrFrontalMs) < DEFENSOR_TEMPO_AVANCO_IR_FRONTAL_MS) {
-      if (irDetectado) ultimoAnguloAvancoIrFrontal = normalizarAngulo360(anguloIr);
-      alinhandoAgora = false; erroAlinhamentoGraus = 0.0f;
-      resetPidBussola(); resetPidLinhaGoleiro();
-      vetorXSuave = vetorYSuave = cmdGiroSuave = 0.0f;
-      seguirDirecaoPorAngulo(ultimoAnguloAvancoIrFrontal, DEFENSOR_VELOCIDADE_AVANCO_IR_FRONTAL_PWM);
-      return true;
-    }
-    avancoIrFrontalAtivo = false; inicioAvancoIrFrontalMs = inicioDeteccaoIrFrontalMs = 0;
-  }
-
-  // Alinha ao ângulo da bola antes de avançar
-  if (alinhamentoIrFrontalAtivo) {
-    if (!irDetectado) {
-      alinhamentoIrFrontalAtivo = false; inicioDeteccaoIrFrontalMs = 0;
-      aguardarSaidaJanelaIrFrontal = false; resetPidBussola(); return false;
-    }
-    float erroAlinhamentoBola    = normalizarErro180(anguloIr);
-    ultimoAnguloAvancoIrFrontal  = normalizarAngulo360(anguloIr);
-    erroAlinhamentoGraus         = erroAlinhamentoBola;
-    if (fabsf(erroAlinhamentoBola) > DEFENSOR_TOLERANCIA_ALINHAMENTO_BOLA_GRAUS) {
-      alinhandoAgora = true; resetPidLinhaGoleiro();
-      vetorXSuave = vetorYSuave = cmdGiroSuave = 0.0f;
-      int cmdPidBola  = calcularSaidaPidBussola(erroAlinhamentoBola);
-      int cmdGiroBola = -SINAL_GIRO_PID * cmdPidBola;
-      girarNoEixo(-cmdGiroBola); return true;
-    }
-    alinhamentoIrFrontalAtivo = false; avancoIrFrontalAtivo = true;
-    inicioAvancoIrFrontalMs   = agora;
-    alinhandoAgora = false; erroAlinhamentoGraus = 0.0f;
-    resetPidBussola(); resetPidLinhaGoleiro();
-    vetorXSuave = vetorYSuave = cmdGiroSuave = 0.0f;
-    seguirDirecaoPorAngulo(ultimoAnguloAvancoIrFrontal, DEFENSOR_VELOCIDADE_AVANCO_IR_FRONTAL_PWM);
-    return true;
-  }
-
-  // Aguarda bola sair da janela frontal antes de nova detecção
-  if (!irFrontalAtivo) { inicioDeteccaoIrFrontalMs = 0; aguardarSaidaJanelaIrFrontal = false; return false; }
-  if (aguardarSaidaJanelaIrFrontal) return false;
-
-  // Cronometra tempo com bola frontal
-  if (inicioDeteccaoIrFrontalMs == 0) { inicioDeteccaoIrFrontalMs = agora; return false; }
-  if ((agora - inicioDeteccaoIrFrontalMs) < DEFENSOR_TEMPO_GATILHO_IR_FRONTAL_MS) return false;
-
-  // Gatilho atingido: inicia alinhamento antes do avanço
-  alinhamentoIrFrontalAtivo    = true;
-  aguardarSaidaJanelaIrFrontal = true;
-  ultimoAnguloAvancoIrFrontal  = normalizarAngulo360(anguloIr);
-  alinhandoAgora = false; erroAlinhamentoGraus = 0.0f;
-  resetPidBussola(); resetPidLinhaGoleiro();
-  vetorXSuave = vetorYSuave = cmdGiroSuave = 0.0f;
-  return false;
-}
-
-// Placeholder para nova lógica de ultrassônico específica do defensor
-bool ultrassonico_defensor() {
-  return false;
-}
-
-// *** FUNCAO PRINCIPAL DO DEFENSOR ***
-// Mantém posição no gol usando linha, bola e ultrassônicos como entradas do vetor de movimento
-
-
-// =============================================================================
-// SECAO 21 — SETUP: INICIALIZACAO DO HARDWARE E HANDSHAKE INICIAL
+// SECAO 16 — SETUP: INICIALIZACAO DO HARDWARE E HANDSHAKE INICIAL
 // =============================================================================
 
 void setup() {
@@ -2324,7 +1412,7 @@ void setup() {
 
 
 // =============================================================================
-// SECAO 22 — LOOP PRINCIPAL
+// SECAO 17 — LOOP PRINCIPAL
 // =============================================================================
 
 void loop() {
@@ -2386,18 +1474,4 @@ void loop() {
  // delay(5);
 }
 
-
-/* MEXI NOS CARAS ABAIXO:
-
-const unsigned long INTERVALO_REQ_LIMIAR_LINHA_MS = 200;
-// --- Freio ultrassônico do atacante (laterais) ---
-const float ATACANTE_ULTRA_FREIO_INICIO_CM    = 70.0f;   // Distância onde o freio começa
-const float ATACANTE_ULTRA_FREIO_CRITICO_CM   = 50.0f;   // Distância de freio máximo
-const int   ATACANTE_ULTRA_FREIO_VELOCIDADE_MIN = 80;   // Velocidade mínima com freio
-
-else {
-   girarNoEixo(cmdGiro);
-   return;
-}
-   */
   
