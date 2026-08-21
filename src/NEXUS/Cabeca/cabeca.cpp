@@ -44,7 +44,7 @@
 // Inicializacao e configuracao da bussola.
 const uint8_t QMC5883P_ADDR = 0x2C;
 
-/* 
+ 
 
 // ----- CALIBRAÇÃO DO NEXUS -----
 // Valores de calibração validados no teste dedicado do NEXUS.
@@ -52,7 +52,8 @@ const float xOffset = -801.50;
 const float yOffset = 592.00;
 const float xScale  = 1.007877;
 const float yScale  = 0.992246;
-*/
+
+/*
 
 // ----- CALIBRAÇÃO DO CRONOS -----
 // Valores de calibracao validados no teste dedicado do CRONOS.
@@ -61,6 +62,7 @@ const float yOffset = -1624.00;
 const float xScale  = 1.013703;
 const float yScale  = 0.986663;
 
+*/
 
 int head = 0;
 

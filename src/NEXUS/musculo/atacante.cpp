@@ -17,7 +17,7 @@
 
 void atacante() {
     int velo = 255;
-    int veloFrente = 255;
+    int veloFrente = 220;
 
     float anguloIrAtual = -1.0f;
 
@@ -38,7 +38,52 @@ void atacante() {
 
     float anguloFuga = 0.0f;
 
-    if (sairDaLinha(
+    // -------------------------------------------------------------------------
+    // FAILSAFE DA FUGA DE LINHA
+    // -------------------------------------------------------------------------
+    // Se a linha permanecer detectada continuamente por 2000 ms, consideramos
+    // que o robô ficou preso na condição de fuga. Nesse caso, a fuga é
+    // interrompida e permanece bloqueada até a linha deixar de ser detectada.
+    //
+    // As variáveis são static para manter o estado entre chamadas de atacante(),
+    // mas continuam privadas a esta função (não precisam ir para o .hpp).
+    static constexpr unsigned long TEMPO_MAX_FUGA_LINHA_MS = 2000UL;
+    static unsigned long inicioFugaLinhaMs = 0;
+    static bool fugaLinhaBloqueadaPorTimeout = false;
+
+    const unsigned long agoraFugaLinhaMs = millis();
+
+    // Saiu da linha: rearma completamente o failsafe para a próxima ocorrência.
+    if (!linhaDetectada) {
+        inicioFugaLinhaMs = 0;
+        fugaLinhaBloqueadaPorTimeout = false;
+    }
+
+    // Enquanto a linha estiver sendo detectada e o failsafe não estiver
+    // bloqueado, mede há quanto tempo a condição permanece ativa.
+    if (linhaDetectada && !fugaLinhaBloqueadaPorTimeout) {
+
+        if (inicioFugaLinhaMs == 0) {
+            inicioFugaLinhaMs = agoraFugaLinhaMs;
+        }
+
+        // Ficou 2 segundos sem conseguir abandonar a linha: corta a fuga.
+        if ((agoraFugaLinhaMs - inicioFugaLinhaMs) >= TEMPO_MAX_FUGA_LINHA_MS) {
+            fugaLinhaBloqueadaPorTimeout = true;
+            fugindoLinhaAgora = false;
+            inicioFugaLinhaMs = 0;
+
+            // IMPORTANTE: não damos return aqui.
+            // A estratégia normal do atacante continua neste mesmo ciclo e
+            // passa a comandar os motores, retirando o robô da fuga travada.
+        }
+    }
+
+    // Preserva o comportamento original de sairDaLinha(): ela continua sendo
+    // chamada normalmente enquanto o failsafe não estiver bloqueado, inclusive
+    // caso a própria função possua algum estado interno de finalização da fuga.
+    if (!fugaLinhaBloqueadaPorTimeout &&
+        sairDaLinha(
             linhaDetectada,
             anguloLinhaPe,
             VELOCIDADE_FUGA_LINHA,
@@ -47,10 +92,18 @@ void atacante() {
         fugindoLinhaAgora = true;
         anguloFugaLinhaCmd = anguloFuga;
         return;
+    }
 
-    } else {
+    // Se houve timeout, garante que nenhum outro trecho interprete o robô como
+    // ainda estando em fuga enquanto a linha continuar detectada.
+    if (fugaLinhaBloqueadaPorTimeout) {
+        fugindoLinhaAgora = false;
+    }
 
-        if (obterAnguloIrDisponivel(anguloIrAtual)) {
+    // -------------------------------------------------------------------------
+    // ESTRATÉGIA NORMAL DO ATACANTE
+    // -------------------------------------------------------------------------
+    if (obterAnguloIrDisponivel(anguloIrAtual)) {
 
             if (irNaFaixaFrontal(anguloIrAtual)) {
 
@@ -58,7 +111,7 @@ void atacante() {
                 
 
             } else {
-                 
+            /*     
                 if (sairDaLinha(
                     linhaDetectada,
                        anguloLinhaPe,
@@ -69,7 +122,7 @@ void atacante() {
                        anguloFugaLinhaCmd = anguloFuga;
                          return;
 
-                          }
+                          }*/
                 resetControleGolCamera();
                         
           float anguloMovimento = mapearAnguloBolaParaMovimento(anguloIrAtual);
@@ -81,11 +134,10 @@ void atacante() {
             );
             }
 
-        } else {
+    } else {
 
-            girarNoEixo(cmdGiro);
-            return;
-        }
+        girarNoEixo(cmdGiro);
+        return;
     }
 
     return;
@@ -448,9 +500,9 @@ float PIDZIMBUSSOLANOVINHA(float erro)
 // A bússola continua sendo usada normalmente fora do ataque frontal.
 // =============================================================================
 
-const float PID_GOL_CAMERA_KP = 1.0f;
-const float PID_GOL_CAMERA_KI = 0.01f;
-const float PID_GOL_CAMERA_KD = 0.8f;
+const float PID_GOL_CAMERA_KP = 2.0f;
+const float PID_GOL_CAMERA_KI = 0.0f;
+const float PID_GOL_CAMERA_KD = 0.5f;
 
 const float PID_GOL_CAMERA_INTEGRAL_MAX = 100.0f;
 
@@ -458,7 +510,7 @@ const int PID_GOL_CAMERA_SAIDA_MIN = 30;
 const int PID_GOL_CAMERA_SAIDA_MAX = 180;
 
 // Dentro desta faixa o robô considera o gol alinhado.
-const float TOLERANCIA_GOL_CAMERA_GRAUS = 3.0f;
+const float TOLERANCIA_GOL_CAMERA_GRAUS = 2.0f;
 
 // Mantém a última leitura válida por este período se a câmera perder
 // o gol momentaneamente.
@@ -531,7 +583,7 @@ bool obterAnguloGolCameraAtaque(float &anguloGol)
       );
 
       // Filtro exponencial circular.
-      const float ALPHA_GOL_CAMERA = 0.25f;
+      const float ALPHA_GOL_CAMERA = 0.5f;
 
       cameraGolAnguloFiltrado = normalizarErro180(
         cameraGolAnguloFiltrado +

@@ -270,7 +270,7 @@ void seguirDirecaoComGiroLaterais(float anguloGraus, int velocidade, int cmdGiro
     v4 *= escala;
   }
 
- // corrige certo
+ // corrige certo para teste
  // aplicarComandoMotoresComRampa((int)termoGiro, (int)termoGiro, (int)termoGiro, (int)termoGiro);
     aplicarComandoMotoresComRampa((int)v1, (int)v2, (int)v3, (int)v4);
 }
