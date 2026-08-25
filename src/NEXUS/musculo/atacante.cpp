@@ -500,7 +500,7 @@ float PIDZIMBUSSOLANOVINHA(float erro)
 // A bússola continua sendo usada normalmente fora do ataque frontal.
 // =============================================================================
 
-const float PID_GOL_CAMERA_KP = 2.0f;
+const float PID_GOL_CAMERA_KP = 1.2f;
 const float PID_GOL_CAMERA_KI = 0.0f;
 const float PID_GOL_CAMERA_KD = 0.5f;
 
