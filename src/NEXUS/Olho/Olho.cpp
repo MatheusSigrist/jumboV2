@@ -18,23 +18,24 @@ bool corGolAzul = false;      // false = amarelo, true = azul
 #define ID_PLACA_OLHO 0x01
 #define ID_PLACA_PE 0x02
 #define ID_PLACA_CAMERA 0x03
-#define CAMERA_TIMEOUT_MS 2000
-#define CAMERA_RESET_INTERVAL_MS 10000 // Tempo WatchDog
+
+// Tempos ajustados para acomodar a inicializacao da OpenMV RT1062
+#define CAMERA_TIMEOUT_MS 3000
+#define CAMERA_RESET_INTERVAL_MS 8000 // Tempo suficiente para boot completo da camera
+#define RESET_PIN 40
 
 #define EEPROM_SIZE 16
 #define EEPROM_ADDR_COR_GOL 0
 
-
-
-HCSR04 hcF(4, 5);    // <-- Ultrassonico 1 - TRIGG, ECHO
+HCSR04 hcF(4, 5);     // <-- Ultrassonico 1 - TRIGG, ECHO
 HCSR04 hcD(10, 9);    // <-- Ultrassonico 2 - TRIGG, ECHO
-HCSR04 hcT(21, 47);    // <-- Ultrassonico 3 - TRIGG, ECHO
-HCSR04 hcE(37, 36);    // <-- Ultrassonico 4 - TRIGG, ECHO
+HCSR04 hcT(21, 47);   // <-- Ultrassonico 3 - TRIGG, ECHO
+HCSR04 hcE(37, 36);   // <-- Ultrassonico 4 - TRIGG, ECHO
 
-float  ultraT = 0;
-float  ultraF = 0;
-float  ultraE = 0;
-float  ultraD = 0;
+float ultraT = 0;
+float ultraF = 0;
+float ultraE = 0;
+float ultraD = 0;
 
 // Le os quatro ultrassonicos e atualiza distancias globais em cm.
 void L_Ultra() {     // <-- Função para leitura dos sensores ultrassonicos
@@ -42,17 +43,12 @@ void L_Ultra() {     // <-- Função para leitura dos sensores ultrassonicos
   ultraE = hcE.dist();
   ultraF = hcF.dist();
   ultraT = hcT.dist();
-
 }
-
 
 #define RX_CABECA 17
 #define TX_CABECA 18
 #define RX_CAMERA 8 
 #define TX_CAMERA 3
-
-
-
 
 //------------------------------------ IR SEEKER -----------------------------//
 const int NUM_SENSORES = 12;
@@ -74,8 +70,6 @@ unsigned int nivelBaixo[NUM_SENSORES];
 float pesosIr[NUM_SENSORES];
 unsigned long amostrasJanela = 1;
 float intensidade = 0;  // <-- Declarada globalmente para ser usada em enviarDados()
-
-
 
 // Conta pulsos IR por sensor em uma janela curta e calcula pesos por deteccao.
 void contarPulsosSensores() {     // <-- Função de contagens de pulsos IR emitidos pela bola (IR SEEKER)
@@ -146,7 +140,6 @@ float diferencaAngularAbsoluta(float a, float b) {
 
 // Filtra o angulo da bola por votacao entre amostras para reduzir ruido.
 float filtrarAnguloBola() {
-  // Coleta NUM_AMOSTRAS_VOTO amostras
   float amostras[NUM_AMOSTRAS_VOTO];
   int validas = 0;
   for (int i = 0; i < NUM_AMOSTRAS_VOTO; i++) {
@@ -160,7 +153,6 @@ float filtrarAnguloBola() {
   if (validas == 0) return -1.0f;
   if (validas == 1) return amostras[0];
 
-  // Para cada amostra, conta quantas outras estão dentro da TOLERANCIA_VOTO_GRAUS
   int melhorVotos = 0;
   int melhorIdx = 0;
   for (int i = 0; i < validas; i++) {
@@ -176,7 +168,6 @@ float filtrarAnguloBola() {
     }
   }
 
-  // Retorna a média vetorial das amostras vencedoras do grupo
   float sx = 0, sy = 0;
   for (int i = 0; i < validas; i++) {
     if (diferencaAngularAbsoluta(amostras[i], amostras[melhorIdx]) <= TOLERANCIA_VOTO_GRAUS) {
@@ -190,7 +181,6 @@ float filtrarAnguloBola() {
   return resultado;
 }
 
-// Imprime debug IR no mesmo formato do teste de bancada.
 void imprimirDebugSensoresIR(float angulo) {
   Serial.println("===== TESTE PLACA OLHO (IR) =====");
   for (int i = 0; i < NUM_SENSORES; i++) {
@@ -211,18 +201,7 @@ void imprimirDebugSensoresIR(float angulo) {
   Serial.println();
 }
 
-
-
-
-
-
-
-
-
-
-
-
-//---------------jeitim-2------------------//
+//------------------------------------------------//
 #include <stdint.h>
 
 struct Pacote {
@@ -232,19 +211,17 @@ struct Pacote {
   int16_t uT;
   int16_t angulo;
   int16_t intensidade;
-  // ===== NOVOS: dados de camera (bola + 2 gols) =====
   int16_t ballAngle;
   uint16_t ballDist;
   int16_t blueAngle;
   uint16_t blueDist;
   int16_t yellowAngle;
   uint16_t yellowDist;
-  // ===== FIM novos dados camera =====
   uint8_t cameraOK;  // 1 = camera enviando dados, 0 = sem sinal
 };
 
 struct PacoteEstado {
-  bool sozinho;    // mantido para compatibilidade
+  bool sozinho;    
   bool atacante;   // true = atacante, false = defensor
   bool corGolAzul; // true = azul, false = amarelo
 };
@@ -252,15 +229,13 @@ struct PacoteEstado {
 using namespace ComunicacaoUnificada;
 Receptor receptorCabeca;
 
-// Dados recebidos da camera:
-// [BALL_A(int16)][BALL_D(uint16)][BLUE_A(int16)][BLUE_D(uint16)][YELLOW_A(int16)][YELLOW_D(uint16)]
 int16_t ballCameraAngle = 0;
 uint16_t ballCameraDist = 0;
 int16_t blueCameraAngle = -999;
 uint16_t blueCameraDist = 0;
 int16_t yellowCameraAngle = -999;
 uint16_t yellowCameraDist = 0;
-unsigned long ultimoRxCameraMs = 0;  // timestamp do ultimo pacote valido recebido da camera
+unsigned long ultimoRxCameraMs = 0;  
 unsigned long ultimaAtividadeCameraMs = 0;
 unsigned long ultimoResetCameraMs = 0;
 bool cameraOffline = false;
@@ -293,21 +268,43 @@ void LimparBufferCameraCorrompido() {
 }
 
 void ResetCamera() {
-  Serial2.println("RESET");
+  digitalWrite(RESET_PIN, LOW);
   ultimoResetCameraMs = millis();
   Serial.println("CAMERA RESET SENT");
   Serial.println("WATCHDOG: RESET CAMERA");
+  delay(100);
+  digitalWrite(RESET_PIN, HIGH);
+}
+
+// Verifica se o angulo eh valido (-180 a 360) ou se eh o codigo de nao-detectado (-999)
+bool anguloValido(int16_t angulo) {
+  if (angulo == -999) return true;
+  if (angulo >= -180 && angulo <= 360) return true;
+  return false;
 }
 
 void AplicarPayloadCamera(const uint8_t *payload) {
-  ballCameraAngle = (int16_t)((payload[0] << 8) | payload[1]);
-  ballCameraDist = (uint16_t)((payload[2] << 8) | payload[3]);
+  int16_t bAngle = (int16_t)((payload[0] << 8) | payload[1]);
+  uint16_t bDist = (uint16_t)((payload[2] << 8) | payload[3]);
 
-  blueCameraAngle = (int16_t)((payload[4] << 8) | payload[5]);
-  blueCameraDist = (uint16_t)((payload[6] << 8) | payload[7]);
+  int16_t blueA = (int16_t)((payload[4] << 8) | payload[5]);
+  uint16_t blueD = (uint16_t)((payload[6] << 8) | payload[7]);
 
-  yellowCameraAngle = (int16_t)((payload[8] << 8) | payload[9]);
-  yellowCameraDist = (uint16_t)((payload[10] << 8) | payload[11]);
+  int16_t yellowA = (int16_t)((payload[8] << 8) | payload[9]);
+  uint16_t yellowD = (uint16_t)((payload[10] << 8) | payload[11]);
+
+  // Se algum angulo for ruido/corrompido, descarta o pacote
+  if (!anguloValido(bAngle) || !anguloValido(blueA) || !anguloValido(yellowA)) {
+    RegistrarFalhaCamera("CAMERA ANGLE CORRUPTED");
+    return; 
+  }
+
+  ballCameraAngle = bAngle;
+  ballCameraDist = bDist;
+  blueCameraAngle = blueA;
+  blueCameraDist = blueD;
+  yellowCameraAngle = yellowA;
+  yellowCameraDist = yellowD;
 
   ultimoRxCameraMs = millis();
   ultimaAtividadeCameraMs = ultimoRxCameraMs;
@@ -319,7 +316,6 @@ void AplicarPayloadCamera(const uint8_t *payload) {
   cameraOffline = false;
 }
 
-// Responde handshake textual da Cabeca sem atrapalhar o protocolo binario.
 void ProcessarPingCabeca() {
   while (Serial1.available() > 0) {
     if (Serial1.peek() == BYTE_INICIA) {
@@ -356,21 +352,16 @@ void ProcessarPingCabeca() {
   }
 }
 
-// [Removido] Envia para a camera - agora camera envia 6 valores diretos para olho
-
-// Salva a cor de gol na EEPROM para manter configuracao apos reboot.
 void SalvarCorGolEEPROM() {
   EEPROM.writeByte(EEPROM_ADDR_COR_GOL, corGolAzul ? 1 : 0);
   EEPROM.commit();
 }
 
-// Carrega da EEPROM a cor de gol usada ao iniciar a placa.
 void CarregarCorGolEEPROM() {
   uint8_t val = EEPROM.readByte(EEPROM_ADDR_COR_GOL);
   corGolAzul = (val == 1);
 }
 
-// Le estado enviado pela Cabeca e aplica mudancas de atacante/cor de gol.
 void LeituraSerial() {
   Frame frame;
   while (receptorCabeca.poll(Serial1, frame)) {
@@ -400,7 +391,7 @@ void LeituraSerial() {
           Serial1.readBytes((uint8_t*)&temp, sizeof(PacoteEstado));
           byte stop = Serial1.read();
           if (stop == BYTE_PARA) {
-            atacante = temp.atacante;  // recebe o papel (atacante/defensor)
+            atacante = temp.atacante; 
             bool novaCorGol = temp.corGolAzul;
             if (novaCorGol != corGolAzul) {
               corGolAzul = novaCorGol;
@@ -413,7 +404,6 @@ void LeituraSerial() {
   }
 }
 
-// Le pacote da camera com dados de BOLA + 2 GOLS (ângulo e distância cada)
 void LeituraCamera() {
   static EstadoRxCamera estadoRx = CAMERA_RX_AGUARDANDO_START;
   static uint8_t payload[CAMERA_PAYLOAD_BYTES];
@@ -422,12 +412,9 @@ void LeituraCamera() {
 
   unsigned long agora = millis();
 
-  // Protocolo camera: [0xAA][ID=0x03][12 bytes payload][0x55]
-  // Payload: [BALL_A(2B)][BALL_D(2B)][BLUE_A(2B)][BLUE_D(2B)][YELLOW_A(2B)][YELLOW_D(2B)]
   while (Serial2.available() > 0) {
     uint8_t dado = (uint8_t)Serial2.read();
     agora = millis();
-    ultimaAtividadeCameraMs = agora;
 
     if ((estadoRx != CAMERA_RX_AGUARDANDO_START) &&
         ((agora - ultimoByteCameraParserMs) > CAMERA_INTERBYTE_TIMEOUT_MS)) {
@@ -510,8 +497,6 @@ void LeituraCamera() {
   }
 }
 
-
-// Monta e envia para a Cabeca um pacote com ultras, IR e dados de camera (bola + 2 gols).
 void enviarDados() { 
   Pacote p;
 
@@ -522,28 +507,23 @@ void enviarDados() {
   p.angulo = (int16_t)round(filtrarAnguloBola() * 10.0);
   p.intensidade = (int16_t)round(intensidade * 10.0);
   
-  // ===== Dados de camera =====
   p.ballAngle = ballCameraAngle;
   p.ballDist = ballCameraDist;
   p.blueAngle = blueCameraAngle;
   p.blueDist = blueCameraDist;
   p.yellowAngle = yellowCameraAngle;
   p.yellowDist = yellowCameraDist;
-  // ===== FIM dados camera =====
   
   p.cameraOK = (!cameraOffline && (ultimaAtividadeCameraMs > 0) && ((millis() - ultimaAtividadeCameraMs) <= CAMERA_TIMEOUT_MS)) ? 1 : 0;
 
   enviarStruct(Serial1, Rota::OLHO_PARA_CABECA, p);
 }
 
-//--------------------------------------//
-
-
-
-
-
-// Inicializa pinos/seriais (sem sincronizar cor com camera)
 void setup() {
+    pinMode(RESET_PIN, OUTPUT);
+    digitalWrite(RESET_PIN, HIGH);
+    ultimoResetCameraMs = millis(); // Previne reset imediato no startup
+
     for (int i = 0; i < NUM_SENSORES; i++)
       pinMode(sensoresTSOP[i], INPUT);
 
@@ -562,20 +542,15 @@ void setup() {
     Serial2.setTimeout(5);
 }
 
-// Laco principal: handshake, leituras de sensores e envio de pacote.
 void loop(){
   ProcessarPingCabeca();
 
-
-  contarPulsosSensores(); // Leitura IR SEEKER
+  contarPulsosSensores(); 
   float angulo = calculaAnguloBola();
   imprimirDebugSensoresIR(angulo);
-  L_Ultra(); // Leitura dos ultras
+  L_Ultra(); 
 
-  // ler estado recebido da cabeça (atacante/defensor)
   LeituraSerial();
-
-  // ler dados recebidos da camera (gol detectado/erro/pixels)
   LeituraCamera();
 
   enviarDados(); 

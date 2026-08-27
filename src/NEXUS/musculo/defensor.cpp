@@ -199,6 +199,12 @@ bool executarAvancoFrontalTemporizadoDefensor(unsigned long agora,
 // =============================================================================
 
 void defensor() {
+ float anguloBola = -1.0f;
+  bool bolaDisponivel = false;
+
+  if (obterAnguloIrDisponivel(anguloBola)) {
+    bolaDisponivel = true;
+  }
   static float vetorXSuave = 0.0f;
   static float vetorYSuave = 0.0f;
   static float cmdGiroSuave = 0.0f;
@@ -248,7 +254,8 @@ void defensor() {
 
     if (magnitudeErro <= DEFENSOR_MAGNITUDE_MINIMA_PARAR) {
       resetPidLinha();
-      seguirDirecaoComGiroLaterais(0.0f, 0, cmdGiroBussola);
+
+      girarNoEixo(cmdGiroBussola);
       return;
     }
 
@@ -262,8 +269,22 @@ void defensor() {
 
     seguirDirecaoComGiroLaterais(anguloCorrecao, velocidadeCalculada, cmdGiroBussola);
     return;
+
+   
+
   } else {
     resetPidLinha();
-    seguirDirecaoComGiroLaterais(0.0f, 0, cmdGiroBussola);
+    girarNoEixo(cmdGiroBussola);
+    return;
   }
+
+/*
+Falta:
+- Movimento lateral para seguir a bola (defender)
+- Voltar para o centro do gol quando não tiver IR de bola disponivel
+- Voltar para o centro do gol após avançar para atacar
+
+*/
+
+  // Se a bola estiver visível e no intervalo de 0 a 90 graus, anda em 90°
 }

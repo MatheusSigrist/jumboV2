@@ -281,6 +281,61 @@ void seguirDirecaoComGiroLaterais(float anguloGraus, int velocidade, int cmdGiro
 
 
 
+void seguirDirecaoComGiroLateraisDefensor(float anguloGraus, int velocidade, int cmdGiro) {
+  if (!g_inicializado) {
+    return;
+  }
+
+  int velocidadeAlvo = constrain(velocidade, 0, g_cfg.velocidadeMaxima);
+  int cmdGiroLimitado = constrain(cmdGiro, -255, 255);
+  float prioridadeGiro = (float)abs(cmdGiroLimitado) / 255.0f;
+  float prioridadeTranslacao = 1.0f - prioridadeGiro;
+  int sinalGiro = (cmdGiroLimitado > 0) ? 1 : ((cmdGiroLimitado < 0) ? -1 : 0);
+
+  float theta = anguloGraus * PI / 180.0f;
+  float vx = ((float)velocidadeAlvo * prioridadeTranslacao) * sinf(theta);
+  float vy = ((float)velocidadeAlvo * prioridadeTranslacao) * cosf(theta);
+
+  float theta1 = 45.0f * PI / 180.0f;
+  float theta2 = 135.0f * PI / 180.0f;
+  float theta3 = 225.0f * PI / 180.0f;
+  float theta4 = 315.0f * PI / 180.0f;
+
+  float v1 = vx * cosf(theta1) + vy * sinf(theta1);
+  float v2 = vx * cosf(theta2) + vy * sinf(theta2);
+  float v3 = vx * cosf(theta3) + vy * sinf(theta3);
+  float v4 = vx * cosf(theta4) + vy * sinf(theta4);
+
+  float termoGiro = (-g_cfg.ganhoGiroMisto * (float)velocidadeAlvo * prioridadeGiro * (float)sinalGiro) + 10;
+  
+  
+  
+  if((anguloGraus > 0) && (anguloGraus < 180)){
+  v1 += termoGiro - 50; // 315
+  v2 += termoGiro; // 225
+  v3 += termoGiro; // 135
+  v4 += termoGiro - 50; //45
+  }else{
+  v1 += termoGiro + 15; // 315
+  v2 += termoGiro; // 225
+  v3 += termoGiro; // 135
+  v4 += termoGiro + 15; //45
+  }
+
+
+  float maxVel = max(max(fabsf(v1), fabsf(v2)), max(fabsf(v3), fabsf(v4)));
+  if (maxVel > g_cfg.velocidadeMaxima) {
+    float escala = (float)g_cfg.velocidadeMaxima / maxVel;
+    v1 *= escala;
+    v2 *= escala;
+    v3 *= escala;
+    v4 *= escala;
+  }
+
+ // corrige certo para teste
+ // aplicarComandoMotoresComRampa((int)termoGiro, (int)termoGiro, (int)termoGiro, (int)termoGiro);
+    aplicarComandoMotoresComRampa((int)termoGiro, (int)termoGiro, (int)termoGiro, (int)termoGiro);
+}
 
 
 

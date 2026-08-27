@@ -170,6 +170,7 @@ void girarNoEixo(int velocidade);
 void seguirDirecaoPorAngulo(float anguloGraus, int velocidade);
 void seguirDirecaoComGiro(float anguloGraus, int velocidade, int cmdGiro);
 void seguirDirecaoComGiroLaterais(float anguloGraus, int velocidade, int cmdGiro);
+void seguirDirecaoComGiroLateraisDefensor(float anguloGraus, int velocidade, int cmdGiro);
 void moverFrenteComGiro(int velocidadePwm, int cmdGiro);
 void moverFrenteComGiro(int velocidadePwm, int cmdGiro, float ganhoGiroMisto);
 
