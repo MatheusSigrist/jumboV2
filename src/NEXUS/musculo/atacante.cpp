@@ -126,8 +126,8 @@ void atacante() {
                 resetControleGolCamera();
                         
           float anguloMovimento = mapearAnguloBolaParaMovimento(anguloIrAtual);
-
-            seguirDirecaoComGiroLaterais(
+// Alterada a função de movimento do atacante de seguirDirecaoComGiroLaterais para seguirDirecaoComGiro
+            seguirDirecaoComGiro(
                 anguloMovimento,
                 velo,
                 cmdGiro

@@ -2,13 +2,11 @@ import sensor
 import time
 import math
 import struct
-import machine
 from machine import UART
+from machine import LED
 
 # ===== COMUNICAÇÃO SERIAL COM OLHO =====
 uart_olho = UART(1, 115200, timeout_char=200)
-UART_CMD_MAX_LEN = 16
-uart_cmd_buffer = bytearray()
 
 # ===== PROTOCOLO SERIAL =====
 BYTE_INICIA = 0xAA
@@ -26,6 +24,14 @@ R2 = R * R
 
 DEBUG = True
 center = [175, 125]
+
+# =========================================================
+# CRIAÇÃO DOS LEDS
+# =========================================================
+
+red_led = LED("LED_RED")
+green_led = LED("LED_GREEN")
+blue_led = LED("LED_BLUE")
 
 # =========================================================
 # FILTRO ANTI-RUIDO DA BOLA
@@ -329,64 +335,21 @@ def enviar_dados_visao(ball_angle, ball_dist, blue_angle, blue_dist, yellow_angl
     uart_olho.write(buffer)
 
 
-def reiniciar_camera_por_uart():
-    """
-    Executa reset logico solicitado pela placa Olho.
-    O reboot por software e o caminho mais robusto para recuperar travas da OpenMV.
-    """
-    print("UART CMD: RESET")
-    machine.reset()
-
-
-def processar_comandos_uart():
-    """
-    Le comandos ASCII vindos do Olho sem interferir no frame binario enviado pela camera.
-    Protocolo esperado do watchdog: RESET\r\n
-    """
-    global uart_cmd_buffer
-
-    if not uart_olho.any():
-        return
-
-    dados = uart_olho.read()
-    if not dados:
-        return
-
-    for byte in dados:
-        if byte == 10 or byte == 13:
-            if not uart_cmd_buffer:
-                continue
-
-            comando = bytes(uart_cmd_buffer).strip()
-            uart_cmd_buffer = bytearray()
-
-            if comando == b"RESET":
-                reiniciar_camera_por_uart()
-            continue
-
-        if 97 <= byte <= 122:
-            byte -= 32
-
-        if 32 <= byte <= 126:
-            if len(uart_cmd_buffer) < UART_CMD_MAX_LEN:
-                uart_cmd_buffer.append(byte)
-            else:
-                uart_cmd_buffer = bytearray()
-        else:
-            uart_cmd_buffer = bytearray()
-
-
 # =========================================================
 # THRESHOLDS
 # =========================================================
 
 thresholdb = [9, 25, -50, 10, -20, -8]   # azul
-thresholdy = [45, 55, 5, 20, 45, 5]      # amarelo
+thresholdy = [65, 45, 3, 20, 45, 5]      # amarelo
 thresholdo = [35, 50, -7, 20, 9, 18]     # laranja
 
 # =========================================================
 # CÂMERA
 # =========================================================
+
+red_led.on()
+blue_led.off()
+green_led.off()
 
 sensor.reset()
 sensor.set_pixformat(sensor.RGB565)
@@ -411,8 +374,12 @@ print("Iniciando detecção...")
 # =========================================================
 
 while True:
+
+    red_led.off()
+    blue_led.off()
+    green_led.on()
+
     clock.tick()
-    processar_comandos_uart()
     img = sensor.snapshot()
 
     # Máscara quadrada externa
