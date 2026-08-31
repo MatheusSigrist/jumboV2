@@ -265,15 +265,15 @@ void seguirDirecaoComGiroLaterais(float anguloGraus, int velocidade, int cmdGiro
   
 
   if((anguloGraus > 0) && (anguloGraus < 180)){
-  v1 -= termoGiro - 3; // 315
-  v2 += termoGiro; // 225
-  v3 -= termoGiro - 3; // 45
-  v4 += termoGiro; //135
+  v1 += termoGiro; // 315
+  v2 += termoGiro + 50; // 225
+  v3 += termoGiro + 50; // 135
+  v4 += termoGiro; //45
   }else{
-  v1 -= termoGiro - 3; // 315
-  v2 += termoGiro; // 225
-  v3 -= termoGiro - 3; // 45
-  v4 += termoGiro; //135
+  v1 += termoGiro; // 315
+  v2 += termoGiro - 50; // 225
+  v3 += termoGiro - 50; // 135
+  v4 += termoGiro; //45
   }
 
   float maxVel = max(max(fabsf(v1), fabsf(v2)), max(fabsf(v3), fabsf(v4)));
