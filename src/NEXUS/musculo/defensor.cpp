@@ -24,7 +24,7 @@ constexpr float DEFENSOR_SUAVIZACAO_GIRO  = 0.35f;
 constexpr float DEFENSOR_VELOCIDADE_MIN_PWM            = 180.0f;
 constexpr float DEFENSOR_VELOCIDADE_RETORNO_GOL_PWM    = 220.0f;
 constexpr int   DEFENSOR_VELOCIDADE_MAX_BOLA_PWM       = 255;
-constexpr int   DEFENSOR_VELOCIDADE_MIN_CORRECAO_PWM   = 180;
+constexpr int   DEFENSOR_VELOCIDADE_MIN_CORRECAO_PWM   = 100;
 constexpr int   DEFENSOR_VELOCIDADE_MAX_CORRECAO_PWM   = 255;
 constexpr float DEFENSOR_MAGNITUDE_MINIMA_PARAR        = 0.2f;
 
@@ -66,11 +66,52 @@ constexpr int   DEFENSOR_VEL_BOLA_LATERAL_MAX_PWM = 255;
 constexpr float DEFENSOR_ANGULO_LATERAL_MIN_GRAUS = 0.0f;
 constexpr float DEFENSOR_ANGULO_LATERAL_MAX_GRAUS = 135.0f;
 
-// Limite lateral por ultras
-constexpr float ULTRA_LIMITE_LATERAL_DIR_CM = 45.0f;
-constexpr float ULTRA_LIMITE_LATERAL_ESQ_CM = 45.0f;
-constexpr float ULTRA_HISTERESE_LATERAL_CM  = 4.0f;
-constexpr float ULTRA_HISTERESE_TRASEIRO_CM = 4.0f;
+// Limites físicos da área de atuação por ultrassom.
+//
+// IMPORTANTE:
+// Não há estado persistente / latch / histerese.
+// A proteção é recalculada em TODOS os ciclos usando somente a leitura atual.
+//
+// Laterais:
+//   > 45 cm          -> movimento normal
+//   30 < d <= 45 cm  -> bloqueia o sentido para fora e corrige para dentro
+//   d <= 30 cm       -> correção forte para dentro
+//
+// Traseiro:
+//   limite NÃO é fixo.
+//   Na borda lateral: proteção ~20 cm / crítico ~15 cm.
+//   No centro do gol: proteção ~32 cm / crítico ~28 cm.
+//   Entre esses pontos o limite varia continuamente conforme os ultras laterais.
+constexpr float ULTRA_LIMITE_LATERAL_DIR_CM        = 45.0f;
+constexpr float ULTRA_LIMITE_LATERAL_ESQ_CM        = 45.0f;
+
+// Limite traseiro DINÂMICO conforme a posição lateral do defensor.
+//
+// Na borda lateral da área:
+//   proteção traseira ~25 cm
+//   crítico traseiro  ~20 cm
+//
+// No centro do gol:
+//   proteção traseira ~32 cm
+//   crítico traseiro  ~30 cm
+//
+// A transição é contínua usando a MENOR leitura lateral.
+// Quanto mais longe das paredes laterais, mais o robô é considerado centralizado.
+constexpr float DEFENSOR_TRAS_LIMITE_BORDA_CM      = 25.0f;
+constexpr float DEFENSOR_TRAS_LIMITE_CENTRO_CM     = 32.0f;
+constexpr float DEFENSOR_TRAS_CRITICO_BORDA_CM     = 20.0f;
+constexpr float DEFENSOR_TRAS_CRITICO_CENTRO_CM    = 30.0f;
+
+// Faixa usada para estimar posição lateral.
+// <=45 cm  -> região de borda
+// >=80 cm  -> região central
+constexpr float DEFENSOR_LATERAL_REF_BORDA_CM      = 45.0f;
+constexpr float DEFENSOR_LATERAL_REF_CENTRO_CM     = 80.0f;
+
+// Intensidade mínima ao entrar na faixa e máxima na zona crítica.
+// Esses valores são componentes vetoriais em PWM.
+constexpr float DEFENSOR_CORRECAO_LIMITE_MIN_PWM   = 100.0f;
+constexpr float DEFENSOR_CORRECAO_LIMITE_MAX_PWM   = 220.0f;
 
 // Prioridade dinâmica: bola domina enquanto a correção de linha é pequena.
 // A linha só ganha força quando o erro cresce e há risco real de sair da região.
@@ -83,7 +124,7 @@ constexpr float DEFENSOR_PESO_LINHA_MAX_COM_BOLA     = 0.68f;
 // Retém a última leitura válida por um intervalo curto para absorver perdas pontuais.
 constexpr unsigned long DEFENSOR_RETENCAO_LEITURA_LINHA_MS = 50;
 // Se uma zona continua marcada como válida, mas seu timestamp deixa de atualizar,
-// corta a ação atual. Valor deliberadamente maior que a retenção de 200 ms.
+// corta a ação atual. Valor deliberadamente maior que a retenção curta acima.
 constexpr unsigned long DEFENSOR_TIMEOUT_ATUALIZACAO_LINHA_MS = 600;
 
 // NOVO: faixa traseira da bola (não perseguir)
@@ -256,63 +297,248 @@ int calcularVelocidadeLateralPorIr(float anguloIrBruto) {
   );
 }
 
-// Limites físicos duros por ultrassom.
-// Em vez de bloquear apenas 90/270 graus, corta a componente do vetor que
-// tentaria avançar para uma direção já limitada. Assim diagonais também respeitam.
-bool aplicarLimitesDurosUltraAoAngulo(float direcaoCmd, bool ultrasRecentes, float &direcaoAjustada) {
-  static bool travaDir = false;
-  static bool travaEsq = false;
-  static bool travaTras = false;
+// =============================================================================
+// LIMITES FÍSICOS DA ÁREA DE ATUAÇÃO POR ULTRASSOM
+// =============================================================================
+//
+// Esta lógica NÃO guarda estado entre ciclos.
+// Ela usa somente a leitura atual dos ultras.
+//
+// Convenção do movimento:
+//   0°   = frente       -> Y+
+//   90°  = direita      -> X+
+//   180° = trás         -> Y-
+//   270° = esquerda     -> X-
+//
+// Regras:
+// - Entrou na faixa de proteção: nunca permite continuar para fora.
+// - Ao mesmo tempo, garante uma componente mínima no sentido de recuperação.
+// - Quanto mais próximo da zona crítica, maior a correção.
+// - Saiu da faixa no ciclo seguinte: a correção deixa de existir imediatamente.
 
-  direcaoAjustada = normalizarAngulo360(direcaoCmd);
+// Calcula o limite traseiro permitido conforme a posição lateral estimada.
+// Usa a menor distância entre os ultras laterais:
+// - perto de uma lateral -> limite traseiro menor
+// - perto do centro      -> limite traseiro maior
+//
+// Não usa estado persistente. O valor é recalculado a cada ciclo.
+void calcularLimitesTraseirosDinamicos(bool ultrasRecentes,
+                                       float &limiteTrasCm,
+                                       float &criticoTrasCm) {
+  // Fallback conservador caso os ultras laterais não estejam confiáveis.
+  limiteTrasCm  = DEFENSOR_ULTRA_TRAS_LIMITE_CM;
+  criticoTrasCm = DEFENSOR_TRAS_CRITICO_BORDA_CM;
 
-  if (!ultrasRecentes) {
-    travaDir = travaEsq = travaTras = false;
-    return true;
+  if (!ultrasRecentes) return;
+  if (ultraDcm < 0.0f || ultraEcm < 0.0f) return;
+
+  float menorLateral = (ultraDcm < ultraEcm) ? ultraDcm : ultraEcm;
+
+  float fatorCentro = mapearFaixaClamped(
+    menorLateral,
+    DEFENSOR_LATERAL_REF_BORDA_CM,
+    DEFENSOR_LATERAL_REF_CENTRO_CM,
+    0.0f,
+    1.0f
+  );
+
+  limiteTrasCm =
+    DEFENSOR_TRAS_LIMITE_BORDA_CM +
+    fatorCentro *
+    (DEFENSOR_TRAS_LIMITE_CENTRO_CM -
+     DEFENSOR_TRAS_LIMITE_BORDA_CM);
+
+  criticoTrasCm =
+    DEFENSOR_TRAS_CRITICO_BORDA_CM +
+    fatorCentro *
+    (DEFENSOR_TRAS_CRITICO_CENTRO_CM -
+     DEFENSOR_TRAS_CRITICO_BORDA_CM);
+
+  if (criticoTrasCm >= limiteTrasCm) {
+    criticoTrasCm = limiteTrasCm - 1.0f;
   }
-
-  // Direita: trava assim que atingir o limite; libera somente após histerese.
-  if (ultraDcm >= 0.0f) {
-    if (!travaDir && ultraDcm <= ULTRA_LIMITE_LATERAL_DIR_CM) travaDir = true;
-    else if (travaDir && ultraDcm >= ULTRA_LIMITE_LATERAL_DIR_CM + ULTRA_HISTERESE_LATERAL_CM) travaDir = false;
-  }
-
-  // Esquerda.
-  if (ultraEcm >= 0.0f) {
-    if (!travaEsq && ultraEcm <= ULTRA_LIMITE_LATERAL_ESQ_CM) travaEsq = true;
-    else if (travaEsq && ultraEcm >= ULTRA_LIMITE_LATERAL_ESQ_CM + ULTRA_HISTERESE_LATERAL_CM) travaEsq = false;
-  }
-
-  // Trás: ultraT é a referência traseira. Ao atingir o limite, qualquer
-  // componente Y negativa (movimento para trás) é removida.
-  if (ultraTcm >= 0.0f) {
-    if (!travaTras && ultraTcm <= DEFENSOR_ULTRA_TRAS_LIMITE_CM) travaTras = true;
-    else if (travaTras && ultraTcm >= DEFENSOR_ULTRA_TRAS_LIMITE_CM + ULTRA_HISTERESE_TRASEIRO_CM) travaTras = false;
-  }
-
-  float rad = direcaoAjustada * PI / 180.0f;
-  float x = sinf(rad);
-  float y = cosf(rad);
-
-  if (travaDir  && x > 0.0f) x = 0.0f;
-  if (travaEsq  && x < 0.0f) x = 0.0f;
-  if (travaTras && y < 0.0f) y = 0.0f;
-
-  // Se todas as componentes foram proibidas, não deve haver translação.
-  if (fabsf(x) < 0.001f && fabsf(y) < 0.001f) return false;
-
-  direcaoAjustada = calcularAnguloVetorDefensor(x, y);
-  return true;
 }
 
-void seguirDirecaoDefensorComLimites(float direcaoCmd, int velocidadePwm, int cmdGiro, bool ultrasRecentes) {
-  float direcaoSegura = direcaoCmd;
-  if (!aplicarLimitesDurosUltraAoAngulo(direcaoCmd, ultrasRecentes, direcaoSegura)) {
+
+float calcularForcaCorrecaoLimiteUltra(float distanciaCm,
+                                       float limiteCm,
+                                       float criticoCm) {
+  if (distanciaCm < 0.0f || distanciaCm > limiteCm) {
+    return 0.0f;
+  }
+
+  if (distanciaCm <= criticoCm) {
+    return DEFENSOR_CORRECAO_LIMITE_MAX_PWM;
+  }
+
+  float faixa = limiteCm - criticoCm;
+  if (faixa <= 0.001f) {
+    return DEFENSOR_CORRECAO_LIMITE_MAX_PWM;
+  }
+
+  // 0 no crítico -> 1 no limite.
+  // Queremos MAX no crítico e MIN no limite.
+  float t = (distanciaCm - criticoCm) / faixa;
+  t = constrain(t, 0.0f, 1.0f);
+
+  return DEFENSOR_CORRECAO_LIMITE_MAX_PWM -
+         t * (DEFENSOR_CORRECAO_LIMITE_MAX_PWM -
+              DEFENSOR_CORRECAO_LIMITE_MIN_PWM);
+}
+
+
+// Aplica os limites diretamente nas componentes X/Y do comando.
+//
+// Em vez de criar um novo "modo de recuperação", modifica apenas o comando
+// deste ciclo. Isso evita o problema de continuar andando mesmo depois que
+// o ultra já recuperou a distância.
+void aplicarLimitesUltraAoVetor(float &vetorX,
+                                float &vetorY,
+                                bool ultrasRecentes) {
+  if (!ultrasRecentes) {
+    return;
+  }
+
+  bool limiteDirAtivo =
+    (ultraDcm >= 0.0f) &&
+    (ultraDcm <= ULTRA_LIMITE_LATERAL_DIR_CM);
+
+  bool limiteEsqAtivo =
+    (ultraEcm >= 0.0f) &&
+    (ultraEcm <= ULTRA_LIMITE_LATERAL_ESQ_CM);
+
+  float limiteTrasAtualCm = DEFENSOR_ULTRA_TRAS_LIMITE_CM;
+  float criticoTrasAtualCm = DEFENSOR_TRAS_CRITICO_BORDA_CM;
+
+  calcularLimitesTraseirosDinamicos(
+    ultrasRecentes,
+    limiteTrasAtualCm,
+    criticoTrasAtualCm
+  );
+
+  bool limiteTrasAtivo =
+    (ultraTcm >= 0.0f) &&
+    (ultraTcm <= limiteTrasAtualCm);
+
+
+  // -------------------------------------------------------------------
+  // LATERAIS
+  // -------------------------------------------------------------------
+  //
+  // Se por alguma anomalia os dois limites laterais estiverem ativos ao
+  // mesmo tempo, não força nenhum lado: apenas corta a componente lateral.
+  // Isso evita escolher arbitrariamente direita ou esquerda.
+  if (limiteDirAtivo && limiteEsqAtivo) {
+    vetorX = 0.0f;
+  }
+  else if (limiteDirAtivo) {
+    // Perto demais da direita:
+    // 1) jamais deixa continuar para direita;
+    // 2) garante movimento mínimo para esquerda até sair da faixa.
+    if (vetorX > 0.0f) {
+      vetorX = 0.0f;
+    }
+
+    float correcao = calcularForcaCorrecaoLimiteUltra(
+      ultraDcm,
+      ULTRA_LIMITE_LATERAL_DIR_CM,
+      DEFENSOR_ULTRA_LATERAL_CRITICO_CM
+    );
+
+    // Se o comando original já está indo para esquerda mais forte do que
+    // a correção necessária, preserva esse comando.
+    if (vetorX > -correcao) {
+      vetorX = -correcao;
+    }
+  }
+  else if (limiteEsqAtivo) {
+    // Perto demais da esquerda:
+    // 1) jamais deixa continuar para esquerda;
+    // 2) garante movimento mínimo para direita até sair da faixa.
+    if (vetorX < 0.0f) {
+      vetorX = 0.0f;
+    }
+
+    float correcao = calcularForcaCorrecaoLimiteUltra(
+      ultraEcm,
+      ULTRA_LIMITE_LATERAL_ESQ_CM,
+      DEFENSOR_ULTRA_LATERAL_CRITICO_CM
+    );
+
+    if (vetorX < correcao) {
+      vetorX = correcao;
+    }
+  }
+
+
+  // -------------------------------------------------------------------
+  // TRASEIRO
+  // -------------------------------------------------------------------
+  if (limiteTrasAtivo) {
+    // Limite traseiro variável conforme a posição lateral.
+    // Na borda fica próximo de 20 cm; no centro, próximo de 32 cm.
+    if (vetorY < 0.0f) {
+      vetorY = 0.0f;
+    }
+
+    float correcao = calcularForcaCorrecaoLimiteUltra(
+      ultraTcm,
+      limiteTrasAtualCm,
+      criticoTrasAtualCm
+    );
+
+    // Se a estratégia já manda para frente com força maior, preserva.
+    if (vetorY < correcao) {
+      vetorY = correcao;
+    }
+  }
+}
+
+
+// ÚNICA saída de translação do defensor com proteção dos ultras.
+//
+// A direção/velocidade solicitada pela estratégia é convertida para X/Y.
+// Depois os ultras modificam somente as componentes necessárias.
+// Por fim o vetor seguro volta a ser convertido para ângulo + PWM.
+void seguirDirecaoDefensorComLimites(float direcaoCmd,
+                                     int velocidadePwm,
+                                     int cmdGiro,
+                                     bool ultrasRecentes) {
+  float anguloRad = normalizarAngulo360(direcaoCmd) * PI / 180.0f;
+
+  float velocidade = (float)constrain(velocidadePwm, 0, 255);
+
+  float vetorX = sinf(anguloRad) * velocidade;
+  float vetorY = cosf(anguloRad) * velocidade;
+
+  aplicarLimitesUltraAoVetor(
+    vetorX,
+    vetorY,
+    ultrasRecentes
+  );
+
+  float magnitude = sqrtf(
+    vetorX * vetorX +
+    vetorY * vetorY
+  );
+
+  // Nenhuma translação restante: mantém somente o controle de giro.
+  if (magnitude < 0.5f) {
     girarNoEixo(cmdGiro);
     return;
   }
 
-  seguirDirecaoComGiroLaterais(direcaoSegura, velocidadePwm, cmdGiro);
+  float direcaoSegura =
+    calcularAnguloVetorDefensor(vetorX, vetorY);
+
+  int velocidadeSegura =
+    (int)roundf(constrain(magnitude, 0.0f, 255.0f));
+
+  seguirDirecaoComGiroLaterais(
+    direcaoSegura,
+    velocidadeSegura,
+    cmdGiro
+  );
 }
 
 // NOVO: centraliza no gol por ultras laterais (sem IR)
@@ -361,6 +587,13 @@ float comporAnguloRetornoBussolaComUltraLaterais(float anguloRetornoBase, bool u
 // antigo não seja retomado depois que a leitura voltar a atualizar.
 static bool cancelarAvancoFrontalPorWatchdogLinha = false;
 
+// Indica SOMENTE o período em que o robô está realmente executando o avanço
+// frontal temporizado. Enquanto true:
+// - perda/retenção da linha NÃO pode ativar retorno ao gol;
+// - watchdog da linha NÃO pode cortar o avanço;
+// - ao terminar o avanço, a lógica normal da linha volta automaticamente.
+static bool avancoFrontalDefensorAtivo = false;
+
 bool executarAvancoFrontalTemporizadoDefensor(unsigned long agora,
                                               float &vetorXSuave,
                                               float &vetorYSuave,
@@ -377,6 +610,7 @@ bool executarAvancoFrontalTemporizadoDefensor(unsigned long agora,
     inicioDeteccaoIrFrontalMs = 0;
     inicioAvancoIrFrontalMs = 0;
     avancoIrFrontalAtivo = false;
+    avancoFrontalDefensorAtivo = false;
     alinhamentoIrFrontalAtivo = false;
     aguardarSaidaJanelaIrFrontal = false;
     ultimoAnguloAvancoIrFrontal = 0.0f;
@@ -389,6 +623,7 @@ bool executarAvancoFrontalTemporizadoDefensor(unsigned long agora,
 
   if (avancoIrFrontalAtivo) {
     if ((agora - inicioAvancoIrFrontalMs) < DEFENSOR_TEMPO_AVANCO_IR_FRONTAL_MS) {
+      avancoFrontalDefensorAtivo = true;
       if (irDetectado) ultimoAnguloAvancoIrFrontal = normalizarAngulo360(anguloIr);
       alinhandoAgora = false; erroAlinhamentoGraus = 0.0f;
       resetPidBussola();
@@ -396,13 +631,19 @@ bool executarAvancoFrontalTemporizadoDefensor(unsigned long agora,
       seguirDirecaoDefensorComLimites(ultimoAnguloAvancoIrFrontal, DEFENSOR_VELOCIDADE_AVANCO_IR_FRONTAL_PWM, 0, ultrasRecentes);
       return true;
     }
-    avancoIrFrontalAtivo = false; inicioAvancoIrFrontalMs = inicioDeteccaoIrFrontalMs = 0;
+    avancoIrFrontalAtivo = false;
+    avancoFrontalDefensorAtivo = false;
+    inicioAvancoIrFrontalMs = inicioDeteccaoIrFrontalMs = 0;
   }
 
   if (alinhamentoIrFrontalAtivo) {
     if (!irDetectado) {
-      alinhamentoIrFrontalAtivo = false; inicioDeteccaoIrFrontalMs = 0;
-      aguardarSaidaJanelaIrFrontal = false; resetPidBussola(); return false;
+      alinhamentoIrFrontalAtivo = false;
+      avancoFrontalDefensorAtivo = false;
+      inicioDeteccaoIrFrontalMs = 0;
+      aguardarSaidaJanelaIrFrontal = false;
+      resetPidBussola();
+      return false;
     }
     float erroAlinhamentoBola = normalizarErro180(anguloIr);
     ultimoAnguloAvancoIrFrontal = normalizarAngulo360(anguloIr);
@@ -414,7 +655,9 @@ bool executarAvancoFrontalTemporizadoDefensor(unsigned long agora,
       int cmdGiroBola = -SINAL_GIRO_PID * cmdPidBola;
       girarNoEixo(-cmdGiroBola); return true;
     }
-    alinhamentoIrFrontalAtivo = false; avancoIrFrontalAtivo = true;
+    alinhamentoIrFrontalAtivo = false;
+    avancoIrFrontalAtivo = true;
+    avancoFrontalDefensorAtivo = true;
     inicioAvancoIrFrontalMs = agora;
     alinhandoAgora = false; erroAlinhamentoGraus = 0.0f;
     resetPidBussola();
@@ -484,6 +727,15 @@ void defensor() {
   const bool algumaLinhaValida = temZonaA || temZonaB;
   const bool ultrasRecentes = ultrasValidos && (ultimoRxUltraMs > 0) && ((agora - ultimoRxUltraMs) <= TIMEOUT_ULTRA_MS);
 
+  // Durante o AVANÇO FRONTAL REAL, a linha deixa temporariamente de ser uma
+  // condição de permanência. O robô foi mandado propositalmente para fora dela.
+  //
+  // A leitura ainda pode chegar e ser atualizada normalmente, mas:
+  // - retenção/perda da linha não ativa retorno;
+  // - watchdog de linha não interrompe a ação;
+  // - assim que os 1500 ms acabam, essa suspensão desaparece automaticamente.
+  const bool suspenderLogicaLinhaPorAvanco = avancoFrontalDefensorAtivo;
+
   // -------------------------------------------------------------------------
   // WATCHDOG DE ATUALIZAÇÃO DA LINHA
   // -------------------------------------------------------------------------
@@ -511,7 +763,9 @@ void defensor() {
                              (fabsf(ultraDcm - DEFENSOR_CENTRO_GOL_LATERAL_CM) <= DEFENSOR_CENTRO_GOL_TOLERANCIA_CM) &&
                              (fabsf(ultraEcm - DEFENSOR_CENTRO_GOL_LATERAL_CM) <= DEFENSOR_CENTRO_GOL_TOLERANCIA_CM);
 
-  if (timeoutAtualizacaoLinha && !(exatamenteCentroLinha && exatamenteCentroGol)) {
+  if (!suspenderLogicaLinhaPorAvanco &&
+      timeoutAtualizacaoLinha &&
+      !(exatamenteCentroLinha && exatamenteCentroGol)) {
     // Corta imediatamente qualquer ação de movimento e invalida estados
     // temporizados para não retomar um comando antigo quando o RX voltar.
     cancelarAvancoFrontalPorWatchdogLinha = true;
@@ -526,16 +780,22 @@ void defensor() {
     return;
   }
 
-  // Entrou fora da linha: trava o estado de retorno.
-  if (!algumaLinhaValida) {
-    retornoGolAtivo = true;
-  }
-
-  // Reencontrou A ou B: encerra imediatamente o retorno e devolve o controle
-  // para a estratégia normal da linha/bola.
-  if (retornoGolAtivo && algumaLinhaValida) {
+  // Durante o avanço frontal, NÃO deixa a perda proposital da linha ligar o
+  // retorno ao gol. O avanço tem prioridade até acabar seu tempo.
+  if (suspenderLogicaLinhaPorAvanco) {
     retornoGolAtivo = false;
-    resetPidLinha();
+  } else {
+    // Fora do avanço frontal, volta exatamente à lógica normal:
+    // perdeu totalmente a linha -> inicia retorno ao gol.
+    if (!algumaLinhaValida) {
+      retornoGolAtivo = true;
+    }
+
+    // Reencontrou A ou B -> encerra retorno.
+    if (retornoGolAtivo && algumaLinhaValida) {
+      retornoGolAtivo = false;
+      resetPidLinha();
+    }
   }
 
   float erroBussola = calcularErroReferenciaBussola();
