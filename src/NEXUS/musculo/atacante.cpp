@@ -39,113 +39,59 @@ void atacante() {
     float anguloFuga = 0.0f;
 
     // =========================================================================
-    // PROTEÇÃO ROBUSTA DA LINHA — V2
+    // FAILSAFE FINAL DA LINHA
     // =========================================================================
-    // PRINCÍPIOS:
-    //   1) Linha tem prioridade sobre bola/câmera/bússola durante a fuga normal.
-    //   2) Entrada é instantânea; somente a SAÍDA possui confirmação temporal.
-    //   3) O freio frontal aprovado nos testes foi preservado.
-    //   4) Pequenas perdas de leitura NÃO reiniciam o watchdog da ocorrência V2.
-    //   5) A recuperação continua consultando sairDaLinha() e acompanha a
-    //      posição ATUAL da linha, em vez de usar apenas uma direção antiga.
-    //   6) Reentradas repetidas na linha antecipam a recuperação.
-    //   7) FAILSAFE FINAL: 2000 ms contínuos de linha bloqueiam a fuga e
-    //      devolvem o controle à estratégia normal, como na versão antiga.
-    // =========================================================================
-
-    enum EstadoProtecaoLinhaAtacante {
-        LINHA_LIVRE,
-        LINHA_FREIO_FRONTAL,
-        LINHA_FREIO_TRASEIRO,
-        LINHA_ESCAPE_TRASEIRO_MINIMO,
-        LINHA_FUGA_NORMAL,
-        LINHA_RECUPERACAO,
-        LINHA_CONFIRMAR_SAIDA
-    };
-
-    static EstadoProtecaoLinhaAtacante estadoLinha = LINHA_LIVRE;
-
-    // ------------------------- AJUSTES DA PROTEÇÃO ----------------------------
-    static constexpr unsigned long TEMPO_FREIO_FRONTAL_MS         = 40UL;
-
-    // Proteção específica quando o robô encontra a linha ATRÁS enquanto estava
-    // realmente se deslocando para trás. O freio corta a inércia e o escape
-    // mínimo impede que o desaparecimento da faixa branca seja confundido com
-    // uma saída segura depois de o robô atravessar completamente a linha.
-    static constexpr unsigned long TEMPO_FREIO_TRASEIRO_MS         = 40UL;
-    static constexpr unsigned long TEMPO_ESCAPE_TRASEIRO_MIN_MS    = 250UL;
-
-    // Menor que na V1: se a fuga normal não resolveu em ~0,9 s, não vale a pena
-    // continuar insistindo exatamente na mesma condição.
-    static constexpr unsigned long TEMPO_MAX_OCORRENCIA_NORMAL_MS = 900UL;
-
-    static constexpr unsigned long TEMPO_CONFIRMAR_SAIDA_MS       = 120UL;
-    static constexpr unsigned long PERIODO_RECUPERACAO_MS         = 180UL;
-    static constexpr unsigned long TEMPO_RECUPERACAO_FORTE_MS     = 900UL;
-
-    // Se a leitura some e reaparece repetidamente sem confirmar a saída,
-    // considera que o robô está "raspando"/oscilando sobre a mesma linha.
-    static constexpr uint8_t MAX_REENTRADAS_ANTES_RECUPERAR = 3;
-
-    static constexpr float FAIXA_LINHA_FRONTAL_GRAUS = 50.0f;
-
-    // Zona traseira ampla. No referencial de movimento do atacante:
-    //   0°   = frente
-    //   180° = trás
-    // A proteção especial só entra se a linha estiver nesta zona E o último
-    // movimento estratégico também tiver componente real para trás.
-    static constexpr float LINHA_TRASEIRA_MIN_GRAUS = 120.0f;
-    static constexpr float LINHA_TRASEIRA_MAX_GRAUS = 240.0f;
-    static constexpr float LIMIAR_COMPONENTE_RECUO   = -0.20f;
-
-    // Recuperação lateral/traseira precisa de desvios maiores que a V1.
-    static constexpr float DESVIO_RECUPERACAO_MEDIO_GRAUS = 35.0f;
-    static constexpr float DESVIO_RECUPERACAO_FORTE_GRAUS = 60.0f;
-
-    // Cronômetro da OCORRÊNCIA inteira. Ele só é zerado após a linha ficar
-    // realmente ausente pelo TEMPO_CONFIRMAR_SAIDA_MS.
-    static unsigned long inicioOcorrenciaLinhaMs = 0UL;
-
-    // Cronômetro do estado atual (freio/recuperação).
-    static unsigned long inicioEstadoLinhaMs = 0UL;
-    static unsigned long inicioSemLinhaMs = 0UL;
-
-    static uint8_t reentradasLinha = 0;
-
-    static float ultimaDirecaoFugaLinha = 0.0f;
-    static bool  temDirecaoFugaLinha = false;
-
-    // Último movimento ESTRATÉGICO realmente comandado pelo atacante.
-    // É separado dos comandos de fuga para sabermos em que direção o robô
-    // estava indo ANTES de tocar a linha.
-    static float ultimoAnguloMovimentoAtaqueCmd = 0.0f;
-    static bool  ultimoMovimentoAtaqueCmdValido = false;
-
-    // Estado específico da proteção traseira.
-    static float direcaoEscapeLinhaTraseira = 0.0f;
-    static unsigned long inicioEscapeLinhaTraseiraMs = 0UL;
-
-    // -------------------------------------------------------------------------
-    // FAILSAFE FINAL DE 2000 ms — MESMO PRINCÍPIO DA VERSÃO ANTIGA
-    // -------------------------------------------------------------------------
-    // Se linhaDetectada permanecer TRUE continuamente por 2000 ms, toda a
-    // estratégia de fuga é encerrada e atacante() retorna imediatamente ao loop
-    // principal. A fuga permanece bloqueada nas próximas chamadas enquanto a
-    // linha continuar ativa e só é rearmada quando linhaDetectada voltar a FALSE.
-    static constexpr unsigned long TEMPO_TIMEOUT_FINAL_LINHA_MS = 2000UL;
+    // Continua sendo o último recurso. A fuga normal e a fuga crítica abaixo
+    // têm prioridade para resolver a situação antes deste timeout.
+    static constexpr unsigned long TEMPO_TIMEOUT_FINAL_LINHA_MS = 1500UL;
     static unsigned long inicioTimeoutFinalLinhaMs = 0UL;
     static bool fugaLinhaBloqueadaPorTimeout = false;
 
+    // =========================================================================
+    // FUGA CRÍTICA DE LINHA + CONFIRMAÇÃO POR ULTRASSÔNICOS
+    // =========================================================================
+    // IMPORTANTE SOBRE O REFERENCIAL:
+    // anguloFuga já é a DIREÇÃO DE REPULSÃO calculada pela placa Pé.
+    // Portanto:
+    //   repulsão ~ 180° -> linha física está à FRENTE do robô
+    //   repulsão ~   0° -> linha física está ATRÁS do robô
+    //   repulsão ~  90° -> linha física está à ESQUERDA do robô
+    //   repulsão ~ 270° -> linha física está à DIREITA do robô
+    //
+    // A ação crítica NÃO usa delay(). Ela permanece ativa por 100 ms usando
+    // millis(), sem congelar o loop principal nem a atualização dos sensores.
+    static constexpr unsigned long TEMPO_FUGA_CRITICA_LINHA_MS = 150UL;
+    static constexpr int VELOCIDADE_FUGA_CRITICA_LINHA_PWM = 255;
+
+    // Faixas ultrassônicas inicialmente propostas para diferenciar:
+    //   < 20 cm  -> linha de fundo / parede muito próxima
+    //   20..40cm -> região da linha da área de penalidade
+    // O limite de 20 cm é exclusivo para evitar sobreposição entre os ifs.
+    static constexpr float ULTRA_LINHA_FUNDO_CM = 20.0f;
+    static constexpr float ULTRA_AREA_MAX_CM    = 40.0f;
+
+    static bool fugaCriticaLinhaAtiva = false;
+    static unsigned long inicioFugaCriticaLinhaMs = 0UL;
+    static float anguloFugaCriticaLinha = 0.0f;
+
+    // Preparado para a lógica futura de entrada/saída da área.
+    // É incrementado somente quando uma fuga crítica é iniciada por confirmação
+    // da faixa de área de penalidade (20..40 cm), e não a cada ciclo.
+    static uint16_t contadorConfirmacoesAreaPenalidade = 0;
+
     const unsigned long agoraLinhaMs = millis();
 
-    // Saiu da linha: rearma o timeout final para uma próxima ocorrência.
+    // Assim que a linha realmente desaparece, rearma o timeout para a próxima
+    // ocorrência. A fuga crítica, se já tiver sido iniciada, cumpre seus 100 ms.
     if (!linhaDetectada) {
         inicioTimeoutFinalLinhaMs = 0UL;
         fugaLinhaBloqueadaPorTimeout = false;
     }
 
-    // Enquanto a linha permanecer continuamente detectada, conta os 2000 ms.
+    // Conta o timeout somente enquanto a linha permanece detectada e a fuga
+    // ainda não foi bloqueada pelo failsafe.
     if (linhaDetectada && !fugaLinhaBloqueadaPorTimeout) {
+
         if (inicioTimeoutFinalLinhaMs == 0UL) {
             inicioTimeoutFinalLinhaMs = agoraLinhaMs;
         }
@@ -153,472 +99,206 @@ void atacante() {
         if ((agoraLinhaMs - inicioTimeoutFinalLinhaMs) >=
             TEMPO_TIMEOUT_FINAL_LINHA_MS) {
 
-            // ================================================================
-            // TIMEOUT FINAL: QUEBRA REAL DA AÇÃO DE LINHA
-            // ================================================================
-            // Ao completar 2000 ms, não continuamos descendo dentro de atacante()
-            // neste mesmo ciclo. Isso evita que um estado antigo de fuga permaneça
-            // comandando os motores quando, por exemplo, o IR também foi perdido.
-            //
-            // O bloqueio permanece armado até linhaDetectada voltar a FALSE.
-            // No próximo ciclo do loop principal, atacante() será chamado de novo
-            // já com a rotina de linha bloqueada pelo timeout.
             fugaLinhaBloqueadaPorTimeout = true;
             fugindoLinhaAgora = false;
             anguloFugaLinhaCmd = 0.0f;
 
-            // Limpa completamente a máquina de estados externa da linha.
-            estadoLinha = LINHA_LIVRE;
-            inicioOcorrenciaLinhaMs = 0UL;
-            inicioEstadoLinhaMs = 0UL;
-            inicioSemLinhaMs = 0UL;
-            reentradasLinha = 0;
-            temDirecaoFugaLinha = false;
-            ultimaDirecaoFugaLinha = 0.0f;
-            inicioEscapeLinhaTraseiraMs = 0UL;
-            direcaoEscapeLinhaTraseira = 0.0f;
+            // Cancela também qualquer impulso crítico pendente.
+            fugaCriticaLinhaAtiva = false;
+            inicioFugaCriticaLinhaMs = 0UL;
+            anguloFugaCriticaLinha = 0.0f;
 
-            // Não conserva uma direção estratégica antiga depois do timeout.
-            ultimoMovimentoAtaqueCmdValido = false;
-
-            // Zera explicitamente o último comando de movimento antes de sair.
-            // Assim o último vetor de fuga não continua ativo caso o IR esteja ausente.
-            girarNoEixo(0);
-
-            // Retorna imediatamente ao loop principal.
-            return;
-        }
-    }
-
-    // Enquanto NÃO houve timeout, executa toda a proteção robusta da V2.
-    // Se o timeout disparar, atacante() já terá retornado ao loop principal.
-    // Nas próximas chamadas, este bloco fica ignorado até a linha desaparecer.
-    if (!fugaLinhaBloqueadaPorTimeout) {
-
-    // -------------------------------------------------------------------------
-    // 1. ENTRADA IMEDIATA NA PROTEÇÃO
-    // -------------------------------------------------------------------------
-    if (estadoLinha == LINHA_LIVRE && linhaDetectada) {
-
-        inicioOcorrenciaLinhaMs = agoraLinhaMs;
-        inicioEstadoLinhaMs = agoraLinhaMs;
-        inicioSemLinhaMs = 0UL;
-        reentradasLinha = 0;
-        temDirecaoFugaLinha = false;
-
-        bool linhaNaZonaFrontal = false;
-        bool linhaNaZonaTraseira = false;
-        float anguloLinhaNormalizado = -1.0f;
-
-        if (anguloLinhaPe >= 0.0f) {
-            anguloLinhaNormalizado =
-                normalizarAngulo360(anguloLinhaPe);
-
-            linhaNaZonaFrontal =
-                (anguloLinhaNormalizado <= FAIXA_LINHA_FRONTAL_GRAUS) ||
-                (anguloLinhaNormalizado >= (360.0f - FAIXA_LINHA_FRONTAL_GRAUS));
-
-            linhaNaZonaTraseira =
-                (anguloLinhaNormalizado >= LINHA_TRASEIRA_MIN_GRAUS) &&
-                (anguloLinhaNormalizado <= LINHA_TRASEIRA_MAX_GRAUS);
-        }
-
-        // Verifica a direção que estava sendo comandada ANTES da linha aparecer.
-        // cos(ângulo) < 0 significa componente para trás. O limiar -0,20 evita
-        // ativar a proteção especial em movimentos quase puramente laterais.
-        bool estavaMovendoParaTras = false;
-
-        if (ultimoMovimentoAtaqueCmdValido) {
-            const float anguloMovimentoRad =
-                normalizarAngulo360(ultimoAnguloMovimentoAtaqueCmd) * PI / 180.0f;
-
-            estavaMovendoParaTras =
-                cosf(anguloMovimentoRad) < LIMIAR_COMPONENTE_RECUO;
-        }
-
-        const bool emergenciaLinhaTraseira =
-            linhaNaZonaTraseira &&
-            estavaMovendoParaTras &&
-            (anguloLinhaNormalizado >= 0.0f);
-
-        if (emergenciaLinhaTraseira) {
-            // Memoriza imediatamente uma direção para DENTRO do campo:
-            // oposta ao ponto onde a linha foi vista. Para uma linha traseira
-            // (120°..240°), o resultado sempre cai no hemisfério frontal.
-            direcaoEscapeLinhaTraseira =
-                normalizarAngulo360(anguloLinhaNormalizado + 180.0f);
-
-            ultimaDirecaoFugaLinha = direcaoEscapeLinhaTraseira;
-            temDirecaoFugaLinha = true;
-
-            estadoLinha = LINHA_FREIO_TRASEIRO;
-        }
-        else {
-            // Preserva exatamente a ideia que funcionou bem nos testes frontais.
-            estadoLinha = linhaNaZonaFrontal
-                ? LINHA_FREIO_FRONTAL
-                : LINHA_FUGA_NORMAL;
-        }
-    }
-
-    // -------------------------------------------------------------------------
-    // 2. FREIO CURTO FRONTAL — PRESERVADO
-    // -------------------------------------------------------------------------
-    if (estadoLinha == LINHA_FREIO_FRONTAL) {
-
-        fugindoLinhaAgora = true;
-
-        if (!linhaDetectada) {
-            estadoLinha = LINHA_CONFIRMAR_SAIDA;
-            inicioSemLinhaMs = agoraLinhaMs;
-        }
-        else if ((agoraLinhaMs - inicioEstadoLinhaMs) < TEMPO_FREIO_FRONTAL_MS) {
             girarNoEixo(0);
             return;
         }
-        else {
-            estadoLinha = LINHA_FUGA_NORMAL;
-            inicioEstadoLinhaMs = agoraLinhaMs;
-            // IMPORTANTE: inicioOcorrenciaLinhaMs NÃO é zerado aqui.
-        }
     }
 
     // -------------------------------------------------------------------------
-    // 2B. FREIO TRASEIRO + ESCAPE MÍNIMO CONTEXTUAL
+    // 1. CONTINUA UMA FUGA CRÍTICA JÁ INICIADA
     // -------------------------------------------------------------------------
-    // Só é usado quando: linha atrás + último comando de ataque indo para trás.
-    // Diferente da fuga genérica, o desaparecimento instantâneo da linha NÃO
-    // encerra esta proteção: isso evita considerar como "saída" o caso em que
-    // o robô atravessou completamente a faixa branca por inércia.
-    if (estadoLinha == LINHA_FREIO_TRASEIRO) {
+    // Fica acima da fuga normal para garantir um vetor forte e estável durante
+    // toda a janela crítica, mesmo se a linha oscilar por alguns ciclos.
+    if (fugaCriticaLinhaAtiva && !fugaLinhaBloqueadaPorTimeout) {
 
-        fugindoLinhaAgora = true;
-        anguloFugaLinhaCmd = direcaoEscapeLinhaTraseira;
+        if ((agoraLinhaMs - inicioFugaCriticaLinhaMs) <
+            TEMPO_FUGA_CRITICA_LINHA_MS) {
 
-        if ((agoraLinhaMs - inicioEstadoLinhaMs) < TEMPO_FREIO_TRASEIRO_MS) {
-            girarNoEixo(0);
-            return;
-        }
+            fugindoLinhaAgora = true;
+            anguloFugaLinhaCmd = anguloFugaCriticaLinha;
 
-        estadoLinha = LINHA_ESCAPE_TRASEIRO_MINIMO;
-        inicioEscapeLinhaTraseiraMs = agoraLinhaMs;
-        inicioEstadoLinhaMs = agoraLinhaMs;
-    }
-
-    if (estadoLinha == LINHA_ESCAPE_TRASEIRO_MINIMO) {
-
-        fugindoLinhaAgora = true;
-
-        // Enquanto ainda enxerga a linha na região traseira, atualiza a direção
-        // oposta usando a leitura ATUAL. Isso melhora a precisão se o robô girar
-        // ou tocar a faixa em diagonal durante a retirada.
-        if (linhaDetectada && anguloLinhaPe >= 0.0f) {
-            const float anguloLinhaAtual =
-                normalizarAngulo360(anguloLinhaPe);
-
-            if (anguloLinhaAtual >= LINHA_TRASEIRA_MIN_GRAUS &&
-                anguloLinhaAtual <= LINHA_TRASEIRA_MAX_GRAUS) {
-
-                direcaoEscapeLinhaTraseira =
-                    normalizarAngulo360(anguloLinhaAtual + 180.0f);
-
-                ultimaDirecaoFugaLinha = direcaoEscapeLinhaTraseira;
-                temDirecaoFugaLinha = true;
-            }
-        }
-
-        anguloFugaLinhaCmd = direcaoEscapeLinhaTraseira;
-
-        const unsigned long tempoEscapeTraseiro =
-            agoraLinhaMs - inicioEscapeLinhaTraseiraMs;
-
-        if (tempoEscapeTraseiro < TEMPO_ESCAPE_TRASEIRO_MIN_MS) {
-            // Mantém o afastamento mesmo se linhaDetectada já tiver ficado FALSE.
-            seguirDirecaoComGiro(
-                direcaoEscapeLinhaTraseira,
-                VELOCIDADE_FUGA_LINHA,
-                0
+            seguirDirecaoPorAngulo(
+                anguloFugaCriticaLinha,
+                VELOCIDADE_FUGA_CRITICA_LINHA_PWM
             );
             return;
         }
 
-        // Após cumprir o deslocamento mínimo, volta para a máquina de estados
-        // normal. Se ainda há linha, sairDaLinha() continua trabalhando; se não
-        // há, começamos a confirmação temporal de saída já existente.
-        if (linhaDetectada) {
-            estadoLinha = LINHA_FUGA_NORMAL;
-            inicioEstadoLinhaMs = agoraLinhaMs;
-        }
-        else {
-            estadoLinha = LINHA_CONFIRMAR_SAIDA;
-            inicioSemLinhaMs = agoraLinhaMs;
-        }
+        // Terminou o impulso. A partir deste ciclo, sairDaLinha() volta a ser
+        // responsável pela fuga caso a linha ainda esteja detectada.
+        fugaCriticaLinhaAtiva = false;
+        inicioFugaCriticaLinhaMs = 0UL;
+        anguloFugaCriticaLinha = 0.0f;
     }
 
     // -------------------------------------------------------------------------
-    // 3. CONFIRMAÇÃO DE SAÍDA
+    // 2. FUGA NORMAL — sairDaLinha() CONTINUA SENDO A PRINCIPAL
     // -------------------------------------------------------------------------
-    if (estadoLinha == LINHA_CONFIRMAR_SAIDA) {
+    if (!fugaLinhaBloqueadaPorTimeout) {
 
-        if (linhaDetectada) {
-            // A linha reapareceu: era apenas uma perda momentânea de leitura.
-            // NÃO reinicia o cronômetro da ocorrência.
-            if (reentradasLinha < 255) {
-                reentradasLinha++;
-            }
-
-            inicioSemLinhaMs = 0UL;
-
-            const bool ocorrenciaLonga =
-                (inicioOcorrenciaLinhaMs > 0UL) &&
-                ((agoraLinhaMs - inicioOcorrenciaLinhaMs) >=
-                 TEMPO_MAX_OCORRENCIA_NORMAL_MS);
-
-            const bool muitasReentradas =
-                reentradasLinha >= MAX_REENTRADAS_ANTES_RECUPERAR;
-
-            if (ocorrenciaLonga || muitasReentradas) {
-                estadoLinha = LINHA_RECUPERACAO;
-                inicioEstadoLinhaMs = agoraLinhaMs;
-            } else {
-                estadoLinha = LINHA_FUGA_NORMAL;
-            }
-        }
-        else {
-            // Permite que sairDaLinha() conclua eventual estado interno.
-            float anguloFinalizacao = 0.0f;
-            const bool fugaOriginalFinalizando =
-                sairDaLinha(
-                    false,
-                    anguloLinhaPe,
-                    VELOCIDADE_FUGA_LINHA,
-                    &anguloFinalizacao
-                );
-
-            if (fugaOriginalFinalizando) {
-                ultimaDirecaoFugaLinha = anguloFinalizacao;
-                temDirecaoFugaLinha = true;
-                fugindoLinhaAgora = true;
-                anguloFugaLinhaCmd = anguloFinalizacao;
-            }
-
-            if ((agoraLinhaMs - inicioSemLinhaMs) < TEMPO_CONFIRMAR_SAIDA_MS) {
-                // Mantém afastamento somente enquanto confirma a saída.
-                if (!fugaOriginalFinalizando) {
-                    if (temDirecaoFugaLinha) {
-                        fugindoLinhaAgora = true;
-                        anguloFugaLinhaCmd = ultimaDirecaoFugaLinha;
-                        seguirDirecaoComGiro(
-                            ultimaDirecaoFugaLinha,
-                            VELOCIDADE_FUGA_LINHA,
-                            0
-                        );
-                    } else {
-                        girarNoEixo(0);
-                    }
-                }
-                return;
-            }
-
-            // SAÍDA REALMENTE CONFIRMADA: somente aqui rearma tudo.
-            estadoLinha = LINHA_LIVRE;
-            inicioOcorrenciaLinhaMs = 0UL;
-            inicioEstadoLinhaMs = 0UL;
-            inicioSemLinhaMs = 0UL;
-            reentradasLinha = 0;
-            fugindoLinhaAgora = false;
-            temDirecaoFugaLinha = false;
-            inicioEscapeLinhaTraseiraMs = 0UL;
-        }
-    }
-
-    // -------------------------------------------------------------------------
-    // 4. FUGA NORMAL — sairDaLinha() CONTINUA SENDO A PRINCIPAL
-    // -------------------------------------------------------------------------
-    if (estadoLinha == LINHA_FUGA_NORMAL) {
-
-        const bool fugaOriginalAtiva =
-            sairDaLinha(
+        if (sairDaLinha(
                 linhaDetectada,
                 anguloLinhaPe,
                 VELOCIDADE_FUGA_LINHA,
-                &anguloFuga
-            );
-
-        if (fugaOriginalAtiva) {
-            // Atualiza SEMPRE. Não congela a primeira direção recebida.
-            ultimaDirecaoFugaLinha = anguloFuga;
-            temDirecaoFugaLinha = true;
+                &anguloFuga)) {
 
             fugindoLinhaAgora = true;
             anguloFugaLinhaCmd = anguloFuga;
-        }
 
-        if (!linhaDetectada) {
-            estadoLinha = LINHA_CONFIRMAR_SAIDA;
-            inicioSemLinhaMs = agoraLinhaMs;
+            // -----------------------------------------------------------------
+            // 3. CONFIRMAÇÃO CRÍTICA POR ULTRASSÔNICOS
+            // -----------------------------------------------------------------
+            // sairDaLinha() já aplicou a fuga normal neste ciclo. Se uma das
+            // combinações abaixo for confirmada, sobrescrevemos imediatamente
+            // por um impulso crítico de 100 ms.
+            const bool ultrasRecentes =
+                ultrasValidos &&
+                (ultimoRxUltraMs > 0UL) &&
+                ((agoraLinhaMs - ultimoRxUltraMs) <= TIMEOUT_ULTRA_MS);
 
-            if (!fugaOriginalAtiva) {
-                if (temDirecaoFugaLinha) {
+            if (ultrasRecentes) {
+
+                const bool ultraFrenteValido   = (ultraFcm >= 0.0f);
+                const bool ultraTrasValido     = (ultraTcm >= 0.0f);
+                const bool ultraEsquerdaValido = (ultraEcm >= 0.0f);
+                const bool ultraDireitaValido  = (ultraDcm >= 0.0f);
+
+                const float fugaNorm = normalizarAngulo360(anguloFuga);
+
+                // Faixas da DIREÇÃO DE REPULSÃO.
+                const bool repulsaoParaFrente =
+                    (fugaNorm >= 315.0f) || (fugaNorm <= 45.0f);
+
+                const bool repulsaoParaDireita =
+                    (fugaNorm > 45.0f) && (fugaNorm < 135.0f);
+
+                const bool repulsaoParaTras =
+                    (fugaNorm >= 135.0f) && (fugaNorm <= 225.0f);
+
+                const bool repulsaoParaEsquerda =
+                    (fugaNorm > 225.0f) && (fugaNorm < 315.0f);
+
+                bool iniciarFugaCritica = false;
+                bool confirmouAreaPenalidade = false;
+                float novoAnguloCritico = 0.0f;
+
+                // =============================================================
+                // LINHA FÍSICA NA FRENTE DO ROBÔ
+                // anguloFuga ~ 180° porque a placa Pé já manda a REPULSÃO.
+                // =============================================================
+
+                // Frente — linha de fundo / parede muito próxima.
+                if (repulsaoParaTras &&
+                    ultraFrenteValido &&
+                    ultraFcm < ULTRA_LINHA_FUNDO_CM) {
+
+                    novoAnguloCritico = 180.0f;
+                    iniciarFugaCritica = true;
+                }
+
+                // Frente — linha da área de penalidade.
+                else if (repulsaoParaTras &&
+                         ultraFrenteValido &&
+                         ultraFcm >= ULTRA_LINHA_FUNDO_CM &&
+                         ultraFcm < ULTRA_AREA_MAX_CM) {
+
+                    novoAnguloCritico = 180.0f;
+                    iniciarFugaCritica = true;
+                    confirmouAreaPenalidade = true;
+                }
+
+                // =============================================================
+                // LINHA FÍSICA À ESQUERDA
+                // repulsão ~ 90° = fuga forte para a direita.
+                // =============================================================
+                else if (repulsaoParaDireita &&
+                         ultraEsquerdaValido &&
+                         ultraEcm < ULTRA_LINHA_FUNDO_CM) {
+
+                    novoAnguloCritico = 90.0f;
+                    iniciarFugaCritica = true;
+                }
+
+                // =============================================================
+                // LINHA FÍSICA À DIREITA
+                // repulsão ~ 270° = fuga forte para a esquerda.
+                // =============================================================
+                else if (repulsaoParaEsquerda &&
+                         ultraDireitaValido &&
+                         ultraDcm < ULTRA_LINHA_FUNDO_CM) {
+
+                    novoAnguloCritico = 270.0f;
+                    iniciarFugaCritica = true;
+                }
+
+                // =============================================================
+                // LINHA FÍSICA ATRÁS DO ROBÔ
+                // anguloFuga ~ 0° porque a placa Pé já manda a REPULSÃO.
+                // =============================================================
+
+                // Trás — linha de fundo / gol da própria equipe muito próximo.
+                else if (repulsaoParaFrente &&
+                         ultraTrasValido &&
+                         ultraTcm < ULTRA_LINHA_FUNDO_CM) {
+
+                    novoAnguloCritico = 0.0f;
+                    iniciarFugaCritica = true;
+                }
+
+                // Trás — linha da área de penalidade da própria equipe.
+                else if (repulsaoParaFrente &&
+                         ultraTrasValido &&
+                         ultraTcm >= ULTRA_LINHA_FUNDO_CM &&
+                         ultraTcm < ULTRA_AREA_MAX_CM) {
+
+                    novoAnguloCritico = 0.0f;
+                    iniciarFugaCritica = true;
+                    confirmouAreaPenalidade = true;
+                }
+
+                if (iniciarFugaCritica) {
+
+                    fugaCriticaLinhaAtiva = true;
+                    inicioFugaCriticaLinhaMs = agoraLinhaMs;
+                    anguloFugaCriticaLinha = novoAnguloCritico;
+
+                    if (confirmouAreaPenalidade &&
+                        contadorConfirmacoesAreaPenalidade < 65535U) {
+                        contadorConfirmacoesAreaPenalidade++;
+                    }
+
                     fugindoLinhaAgora = true;
-                    anguloFugaLinhaCmd = ultimaDirecaoFugaLinha;
-                    seguirDirecaoComGiro(
-                        ultimaDirecaoFugaLinha,
-                        VELOCIDADE_FUGA_LINHA,
-                        0
+                    anguloFugaLinhaCmd = anguloFugaCriticaLinha;
+
+                    // Sobrescreve imediatamente a fuga normal que já foi
+                    // comandada por sairDaLinha() neste ciclo.
+                    seguirDirecaoPorAngulo(
+                        anguloFugaCriticaLinha,
+                        VELOCIDADE_FUGA_CRITICA_LINHA_PWM
                     );
-                } else {
-                    girarNoEixo(0);
+                    return;
                 }
             }
-            return;
-        }
 
-        // O watchdog agora mede a ocorrência INTEIRA, inclusive pequenos falses.
-        const bool ocorrenciaLonga =
-            (inicioOcorrenciaLinhaMs > 0UL) &&
-            ((agoraLinhaMs - inicioOcorrenciaLinhaMs) >=
-             TEMPO_MAX_OCORRENCIA_NORMAL_MS);
-
-        if (ocorrenciaLonga) {
-            estadoLinha = LINHA_RECUPERACAO;
-            inicioEstadoLinhaMs = agoraLinhaMs;
-            // Não retorna ainda: já executa o primeiro ciclo de recuperação.
-        }
-        else {
-            if (fugaOriginalAtiva) {
-                return;
-            }
-
-            // Se a função original não comandar neste ciclo, usa a leitura ATUAL
-            // da linha. Diferente da V1, esse fallback também pode ser atualizado.
-            if (anguloLinhaPe >= 0.0f) {
-                ultimaDirecaoFugaLinha =
-                    normalizarAngulo360(anguloLinhaPe + 180.0f);
-                temDirecaoFugaLinha = true;
-            }
-
-            if (temDirecaoFugaLinha) {
-                fugindoLinhaAgora = true;
-                anguloFugaLinhaCmd = ultimaDirecaoFugaLinha;
-                seguirDirecaoComGiro(
-                    ultimaDirecaoFugaLinha,
-                    VELOCIDADE_FUGA_LINHA,
-                    0
-                );
-            } else {
-                fugindoLinhaAgora = true;
-                girarNoEixo(0);
-            }
+            // Nenhuma confirmação crítica: mantém exatamente a fuga normal que
+            // sairDaLinha() já comandou.
             return;
         }
     }
-
-    // -------------------------------------------------------------------------
-    // 5. RECUPERAÇÃO DINÂMICA DE DESTRAVAMENTO
-    // -------------------------------------------------------------------------
-    // DIFERENÇA PRINCIPAL DA V2:
-    //   - sairDaLinha() continua sendo consultada em TODOS os ciclos;
-    //   - a direção-base acompanha anguloLinhaPe atual;
-    //   - os desvios são maiores para liberar laterais/traseira;
-    //   - o timer não é reiniciado por flicker da linha.
-    // -------------------------------------------------------------------------
-    if (estadoLinha == LINHA_RECUPERACAO) {
-
-        fugindoLinhaAgora = true;
-
-        if (!linhaDetectada) {
-            estadoLinha = LINHA_CONFIRMAR_SAIDA;
-            inicioSemLinhaMs = agoraLinhaMs;
-
-            if (temDirecaoFugaLinha) {
-                anguloFugaLinhaCmd = ultimaDirecaoFugaLinha;
-                seguirDirecaoComGiro(
-                    ultimaDirecaoFugaLinha,
-                    VELOCIDADE_FUGA_LINHA,
-                    0
-                );
-            } else {
-                girarNoEixo(0);
-            }
-            return;
-        }
-
-        // 5.1 — Tenta obter a direção que a lógica original considera segura AGORA.
-        float direcaoOriginalAtual = 0.0f;
-        const bool fugaOriginalRecuperacao =
-            sairDaLinha(
-                true,
-                anguloLinhaPe,
-                VELOCIDADE_FUGA_LINHA,
-                &direcaoOriginalAtual
-            );
-
-        if (fugaOriginalRecuperacao) {
-            ultimaDirecaoFugaLinha = direcaoOriginalAtual;
-            temDirecaoFugaLinha = true;
-        }
-        else if (anguloLinhaPe >= 0.0f) {
-            // 5.2 — Se sairDaLinha() estiver em um estado que não devolve comando,
-            // deriva uma direção usando a posição ATUAL da linha.
-            ultimaDirecaoFugaLinha =
-                normalizarAngulo360(anguloLinhaPe + 180.0f);
-            temDirecaoFugaLinha = true;
-        }
-
-        if (temDirecaoFugaLinha) {
-
-            const unsigned long tempoRecuperando =
-                agoraLinhaMs - inicioEstadoLinhaMs;
-
-            const float amplitudeDesvio =
-                (tempoRecuperando >= TEMPO_RECUPERACAO_FORTE_MS)
-                ? DESVIO_RECUPERACAO_FORTE_GRAUS
-                : DESVIO_RECUPERACAO_MEDIO_GRAUS;
-
-            // Fases:
-            //   0 = direção segura atual
-            //   1 = diagonal +
-            //   2 = direção segura atual
-            //   3 = diagonal -
-            // Isso quebra travamentos tangenciais sem inverter para o lado da linha.
-            const unsigned long fase =
-                (tempoRecuperando / PERIODO_RECUPERACAO_MS) % 4UL;
-
-            float desvio = 0.0f;
-            if (fase == 1UL) desvio =  amplitudeDesvio;
-            if (fase == 3UL) desvio = -amplitudeDesvio;
-
-            const float anguloRecuperacao =
-                normalizarAngulo360(ultimaDirecaoFugaLinha + desvio);
-
-            // Um pequeno reforço de PWM durante recuperação ajuda a vencer atrito
-            // estático/roda encostada, sem ultrapassar o limite do driver.
-            const int velocidadeRecuperacao =
-                constrain((int)VELOCIDADE_FUGA_LINHA + 20, 0, 255);
-
-            anguloFugaLinhaCmd = anguloRecuperacao;
-
-            seguirDirecaoComGiro(
-                anguloRecuperacao,
-                velocidadeRecuperacao,
-                0
-            );
-        }
-        else {
-            // Sem nenhuma referência angular confiável, não libera a bola.
-            girarNoEixo(0);
-        }
-
-        return;
-    }
-
-    } // fim: if (!fugaLinhaBloqueadaPorTimeout)
-
-    // Enquanto o bloqueio do timeout permanecer armado nas chamadas seguintes,
-    // garante que nenhum trecho interprete o robô como ainda em fuga da linha.
-    if (fugaLinhaBloqueadaPorTimeout) {
+    else {
+        // Depois do timeout, não mantém nenhum estado/comando antigo de fuga.
+        // O bloqueio só será retirado quando linhaDetectada ficar FALSE.
         fugindoLinhaAgora = false;
+        anguloFugaLinhaCmd = 0.0f;
     }
 
     // -------------------------------------------------------------------------
@@ -626,51 +306,25 @@ void atacante() {
     // -------------------------------------------------------------------------
     if (obterAnguloIrDisponivel(anguloIrAtual)) {
 
-            if (irNaFaixaFrontal(anguloIrAtual)) {
+        if (irNaFaixaFrontal(anguloIrAtual)) {
 
-                // Memoriza o movimento estratégico para a próxima leitura da linha.
-                ultimoAnguloMovimentoAtaqueCmd = 0.0f;
-                ultimoMovimentoAtaqueCmdValido = true;
+            moverFrenteComGiroParaGol(veloFrente);
 
-                moverFrenteComGiroParaGol(veloFrente);
-                
+        } else {
 
-            } else {
-            /*     
-                if (sairDaLinha(
-                    linhaDetectada,
-                       anguloLinhaPe,
-                       VELOCIDADE_FUGA_LINHA,
-                           &anguloFuga)) {
+            resetControleGolCamera();
 
-                        fugindoLinhaAgora = true;
-                       anguloFugaLinhaCmd = anguloFuga;
-                         return;
+            float anguloMovimento =
+                mapearAnguloBolaParaMovimento(anguloIrAtual);
 
-                          }*/
-                resetControleGolCamera();
-                        
-          float anguloMovimento = mapearAnguloBolaParaMovimento(anguloIrAtual);
-
-            // Guarda a direção REAL pedida pela estratégia de bola. Na próxima
-            // detecção de linha isso permite saber se o robô estava avançando
-            // contra a região traseira quando tocou a faixa.
-            ultimoAnguloMovimentoAtaqueCmd = anguloMovimento;
-            ultimoMovimentoAtaqueCmdValido = true;
-
-// Alterada a função de movimento do atacante de seguirDirecaoComGiroLaterais para seguirDirecaoComGiro
             seguirDirecaoComGiro(
                 anguloMovimento,
                 velo,
                 cmdGiro
             );
-            }
+        }
 
     } else {
-
-        // Sem translação de ataque neste ciclo; não usa uma direção antiga para
-        // classificar uma futura detecção traseira como movimento para trás.
-        ultimoMovimentoAtaqueCmdValido = false;
 
         girarNoEixo(cmdGiro);
         return;

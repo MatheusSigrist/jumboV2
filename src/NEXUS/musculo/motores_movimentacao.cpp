@@ -343,86 +343,55 @@ bool sairDaLinha(bool linhaDetectada, float anguloLinhaGraus, int velocidadePwm,
     return false;
   }
 
-  bool linhaAtiva = linhaDetectada && (anguloLinhaGraus >= 0.0f);
+  const bool linhaAtiva = linhaDetectada && (anguloLinhaGraus >= 0.0f);
 
-  // Normalização prévia do ângulo
-  float anguloNormalizado = anguloLinhaGraus;
+  // IMPORTANTE:
+  // No modo ATACANTE, a placa Pe ja envia o angulo de REPULSAO da linha.
+  // Portanto, este modulo NAO deve somar 180 graus nem inverter o vetor.
+  // O angulo recebido e usado diretamente como direcao de fuga.
   if (linhaAtiva) {
-    while (anguloNormalizado >= 360.0f) anguloNormalizado -= 360.0f;
-    while (anguloNormalizado < 0.0f) anguloNormalizado += 360.0f;
-  }
+    float anguloRepulsao = anguloLinhaGraus;
 
-  // Verifica se a detecção é no setor frontal (315° a 45°)
-  bool eZonaFrontal = (anguloNormalizado > 315.0f || anguloNormalizado < 45.0f);
+    while (anguloRepulsao >= 360.0f) anguloRepulsao -= 360.0f;
+    while (anguloRepulsao < 0.0f)    anguloRepulsao += 360.0f;
 
-  // ============================================================
-  // LÓGICA NOVA: FUGA FRONTAL (315° a 45°)
-  // ============================================================
-  if (g_fugindoDaLinha || (linhaAtiva && eZonaFrontal)) {
-
-    // Primeira detecção frontal: Inverte o ângulo em +180° para RECUAR
-    if (!g_fugindoDaLinha) {
-      float anguloRecuo = anguloNormalizado + 180.0f;
-      while (anguloRecuo >= 360.0f) anguloRecuo -= 360.0f;
-
-      g_anguloFugaTravado = anguloRecuo;
-      g_fugindoDaLinha = true;
-      g_ultimaLinhaDetectadaMs = millis();
-
-      if (anguloComandoSaida != nullptr) {
-        *anguloComandoSaida = g_anguloFugaTravado;
-      }
-
-      seguirDirecaoPorAngulo(g_anguloFugaTravado, velocidadePwm);
-      return true;
-    }
-
-    // Mantém o recuo enquanto a linha estiver ativa
-    if (linhaAtiva) {
-      g_ultimaLinhaDetectadaMs = millis();
-
-      if (anguloComandoSaida != nullptr) {
-        *anguloComandoSaida = g_anguloFugaTravado;
-      }
-
-      seguirDirecaoPorAngulo(g_anguloFugaTravado, velocidadePwm);
-      return true;
-    }
-
-    // Tolerância de tempo após perder a linha
-    unsigned long tempoSemLinha = millis() - g_ultimaLinhaDetectadaMs;
-    if (tempoSemLinha < TEMPO_PERDA_LINHA_MS) {
-
-      if (anguloComandoSaida != nullptr) {
-        *anguloComandoSaida = g_anguloFugaTravado;
-      }
-
-      seguirDirecaoPorAngulo(g_anguloFugaTravado, velocidadePwm);
-      return true;
-    }
-
-    // Fim da fuga frontal
-    g_fugindoDaLinha = false;
-    g_anguloFugaTravado = 0.0f;
-    g_ultimaLinhaDetectadaMs = 0;
+    // Atualiza a direcao enquanto a linha estiver sendo lida.
+    // Quando a leitura desaparecer, esta ultima direcao sera mantida
+    // por TEMPO_PERDA_LINHA_MS para evitar uma quebra instantanea da fuga.
+    g_anguloFugaTravado = anguloRepulsao;
+    g_fugindoDaLinha = true;
+    g_ultimaLinhaDetectadaMs = millis();
 
     if (anguloComandoSaida != nullptr) {
-      *anguloComandoSaida = 0.0f;
+      *anguloComandoSaida = g_anguloFugaTravado;
     }
 
-    return false;
-  }
-
-  // ============================================================
-  // LÓGICA ANTIGA: LATERAIS E TRASEIRA (45° a 315°)
-  // ============================================================
-  if (linhaAtiva) {
-    if (anguloComandoSaida != nullptr) {
-      *anguloComandoSaida = anguloNormalizado;
-    }
-
-    seguirDirecaoPorAngulo(anguloNormalizado, velocidadePwm);
+    seguirDirecaoPorAngulo(g_anguloFugaTravado, velocidadePwm);
     return true;
+  }
+
+  // Pequena retencao apos perder a linha: mantem o ultimo vetor seguro
+  // por 100 ms (TEMPO_PERDA_LINHA_MS) antes de devolver o controle.
+  if (g_fugindoDaLinha) {
+    const unsigned long tempoSemLinha = millis() - g_ultimaLinhaDetectadaMs;
+
+    if (tempoSemLinha < TEMPO_PERDA_LINHA_MS) {
+      if (anguloComandoSaida != nullptr) {
+        *anguloComandoSaida = g_anguloFugaTravado;
+      }
+
+      seguirDirecaoPorAngulo(g_anguloFugaTravado, velocidadePwm);
+      return true;
+    }
+  }
+
+  // Fim real da fuga.
+  g_fugindoDaLinha = false;
+  g_anguloFugaTravado = 0.0f;
+  g_ultimaLinhaDetectadaMs = 0;
+
+  if (anguloComandoSaida != nullptr) {
+    *anguloComandoSaida = 0.0f;
   }
 
   return false;
@@ -430,6 +399,9 @@ bool sairDaLinha(bool linhaDetectada, float anguloLinhaGraus, int velocidadePwm,
 
 void resetSairDaLinha() {
   g_confirmacoesLinha = 0;
+  g_fugindoDaLinha = false;
+  g_anguloFugaTravado = 0.0f;
+  g_ultimaLinhaDetectadaMs = 0;
 }
 
 namespace {

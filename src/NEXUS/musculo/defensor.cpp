@@ -30,9 +30,9 @@ constexpr float DEFENSOR_MAGNITUDE_MINIMA_PARAR        = 0.2f;
 
 // Avanço frontal
 const float         DEFENSOR_TOLERANCIA_IR_FRONTAL_GRAUS      = 45.0f;
-const int           DEFENSOR_VELOCIDADE_AVANCO_IR_FRONTAL_PWM = 220;
+const int           DEFENSOR_VELOCIDADE_AVANCO_IR_FRONTAL_PWM = 230;
 const unsigned long DEFENSOR_TEMPO_GATILHO_IR_FRONTAL_MS      = 3000;
-const unsigned long DEFENSOR_TEMPO_AVANCO_IR_FRONTAL_MS       = 1500;
+const unsigned long DEFENSOR_TEMPO_AVANCO_IR_FRONTAL_MS       = 2000;
 
 // PID linha (magnitude)
 constexpr float KP_DEFENSOR_LINHA = 200.0f;
@@ -42,7 +42,7 @@ constexpr float KD_DEFENSOR_LINHA = 20.0f;
 // PID bússola
 constexpr float KP_BUSSOLA_NOVINHA = 2.5f;
 constexpr float KI_BUSSOLA_NOVINHA = 0.0f;
-constexpr float KD_BUSSOLA_NOVINHA = 0.5f;
+constexpr float KD_BUSSOLA_NOVINHA = 0.8f;
 
 // Pesos de bola / ultra
 constexpr float DEFENSOR_PESO_MIN_BOLA = 75.0f;
