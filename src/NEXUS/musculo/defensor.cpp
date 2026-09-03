@@ -32,7 +32,7 @@ constexpr float DEFENSOR_MAGNITUDE_MINIMA_PARAR        = 0.2f;
 const float         DEFENSOR_TOLERANCIA_IR_FRONTAL_GRAUS      = 45.0f;
 const int           DEFENSOR_VELOCIDADE_AVANCO_IR_FRONTAL_PWM = 230;
 const unsigned long DEFENSOR_TEMPO_GATILHO_IR_FRONTAL_MS      = 3000;
-const unsigned long DEFENSOR_TEMPO_AVANCO_IR_FRONTAL_MS       = 2000;
+const unsigned long DEFENSOR_TEMPO_AVANCO_IR_FRONTAL_MS       = 1800;
 
 // PID linha (magnitude)
 constexpr float KP_DEFENSOR_LINHA = 200.0f;
@@ -118,7 +118,7 @@ constexpr float DEFENSOR_CORRECAO_LIMITE_MAX_PWM   = 220.0f;
 constexpr float DEFENSOR_LINHA_ERRO_INICIO_CONTENCAO = 0.25f;
 constexpr float DEFENSOR_LINHA_ERRO_FORTE_CONTENCAO  = 0.70f;
 constexpr float DEFENSOR_PESO_LINHA_MIN_COM_BOLA     = 0.08f;
-constexpr float DEFENSOR_PESO_LINHA_MAX_COM_BOLA     = 0.68f;
+constexpr float DEFENSOR_PESO_LINHA_MAX_COM_BOLA     = 0.2f;
 
 // Robustez da leitura da linha
 // Retém a última leitura válida por um intervalo curto para absorver perdas pontuais.
