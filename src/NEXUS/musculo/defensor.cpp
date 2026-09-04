@@ -82,8 +82,8 @@ constexpr float DEFENSOR_ANGULO_LATERAL_MAX_GRAUS = 135.0f;
 //   Na borda lateral: proteção ~20 cm / crítico ~15 cm.
 //   No centro do gol: proteção ~32 cm / crítico ~28 cm.
 //   Entre esses pontos o limite varia continuamente conforme os ultras laterais.
-constexpr float ULTRA_LIMITE_LATERAL_DIR_CM        = 45.0f;
-constexpr float ULTRA_LIMITE_LATERAL_ESQ_CM        = 45.0f;
+constexpr float ULTRA_LIMITE_LATERAL_DIR_CM        = 50.0f;
+constexpr float ULTRA_LIMITE_LATERAL_ESQ_CM        = 50.0f;
 
 // Limite traseiro DINÂMICO conforme a posição lateral do defensor.
 //
@@ -98,14 +98,14 @@ constexpr float ULTRA_LIMITE_LATERAL_ESQ_CM        = 45.0f;
 // A transição é contínua usando a MENOR leitura lateral.
 // Quanto mais longe das paredes laterais, mais o robô é considerado centralizado.
 constexpr float DEFENSOR_TRAS_LIMITE_BORDA_CM      = 25.0f;
-constexpr float DEFENSOR_TRAS_LIMITE_CENTRO_CM     = 32.0f;
+constexpr float DEFENSOR_TRAS_LIMITE_CENTRO_CM     = 40.0f;
 constexpr float DEFENSOR_TRAS_CRITICO_BORDA_CM     = 20.0f;
-constexpr float DEFENSOR_TRAS_CRITICO_CENTRO_CM    = 30.0f;
+constexpr float DEFENSOR_TRAS_CRITICO_CENTRO_CM    = 35.0f;
 
 // Faixa usada para estimar posição lateral.
 // <=45 cm  -> região de borda
 // >=80 cm  -> região central
-constexpr float DEFENSOR_LATERAL_REF_BORDA_CM      = 45.0f;
+constexpr float DEFENSOR_LATERAL_REF_BORDA_CM      = 50.0f;
 constexpr float DEFENSOR_LATERAL_REF_CENTRO_CM     = 80.0f;
 
 // Intensidade mínima ao entrar na faixa e máxima na zona crítica.
