@@ -2,6 +2,29 @@
 #include "atacante.hpp"
 #include "motores_movimentacao.hpp"
 
+// O ESP32-S3 DevKitC-1 usa o NeoPixel embutido no GPIO 48. O framework
+// normalmente fornece RGB_BUILTIN; o fallback mantém o código explícito.
+#ifndef RGB_BUILTIN
+#define RGB_BUILTIN 48
+#endif
+
+void atualizarLedLinhaAtacante(bool linhaAtiva) {
+    static int8_t ultimoEstadoLinha = -1;
+    const int8_t estadoAtualLinha = linhaAtiva ? 1 : 0;
+
+    if (estadoAtualLinha == ultimoEstadoLinha) {
+        return;
+    }
+
+    if (linhaAtiva) {
+        neopixelWrite(RGB_BUILTIN, 80, 80, 80);  // Branco durante a linha.
+    } else {
+        neopixelWrite(RGB_BUILTIN, 0, 80, 0);    // Verde fora da linha.
+    }
+
+    ultimoEstadoLinha = estadoAtualLinha;
+}
+
 // =============================================================================
 // ESTRATEGIA DO ATACANTE
 // =============================================================================
@@ -16,6 +39,8 @@
 //
 
 void atacante() {
+    atualizarLedLinhaAtacante(linhaDetectada);
+
     int velo = 255;
     int veloFrente = 220;
 
@@ -58,9 +83,10 @@ void atacante() {
     //   repulsão ~  90° -> linha física está à ESQUERDA do robô
     //   repulsão ~ 270° -> linha física está à DIREITA do robô
     //
-    // A ação crítica NÃO usa delay(). Ela permanece ativa por 100 ms usando
+    // A ação crítica NÃO usa delay(). Ela permanece ativa pelo tempo configurado usando
     // millis(), sem congelar o loop principal nem a atualização dos sensores.
     static constexpr unsigned long TEMPO_FUGA_CRITICA_LINHA_MS = 150UL;
+    static constexpr unsigned long TEMPO_FUGA_CRITICA_REPULSAO_TRAS_MS = 300UL;
     static constexpr int VELOCIDADE_FUGA_CRITICA_LINHA_PWM = 255;
 
     // Faixas ultrassônicas inicialmente propostas para diferenciar:
@@ -73,6 +99,7 @@ void atacante() {
     static bool fugaCriticaLinhaAtiva = false;
     static unsigned long inicioFugaCriticaLinhaMs = 0UL;
     static float anguloFugaCriticaLinha = 0.0f;
+    static unsigned long tempoFugaCriticaAtualMs = TEMPO_FUGA_CRITICA_LINHA_MS;
 
     // Preparado para a lógica futura de entrada/saída da área.
     // É incrementado somente quando uma fuga crítica é iniciada por confirmação
@@ -121,7 +148,7 @@ void atacante() {
     if (fugaCriticaLinhaAtiva && !fugaLinhaBloqueadaPorTimeout) {
 
         if ((agoraLinhaMs - inicioFugaCriticaLinhaMs) <
-            TEMPO_FUGA_CRITICA_LINHA_MS) {
+            tempoFugaCriticaAtualMs) {
 
             fugindoLinhaAgora = true;
             anguloFugaLinhaCmd = anguloFugaCriticaLinha;
@@ -270,6 +297,9 @@ void atacante() {
                     fugaCriticaLinhaAtiva = true;
                     inicioFugaCriticaLinhaMs = agoraLinhaMs;
                     anguloFugaCriticaLinha = novoAnguloCritico;
+                    tempoFugaCriticaAtualMs = repulsaoParaTras
+                        ? TEMPO_FUGA_CRITICA_REPULSAO_TRAS_MS
+                        : TEMPO_FUGA_CRITICA_LINHA_MS;
 
                     if (confirmouAreaPenalidade &&
                         contadorConfirmacoesAreaPenalidade < 65535U) {
@@ -325,7 +355,6 @@ void atacante() {
         }
 
     } else {
-
         girarNoEixo(cmdGiro);
         return;
     }

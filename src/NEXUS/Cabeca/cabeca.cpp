@@ -39,21 +39,23 @@
 #define I2C_SDA 8
 #define I2C_SCL 9
 #define I2C_FREQ 100000
+
+#define MODULO_ROBOCUP_JUNIOR 10
 //teste
 
 // Inicializacao e configuracao da bussola.
 const uint8_t QMC5883P_ADDR = 0x2C;
 
  
-
+/*
 // ----- CALIBRAÇÃO DO NEXUS -----
 // Valores de calibração validados no teste dedicado do NEXUS.
 const float xOffset = -801.50;
 const float yOffset = 592.00;
 const float xScale  = 1.007877;
 const float yScale  = 0.992246;
+*/
 
-/*
 
 // ----- CALIBRAÇÃO DO CRONOS -----
 // Valores de calibracao validados no teste dedicado do CRONOS.
@@ -62,7 +64,7 @@ const float yOffset = -1624.00;
 const float xScale  = 1.013703;
 const float yScale  = 0.986663;
 
-*/
+
 
 int head = 0;
 
@@ -1415,6 +1417,32 @@ void lerSerialMusculo() {
   }
 }
 
+bool MODULO_ATIVO = false;
+
+unsigned long ultimoEnvioModuloMusculoMs = 0;
+bool ultimoModuloEnviado = false;
+const unsigned long INTERVALO_ENVIO_MODULO_MS = 500;
+
+void enviarModuloParaMusculo() {
+
+    bool mudou = (MODULO_ATIVO != ultimoModuloEnviado);
+    bool passouTempo =
+        (millis() - ultimoEnvioModuloMusculoMs) >= INTERVALO_ENVIO_MODULO_MS;
+
+    if (!mudou && !passouTempo) {
+        return;
+    }
+
+    SerialMusculo.print("MOD:");
+    SerialMusculo.println(MODULO_ATIVO ? 1 : 0);
+
+    ultimoModuloEnviado = MODULO_ATIVO;
+    ultimoEnvioModuloMusculoMs = millis();
+}
+
+
+
+
 // Inicializa serials, sensores e handshakes iniciais do sistema.
 void setup() {
   Serial.begin(115200);
@@ -1425,6 +1453,7 @@ void setup() {
   Wire.setClock(I2C_FREQ);
   Wire.setTimeOut(10);
 
+  pinMode(MODULO_ROBOCUP_JUNIOR, INPUT);
   pinMode(BOTAO_1, INPUT_PULLUP);
   pinMode(BOTAO_2, INPUT_PULLUP);
   pinMode(BOTAO_3, INPUT_PULLUP);
@@ -1439,7 +1468,7 @@ void setup() {
 
   iniciarEspNow();
   webServerCabeca.setPositionTargetSender(encaminharAlvoPosicionamentoMusculo);
-  webServerCabeca.begin(WEB_AP_SSID, WEB_AP_PASS);
+  //webServerCabeca.begin(WEB_AP_SSID, WEB_AP_PASS); // START WIFI ROBO
 
   unsigned long inicioHandshake = millis();
   while ((millis() - inicioHandshake) < 3000 && !comunicacaoMusculoOK) {
@@ -1457,6 +1486,9 @@ void setup() {
 
 // Laco principal da Cabeca: coleta entradas e redistribui dados para o Musculo.
 void loop() {
+
+
+
   unsigned long agoraLoopMs = millis();
   if (ultimoLoopWebStatusMs == 0) {
     ultimoLoopWebStatusMs = agoraLoopMs;
@@ -1485,6 +1517,15 @@ void loop() {
     SerialMusculo.println("oi");
     ultimoEnvioOiMs = millis();
   }
+
+
+        if (digitalRead(MODULO_ROBOCUP_JUNIOR) == HIGH) {
+        MODULO_ATIVO = true;
+    } else {
+        MODULO_ATIVO = false;
+    }
+
+ enviarModuloParaMusculo();
 
   verificarBotoes();
   lerSerialMusculo();

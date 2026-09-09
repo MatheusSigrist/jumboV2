@@ -59,6 +59,13 @@ bool   comunicacaoCabecaOK  = false;
 String bufferSerial         = "";
 String mensagemBotao        = "NENHUM";
 
+//////////////////////////////////////////////////////////////////////////////////////////////
+// --- Módulo RoboCup Junior informado pela Cabeça (MOD:0/1) ---
+// Módulo RoboCup Junior recebido da Cabeça: MOD:0 ou MOD:1
+bool USANDO_MODULO = true;  // Mude manualmente para true se quiser exigir o módulo
+bool MODULO_ATIVO = false;
+unsigned long ultimoRxModuloMs = 0;
+///////////////////////////////////////////////////////////////////////////////////////////
 // --- Temporização de handshake e timeout ---
 unsigned long ultimoEnvioOi    = 0;
 unsigned long ultimoRxCabeca   = 0;
@@ -79,6 +86,8 @@ const unsigned long INTERVALO_ENVIO_ESTADO_JOGO_MS = 500;
 
 // --- Botão de ação longa (pino físico) ---
 const uint8_t BOTAO_MEIO_LONGO = 23;
+
+
 
 extern const int VELOCIDADE_FUGA_LINHA = 255;
 // =============================================================================
@@ -1029,6 +1038,32 @@ void processarMensagemCabeca(String msg) {
     comunicacaoCabecaOK = true; ultimoRxCabeca = millis(); return;
   }
 
+// Estado do módulo RoboCup Junior: MOD:1 = ativo, MOD:0 = inativo
+// Estado do módulo RoboCup Junior: MOD:1 = ativo, MOD:0 = inativo
+if (msg.startsWith("MOD:")) {
+  String valorModulo = msg.substring(4);
+  valorModulo.trim();
+
+  if (valorModulo == "0" || valorModulo == "1") {
+    MODULO_ATIVO = (valorModulo == "1");
+    ultimoRxModuloMs = millis();
+    comunicacaoCabecaOK = true;
+    ultimoRxCabeca = ultimoRxModuloMs;
+  }
+  return;
+}
+
+  // Estado do módulo RoboCup Junior: MOD:1 = ativo, MOD:0 = inativo
+  if (msg.startsWith("MOD:")) {
+    String valorModulo = msg.substring(4); valorModulo.trim();
+    if (valorModulo == "0" || valorModulo == "1") {
+      MODULO_ATIVO = (valorModulo == "1");
+      ultimoRxModuloMs = millis();
+      comunicacaoCabecaOK = true; ultimoRxCabeca = ultimoRxModuloMs;
+    }
+    return;
+  }
+
   // Status agregado das placas auxiliares (Olho e Pé)
   if (msg.startsWith("STS:")) {
     int separador = msg.indexOf(',');
@@ -1448,8 +1483,15 @@ void loop() {
     return;
   }
 
-  // Lógica de jogo: executa estratégia conforme papel atual
-  if (estadoAtual == INICIAR && comunicacaoCabecaOK) {
+bool podeExecutarJogo =
+    estadoAtual == INICIAR &&
+    comunicacaoCabecaOK &&
+    (!USANDO_MODULO || MODULO_ATIVO);
+
+if (podeExecutarJogo) {
+
+
+
     if (papelAtacante != papelAtacanteAnterior) {
       // Reinicia transição angular ao mudar de papel (evita carregar estado antigo)
       resetControleMovimentoAtacante();
@@ -1464,7 +1506,7 @@ void loop() {
     resetPidBussola();
     pararMotores();
   }
-
+  
   // Redesenha o OLED com taxa limitada para evitar flicker
   static unsigned long ultimaTela = 0;
   if ((millis() - ultimaTela) > 120) {
