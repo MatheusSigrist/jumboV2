@@ -2340,7 +2340,7 @@ void atacante() {
 
   bool linhaValida = ((linhaDetectada && (anguloLinhaPe >= 0.0f) && !ignorarLinhaPorCamera) ||
                       (linhaRecenteForcada && (anguloLinhaParaFuga >= 0.0f)));
-
+/*
   // Verifica linha + parede crítica para forçar IR direto
   bool linhaComParedeCritica = linhaValida && ultraLateralCriticoAtacante();
   if (linhaComParedeCritica) {
@@ -2351,7 +2351,7 @@ void atacante() {
   }
 
   bool irDiretoAtivo = forcarIrDiretoAposLinha && irDisponivel;
-
+*/
   // PRIORIDADE 1: linha + parede = IR direto (ignora linha)
   if (linhaValida) {
     if (irDiretoAtivo) {

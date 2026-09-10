@@ -180,7 +180,7 @@ void atacante() {
 
             fugindoLinhaAgora = true;
             anguloFugaLinhaCmd = anguloFuga;
-
+/*
             // -----------------------------------------------------------------
             // 3. CONFIRMAÇÃO CRÍTICA POR ULTRASSÔNICOS
             // -----------------------------------------------------------------
@@ -228,7 +228,7 @@ void atacante() {
                     ultraFrenteValido &&
                     ultraFcm < ULTRA_LINHA_FUNDO_CM) {
 
-                    novoAnguloCritico = 180.0f;
+                    novoAnguloCritico = 180.0f + cmdGiro;
                     iniciarFugaCritica = true;
                 }
 
@@ -238,7 +238,7 @@ void atacante() {
                          ultraFcm >= ULTRA_LINHA_FUNDO_CM &&
                          ultraFcm < ULTRA_AREA_MAX_CM) {
 
-                    novoAnguloCritico = 180.0f;
+                    novoAnguloCritico = 180.0f + cmdGiro;
                     iniciarFugaCritica = true;
                     confirmouAreaPenalidade = true;
                 }
@@ -251,7 +251,7 @@ void atacante() {
                          ultraEsquerdaValido &&
                          ultraEcm < ULTRA_LINHA_FUNDO_CM) {
 
-                    novoAnguloCritico = 90.0f;
+                    novoAnguloCritico = 90.0f + cmdGiro;
                     iniciarFugaCritica = true;
                 }
 
@@ -263,7 +263,7 @@ void atacante() {
                          ultraDireitaValido &&
                          ultraDcm < ULTRA_LINHA_FUNDO_CM) {
 
-                    novoAnguloCritico = 270.0f;
+                    novoAnguloCritico = 270.0f + cmdGiro;
                     iniciarFugaCritica = true;
                 }
 
@@ -277,7 +277,7 @@ void atacante() {
                          ultraTrasValido &&
                          ultraTcm < ULTRA_LINHA_FUNDO_CM) {
 
-                    novoAnguloCritico = 0.0f;
+                    novoAnguloCritico = 0.0f + cmdGiro;
                     iniciarFugaCritica = true;
                 }
 
@@ -287,7 +287,7 @@ void atacante() {
                          ultraTcm >= ULTRA_LINHA_FUNDO_CM &&
                          ultraTcm < ULTRA_AREA_MAX_CM) {
 
-                    novoAnguloCritico = 0.0f;
+                    novoAnguloCritico = 0.0f + cmdGiro;
                     iniciarFugaCritica = true;
                     confirmouAreaPenalidade = true;
                 }
@@ -318,7 +318,7 @@ void atacante() {
                     return;
                 }
             }
-
+*/
             // Nenhuma confirmação crítica: mantém exatamente a fuga normal que
             // sairDaLinha() já comandou.
             return;
