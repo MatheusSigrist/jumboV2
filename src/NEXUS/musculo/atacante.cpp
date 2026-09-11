@@ -66,50 +66,14 @@ void atacante() {
     // =========================================================================
     // FAILSAFE FINAL DA LINHA
     // =========================================================================
-    // Continua sendo o último recurso. A fuga normal e a fuga crítica abaixo
-    // têm prioridade para resolver a situação antes deste timeout.
+    // Continua sendo o último recurso após a fuga normal da linha.
     static constexpr unsigned long TEMPO_TIMEOUT_FINAL_LINHA_MS = 1500UL;
     static unsigned long inicioTimeoutFinalLinhaMs = 0UL;
     static bool fugaLinhaBloqueadaPorTimeout = false;
 
-    // =========================================================================
-    // FUGA CRÍTICA DE LINHA + CONFIRMAÇÃO POR ULTRASSÔNICOS
-    // =========================================================================
-    // IMPORTANTE SOBRE O REFERENCIAL:
-    // anguloFuga já é a DIREÇÃO DE REPULSÃO calculada pela placa Pé.
-    // Portanto:
-    //   repulsão ~ 180° -> linha física está à FRENTE do robô
-    //   repulsão ~   0° -> linha física está ATRÁS do robô
-    //   repulsão ~  90° -> linha física está à ESQUERDA do robô
-    //   repulsão ~ 270° -> linha física está à DIREITA do robô
-    //
-    // A ação crítica NÃO usa delay(). Ela permanece ativa pelo tempo configurado usando
-    // millis(), sem congelar o loop principal nem a atualização dos sensores.
-    static constexpr unsigned long TEMPO_FUGA_CRITICA_LINHA_MS = 150UL;
-    static constexpr unsigned long TEMPO_FUGA_CRITICA_REPULSAO_TRAS_MS = 300UL;
-    static constexpr int VELOCIDADE_FUGA_CRITICA_LINHA_PWM = 255;
-
-    // Faixas ultrassônicas inicialmente propostas para diferenciar:
-    //   < 20 cm  -> linha de fundo / parede muito próxima
-    //   20..40cm -> região da linha da área de penalidade
-    // O limite de 20 cm é exclusivo para evitar sobreposição entre os ifs.
-    static constexpr float ULTRA_LINHA_FUNDO_CM = 20.0f;
-    static constexpr float ULTRA_AREA_MAX_CM    = 40.0f;
-
-    static bool fugaCriticaLinhaAtiva = false;
-    static unsigned long inicioFugaCriticaLinhaMs = 0UL;
-    static float anguloFugaCriticaLinha = 0.0f;
-    static unsigned long tempoFugaCriticaAtualMs = TEMPO_FUGA_CRITICA_LINHA_MS;
-
-    // Preparado para a lógica futura de entrada/saída da área.
-    // É incrementado somente quando uma fuga crítica é iniciada por confirmação
-    // da faixa de área de penalidade (20..40 cm), e não a cada ciclo.
-    static uint16_t contadorConfirmacoesAreaPenalidade = 0;
-
     const unsigned long agoraLinhaMs = millis();
 
-    // Assim que a linha realmente desaparece, rearma o timeout para a próxima
-    // ocorrência. A fuga crítica, se já tiver sido iniciada, cumpre seus 100 ms.
+    // Assim que a linha realmente desaparece, rearma o timeout para a próxima ocorrência.
     if (!linhaDetectada) {
         inicioTimeoutFinalLinhaMs = 0UL;
         fugaLinhaBloqueadaPorTimeout = false;
@@ -130,45 +94,12 @@ void atacante() {
             fugindoLinhaAgora = false;
             anguloFugaLinhaCmd = 0.0f;
 
-            // Cancela também qualquer impulso crítico pendente.
-            fugaCriticaLinhaAtiva = false;
-            inicioFugaCriticaLinhaMs = 0UL;
-            anguloFugaCriticaLinha = 0.0f;
-
             girarNoEixo(0);
             return;
         }
     }
-
     // -------------------------------------------------------------------------
-    // 1. CONTINUA UMA FUGA CRÍTICA JÁ INICIADA
-    // -------------------------------------------------------------------------
-    // Fica acima da fuga normal para garantir um vetor forte e estável durante
-    // toda a janela crítica, mesmo se a linha oscilar por alguns ciclos.
-    if (fugaCriticaLinhaAtiva && !fugaLinhaBloqueadaPorTimeout) {
-
-        if ((agoraLinhaMs - inicioFugaCriticaLinhaMs) <
-            tempoFugaCriticaAtualMs) {
-
-            fugindoLinhaAgora = true;
-            anguloFugaLinhaCmd = anguloFugaCriticaLinha;
-
-            seguirDirecaoPorAngulo(
-                anguloFugaCriticaLinha,
-                VELOCIDADE_FUGA_CRITICA_LINHA_PWM
-            );
-            return;
-        }
-
-        // Terminou o impulso. A partir deste ciclo, sairDaLinha() volta a ser
-        // responsável pela fuga caso a linha ainda esteja detectada.
-        fugaCriticaLinhaAtiva = false;
-        inicioFugaCriticaLinhaMs = 0UL;
-        anguloFugaCriticaLinha = 0.0f;
-    }
-
-    // -------------------------------------------------------------------------
-    // 2. FUGA NORMAL — sairDaLinha() CONTINUA SENDO A PRINCIPAL
+    // FUGA NORMAL — sairDaLinha() CONTINUA SENDO A PRINCIPAL
     // -------------------------------------------------------------------------
     if (!fugaLinhaBloqueadaPorTimeout) {
 
@@ -180,147 +111,8 @@ void atacante() {
 
             fugindoLinhaAgora = true;
             anguloFugaLinhaCmd = anguloFuga;
-/*
-            // -----------------------------------------------------------------
-            // 3. CONFIRMAÇÃO CRÍTICA POR ULTRASSÔNICOS
-            // -----------------------------------------------------------------
-            // sairDaLinha() já aplicou a fuga normal neste ciclo. Se uma das
-            // combinações abaixo for confirmada, sobrescrevemos imediatamente
-            // por um impulso crítico de 100 ms.
-            const bool ultrasRecentes =
-                ultrasValidos &&
-                (ultimoRxUltraMs > 0UL) &&
-                ((agoraLinhaMs - ultimoRxUltraMs) <= TIMEOUT_ULTRA_MS);
 
-            if (ultrasRecentes) {
-
-                const bool ultraFrenteValido   = (ultraFcm >= 0.0f);
-                const bool ultraTrasValido     = (ultraTcm >= 0.0f);
-                const bool ultraEsquerdaValido = (ultraEcm >= 0.0f);
-                const bool ultraDireitaValido  = (ultraDcm >= 0.0f);
-
-                const float fugaNorm = normalizarAngulo360(anguloFuga);
-
-                // Faixas da DIREÇÃO DE REPULSÃO.
-                const bool repulsaoParaFrente =
-                    (fugaNorm >= 315.0f) || (fugaNorm <= 45.0f);
-
-                const bool repulsaoParaDireita =
-                    (fugaNorm > 45.0f) && (fugaNorm < 135.0f);
-
-                const bool repulsaoParaTras =
-                    (fugaNorm >= 135.0f) && (fugaNorm <= 225.0f);
-
-                const bool repulsaoParaEsquerda =
-                    (fugaNorm > 225.0f) && (fugaNorm < 315.0f);
-
-                bool iniciarFugaCritica = false;
-                bool confirmouAreaPenalidade = false;
-                float novoAnguloCritico = 0.0f;
-
-                // =============================================================
-                // LINHA FÍSICA NA FRENTE DO ROBÔ
-                // anguloFuga ~ 180° porque a placa Pé já manda a REPULSÃO.
-                // =============================================================
-
-                // Frente — linha de fundo / parede muito próxima.
-                if (repulsaoParaTras &&
-                    ultraFrenteValido &&
-                    ultraFcm < ULTRA_LINHA_FUNDO_CM) {
-
-                    novoAnguloCritico = 180.0f + cmdGiro;
-                    iniciarFugaCritica = true;
-                }
-
-                // Frente — linha da área de penalidade.
-                else if (repulsaoParaTras &&
-                         ultraFrenteValido &&
-                         ultraFcm >= ULTRA_LINHA_FUNDO_CM &&
-                         ultraFcm < ULTRA_AREA_MAX_CM) {
-
-                    novoAnguloCritico = 180.0f + cmdGiro;
-                    iniciarFugaCritica = true;
-                    confirmouAreaPenalidade = true;
-                }
-
-                // =============================================================
-                // LINHA FÍSICA À ESQUERDA
-                // repulsão ~ 90° = fuga forte para a direita.
-                // =============================================================
-                else if (repulsaoParaDireita &&
-                         ultraEsquerdaValido &&
-                         ultraEcm < ULTRA_LINHA_FUNDO_CM) {
-
-                    novoAnguloCritico = 90.0f + cmdGiro;
-                    iniciarFugaCritica = true;
-                }
-
-                // =============================================================
-                // LINHA FÍSICA À DIREITA
-                // repulsão ~ 270° = fuga forte para a esquerda.
-                // =============================================================
-                else if (repulsaoParaEsquerda &&
-                         ultraDireitaValido &&
-                         ultraDcm < ULTRA_LINHA_FUNDO_CM) {
-
-                    novoAnguloCritico = 270.0f + cmdGiro;
-                    iniciarFugaCritica = true;
-                }
-
-                // =============================================================
-                // LINHA FÍSICA ATRÁS DO ROBÔ
-                // anguloFuga ~ 0° porque a placa Pé já manda a REPULSÃO.
-                // =============================================================
-
-                // Trás — linha de fundo / gol da própria equipe muito próximo.
-                else if (repulsaoParaFrente &&
-                         ultraTrasValido &&
-                         ultraTcm < ULTRA_LINHA_FUNDO_CM) {
-
-                    novoAnguloCritico = 0.0f + cmdGiro;
-                    iniciarFugaCritica = true;
-                }
-
-                // Trás — linha da área de penalidade da própria equipe.
-                else if (repulsaoParaFrente &&
-                         ultraTrasValido &&
-                         ultraTcm >= ULTRA_LINHA_FUNDO_CM &&
-                         ultraTcm < ULTRA_AREA_MAX_CM) {
-
-                    novoAnguloCritico = 0.0f + cmdGiro;
-                    iniciarFugaCritica = true;
-                    confirmouAreaPenalidade = true;
-                }
-
-                if (iniciarFugaCritica) {
-
-                    fugaCriticaLinhaAtiva = true;
-                    inicioFugaCriticaLinhaMs = agoraLinhaMs;
-                    anguloFugaCriticaLinha = novoAnguloCritico;
-                    tempoFugaCriticaAtualMs = repulsaoParaTras
-                        ? TEMPO_FUGA_CRITICA_REPULSAO_TRAS_MS
-                        : TEMPO_FUGA_CRITICA_LINHA_MS;
-
-                    if (confirmouAreaPenalidade &&
-                        contadorConfirmacoesAreaPenalidade < 65535U) {
-                        contadorConfirmacoesAreaPenalidade++;
-                    }
-
-                    fugindoLinhaAgora = true;
-                    anguloFugaLinhaCmd = anguloFugaCriticaLinha;
-
-                    // Sobrescreve imediatamente a fuga normal que já foi
-                    // comandada por sairDaLinha() neste ciclo.
-                    seguirDirecaoPorAngulo(
-                        anguloFugaCriticaLinha,
-                        VELOCIDADE_FUGA_CRITICA_LINHA_PWM
-                    );
-                    return;
-                }
-            }
-*/
-            // Nenhuma confirmação crítica: mantém exatamente a fuga normal que
-            // sairDaLinha() já comandou.
+            // sairDaLinha() já comandou a fuga normal neste ciclo.
             return;
         }
     }
