@@ -2,13 +2,11 @@ import sensor
 import time
 import math
 import struct
-import machine
 from machine import UART
+from machine import LED
 
 # ===== COMUNICAÇÃO SERIAL COM OLHO =====
 uart_olho = UART(1, 115200, timeout_char=200)
-UART_CMD_MAX_LEN = 16
-uart_cmd_buffer = bytearray()
 
 # ===== PROTOCOLO SERIAL =====
 BYTE_INICIA = 0xAA
@@ -25,7 +23,15 @@ cy = 110
 R2 = R * R
 
 DEBUG = True
-center = [158, 132]
+center = [164, 133]
+
+# =========================================================
+# CRIAÇÃO DOS LEDS
+# =========================================================
+
+red_led = LED("LED_RED")
+green_led = LED("LED_GREEN")
+blue_led = LED("LED_BLUE")
 
 # =========================================================
 # FILTRO ANTI-RUIDO DA BOLA
@@ -40,6 +46,13 @@ ball_filtered_valid = False
 ball_filtered_angle = 0
 ball_filtered_dist = 0
 ball_lost_frames = 0
+
+# =========================================================
+# FILTRO DE PRESENÇA DA BOLA
+# =========================================================
+BALL_PRESENCE_WINDOW = 10
+BALL_PRESENCE_MIN_VALID = 8
+ball_presence_hist = []
 
 # =========================================================
 # ZONA DA BOLA
@@ -223,6 +236,25 @@ def median_int(values):
     return int((s[m - 1] + s[m]) / 2)
 
 
+def update_ball_presence_filter(found):
+    global ball_presence_hist
+
+    ball_presence_hist.append(1 if found else 0)
+
+    if len(ball_presence_hist) > BALL_PRESENCE_WINDOW:
+        ball_presence_hist.pop(0)
+
+    valid_count = sum(ball_presence_hist)
+
+    if len(ball_presence_hist) < BALL_PRESENCE_WINDOW:
+        return 0, valid_count
+
+    if valid_count >= BALL_PRESENCE_MIN_VALID:
+        return 1, valid_count
+
+    return 0, valid_count
+
+
 def update_ball_filter(found, raw_angle, raw_dist):
     """Filtra ruido da bola com janela temporal + rejeicao de outlier + hold curto."""
     global ball_angle_hist, ball_dist_hist
@@ -303,64 +335,21 @@ def enviar_dados_visao(ball_angle, ball_dist, blue_angle, blue_dist, yellow_angl
     uart_olho.write(buffer)
 
 
-def reiniciar_camera_por_uart():
-    """
-    Executa reset logico solicitado pela placa Olho.
-    O reboot por software e o caminho mais robusto para recuperar travas da OpenMV.
-    """
-    print("UART CMD: RESET")
-    machine.reset()
-
-
-def processar_comandos_uart():
-    """
-    Le comandos ASCII vindos do Olho sem interferir no frame binario enviado pela camera.
-    Protocolo esperado do watchdog: RESET\r\n
-    """
-    global uart_cmd_buffer
-
-    if not uart_olho.any():
-        return
-
-    dados = uart_olho.read()
-    if not dados:
-        return
-
-    for byte in dados:
-        if byte == 10 or byte == 13:
-            if not uart_cmd_buffer:
-                continue
-
-            comando = bytes(uart_cmd_buffer).strip()
-            uart_cmd_buffer = bytearray()
-
-            if comando == b"RESET":
-                reiniciar_camera_por_uart()
-            continue
-
-        if 97 <= byte <= 122:
-            byte -= 32
-
-        if 32 <= byte <= 126:
-            if len(uart_cmd_buffer) < UART_CMD_MAX_LEN:
-                uart_cmd_buffer.append(byte)
-            else:
-                uart_cmd_buffer = bytearray()
-        else:
-            uart_cmd_buffer = bytearray()
-
-
 # =========================================================
 # THRESHOLDS
 # =========================================================
 
 thresholdb = [15, 20, -11, 15, -20, 0]   # azul
-thresholdy = [40, 55, 5, 20, 45, 5]      # amarelo
-thresholdo = [31, 48, -9, 27, 17, 35]    # laranja
+thresholdy = [45, 60, 5, 20, 30, 52]      # amarelo
+thresholdo = [35, 47, -5, 6, 13, 19]    # laranja
 
 # =========================================================
 # CÂMERA
 # =========================================================
+
+red_led.on()
+blue_led.off()
+green_led.off()
 
 sensor.reset()
 sensor.set_pixformat(sensor.RGB565)
@@ -385,8 +374,12 @@ print("Iniciando detecção...")
 # =========================================================
 
 while True:
+
+    red_led.off()
+    blue_led.off()
+    green_led.on()
+
     clock.tick()
-    processar_comandos_uart()
     img = sensor.snapshot()
 
     # Máscara quadrada externa
@@ -484,6 +477,11 @@ while True:
             orange_blob.cx(), orange_blob.cy(), center[0], center[1]
         )
 
+    presence_ok, valid_count = update_ball_presence_filter(raw_orange_found)
+
+    if not presence_ok:
+        raw_orange_found = 0
+
     orange_found, orange_angle, orange_dist = update_ball_filter(
         raw_orange_found,
         raw_orange_angle,
@@ -491,10 +489,12 @@ while True:
     )
 
     if DEBUG and orange_blob is not None:
-        extra = "FLT PX:{} AR:{} PR:{}".format(
+        extra = "FLT PX:{} AR:{} PR:{} PV:{}/{}".format(
             orange_blob.pixels(),
             orange_blob.area(),
-            int(orange_blob.perimeter())
+            int(orange_blob.perimeter()),
+            valid_count,
+            BALL_PRESENCE_WINDOW
         )
         draw_blob_info(img, orange_blob, (255, 140, 0), "BALL", orange_angle, orange_dist, extra)
 
@@ -502,9 +502,10 @@ while True:
     enviar_dados_visao(orange_angle, orange_dist, blue_angle, blue_dist, yellow_angle, yellow_dist)
 
     # DEBUG NO TERMINAL
-    print("FPS: {:.2f} | BALL:{} A:{} D:{} | BLUE:{} A:{} D:{} | YELL:{} A:{} D:{}".format(
+    print("FPS: {:.2f} | BALL:{} A:{} D:{} | BALLV:{}/{} | BLUE:{} A:{} D:{} | YELL:{} A:{} D:{}".format(
         clock.fps(),
         orange_found, orange_angle, orange_dist,
+        valid_count, BALL_PRESENCE_WINDOW,
         blue_found, blue_angle, blue_dist,
         yellow_found, yellow_angle, yellow_dist
     ))
