@@ -88,8 +88,8 @@ float intensidade = 0;
 // Sensor 0 = pino 6 = angulo 0 graus
 //
 // Para esse sensor:
-//   analogRead(6) < 950  -> LOW  -> detectou
-//   analogRead(6) >= 950 -> HIGH -> nao detectou
+//   analogRead(6) < 3072  -> LOW  -> detectou
+//   analogRead(6) >= 3072 -> HIGH -> nao detectou
 //
 // Todos os demais sensores continuam usando digitalRead().
 //--------------------------------------------------------------------//
@@ -101,7 +101,7 @@ int lerSensorTSOP(int indice) {
 
     int valorAnalogico = analogRead(6);
 
-    if (valorAnalogico < 950) {
+    if (valorAnalogico < 3072) {
       return LOW;
     } else {
       return HIGH;
@@ -305,7 +305,14 @@ void imprimirDebugSensoresIR(float angulo) {
 
     Serial.print("] = ");
 
-    Serial.println(pulsos[i]);
+    Serial.print(pulsos[i]);
+
+    if (i == 0) {
+      Serial.print(" | Analogico = ");
+      Serial.print(analogRead(6));
+    }
+
+    Serial.println();
   }
 
   if (angulo < 0.0f) {
