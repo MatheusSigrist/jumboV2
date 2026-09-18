@@ -26,12 +26,64 @@ void atualizarLedLinhaAtacante(bool linhaAtiva) {
     }
 
     if (linhaAtiva) {
-        neopixelWrite(RGB_BUILTIN, 80, 80, 80);  // Branco durante a linha.
+        neopixelWrite(RGB_BUILTIN, 25, 25, 25);  // Branco durante a linha.
     } else {
-        neopixelWrite(RGB_BUILTIN, 0, 80, 0);    // Verde fora da linha.
+        neopixelWrite(RGB_BUILTIN, 0, 25, 0);    // Verde fora da linha.
     }
 
     ultimoEstadoLinha = estadoAtualLinha;
+}
+
+// =============================================================================
+// REPOSICIONAMENTO POR ZONA (A/B/C) RECEBIDA DO DEFENSOR VIA ESP-NOW
+// =============================================================================
+//
+// A referencia bussola (headingReferenciaBussola) e sempre calibrada apontando
+// para o gol adversario, e o controlador de giro do posicionamento mantem o
+// robo alinhado a ela. Por isso, no referencial X/Y do campo (ultrassonicos
+// F/T = eixo Y, E/D = eixo X), Y pequeno = lado de ataque (gol adversario) e
+// Y grande = lado de tras/defesa — sempre, independente de qual lado fisico
+// da sala esta sendo defendido no jogo atual.
+//
+// Zona A (direita, tras) e Zona B (esquerda, tras) ficam a 1/4 do campo de
+// distancia da parede de tras, e a 1/4 do campo de distancia da lateral.
+// =============================================================================
+
+bool obterAlvoReposicionamentoPorZona(float &xCm, float &yCm) {
+    const bool zonaRecente =
+        (ultimoRxZonaDefensorMs > 0) &&
+        ((millis() - ultimoRxZonaDefensorMs) <= TIMEOUT_ZONA_DEFENSOR_MS);
+
+    if (!zonaRecente) {
+        return false;
+    }
+
+    // Zona C = meio do campo (sem lado preferencial informado pelo defensor).
+    if (zonaDefensorRecebida == 'C') {
+        xCm = 89.0f;
+        yCm = 120.0f;
+        return true;
+    }
+
+    // Zona A = canto esquerdo inferior
+    else if (zonaDefensorRecebida == 'A') {
+        xCm = 40.0f;
+        yCm = 181.0f;
+        return true;
+    }
+
+    // Zona B = canto direito inferior
+    else if (zonaDefensorRecebida == 'B') {
+      xCm = 140.0f;
+      yCm = 181.0f;
+      return true;
+    }
+
+    yCm = CAMPO_ALTURA_CM - (CAMPO_ALTURA_CM * 0.25f);
+    xCm = (zonaDefensorRecebida == 'A')
+              ? (CAMPO_LARGURA_CM - (CAMPO_LARGURA_CM * 0.25f))
+              : (CAMPO_LARGURA_CM * 0.25f);
+    return true;
 }
 
 // =============================================================================
@@ -81,6 +133,26 @@ void atacante() {
 
     const unsigned long agoraLinhaMs = millis();
 
+    // =========================================================================
+    // TEMPO CONTÍNUO INDO DE FRENTE PARA O GOL
+    // =========================================================================
+    // Quanto mais tempo o robô fica correndo de frente para o gol, maior a
+    // inércia acumulada — por isso o retorno ao pegar a linha precisa ser
+    // proporcionalmente mais longo (só nesse movimento, não nas laterais).
+    static constexpr unsigned long LIMIAR_FRENTE_GOL_PARA_EXTRA_MS = 500UL;
+    static constexpr unsigned long DIVISOR_FRENTE_GOL_PARA_EXTRA   = 2UL;
+    static unsigned long inicioMovimentoFrenteGolMs = 0UL;
+    static unsigned long tempoContinuoFrenteGolMs = 0UL;
+    static bool indoDeFrenteParaGolAgora = false;
+
+    static float anguloFugaTravadoExtra = 0.0f;
+    static unsigned long duracaoExtraRetornoMs = 0UL;
+    static unsigned long inicioExtraRetornoMs = 0UL;
+
+    // Tempo seguido sem enxergar a bola (IR nem câmera) antes de reposicionar por zona.
+    static constexpr unsigned long TEMPO_SEM_BOLA_PARA_REPOSICIONAR_MS = 1500UL;
+    static unsigned long inicioSemBolaMs = 0UL;
+
     if (!linhaDetectada) {
         inicioTimeoutFinalLinhaMs = 0UL;
         fugaLinhaBloqueadaPorTimeout = false;
@@ -109,6 +181,16 @@ void atacante() {
     // -------------------------------------------------------------------------
     if (!fugaLinhaBloqueadaPorTimeout) {
 
+        // Linha acabou de ser pega: define o extra de retorno com base em
+        // quanto tempo o robô já vinha correndo de frente para o gol.
+        if (linhaDetectada && duracaoExtraRetornoMs == 0UL && inicioExtraRetornoMs == 0UL) {
+            if (tempoContinuoFrenteGolMs > LIMIAR_FRENTE_GOL_PARA_EXTRA_MS) {
+                duracaoExtraRetornoMs =
+                    (tempoContinuoFrenteGolMs - LIMIAR_FRENTE_GOL_PARA_EXTRA_MS) /
+                    DIVISOR_FRENTE_GOL_PARA_EXTRA;
+            }
+        }
+
         if (sairDaLinha(
                 linhaDetectada,
                 anguloLinhaPe,
@@ -117,14 +199,43 @@ void atacante() {
 
             fugindoLinhaAgora = true;
             anguloFugaLinhaCmd = anguloFuga;
+            anguloFugaTravadoExtra = anguloFuga;
+//            inicioExtraRetornoMs = 0UL;
 
             // sairDaLinha() já comandou a fuga normal neste ciclo.
             return;
         }
+
+        // sairDaLinha() encerrou a fuga normal: aplica o extra de retorno
+        // acumulado (apenas quando a corrida de frente para o gol foi longa).
+        if (duracaoExtraRetornoMs > 0UL) {
+
+            if (inicioExtraRetornoMs == 0UL) {
+                inicioExtraRetornoMs = agoraLinhaMs;
+            }
+
+            if ((agoraLinhaMs - inicioExtraRetornoMs) < duracaoExtraRetornoMs) {
+                fugindoLinhaAgora = true;
+                anguloFugaLinhaCmd = anguloFugaTravadoExtra;
+
+                seguirDirecaoPorAngulo(
+                    anguloFugaTravadoExtra,
+                    VELOCIDADE_FUGA_LINHA
+                );
+
+                return;
+            }
+
+            duracaoExtraRetornoMs = 0UL;
+            inicioExtraRetornoMs = 0UL;
+        }
     }
+        
     else {
         fugindoLinhaAgora = false;
         anguloFugaLinhaCmd = 0.0f;
+        duracaoExtraRetornoMs = 0UL;
+        inicioExtraRetornoMs = 0UL;
     }
 
     // -------------------------------------------------------------------------
@@ -132,11 +243,22 @@ void atacante() {
     // -------------------------------------------------------------------------
     if (obterAnguloIrDisponivel(anguloIrAtual)) {
 
+        inicioSemBolaMs = 0UL;
+
         if (irNaFaixaFrontal(anguloIrAtual)) {
+
+            if (!indoDeFrenteParaGolAgora) {
+                indoDeFrenteParaGolAgora = true;
+                inicioMovimentoFrenteGolMs = agoraLinhaMs;
+            }
+            tempoContinuoFrenteGolMs = agoraLinhaMs - inicioMovimentoFrenteGolMs;
 
             moverFrenteComGiroParaGol(veloFrente);
 
         } else {
+
+            indoDeFrenteParaGolAgora = false;
+            tempoContinuoFrenteGolMs = 0UL;
 
             resetControleGolCamera();
 
@@ -174,11 +296,40 @@ void atacante() {
             );
         }
 
-    } else {
+    } 
+    
+    // Se IR não estiver disponível (SEM BOLA!!)
+
+    else {
+        indoDeFrenteParaGolAgora = false;
+        tempoContinuoFrenteGolMs = 0UL;
+
+        // So reposiciona pela zona apos 3s seguidos sem enxergar a bola.
+        if (inicioSemBolaMs == 0UL) {
+            inicioSemBolaMs = agoraLinhaMs;
+        }
+
+        const bool semBolaHaTempoSuficiente =
+            (agoraLinhaMs - inicioSemBolaMs) >= TEMPO_SEM_BOLA_PARA_REPOSICIONAR_MS;
+
+        float alvoX = 0.0f;
+        float alvoY = 0.0f;
+        if (semBolaHaTempoSuficiente &&
+            obterAlvoReposicionamentoPorZona(alvoX, alvoY))
+           {
+            // moverParaComGiro() depende da posicao estimada por PosicaoCampo,
+            // que so e atualizada se alimentarmos as leituras a cada ciclo aqui.
+            atualizarLeiturasPosicionamento(ultraEcm, ultraDcm, ultraFcm, ultraTcm, ultrasValidos);
+            if (moverParaComGiro(alvoX, alvoY)) {
+                return;
+            }
+        }
+
+      else {
         girarNoEixo(cmdGiro);
         return;
     }
-
+  }
     return;
 }
 

@@ -212,6 +212,11 @@ bool espnowOK = false;
 bool sozinho  = true;
 unsigned long ultimoRxEspnowMs = 0;
 
+// --- Zona da bola vista pelo parceiro quando ele esta no papel de defensor ---
+char zonaDefensorRecebida = 'C';
+unsigned long ultimoRxZonaDefensorMs = 0;
+const unsigned long TIMEOUT_ZONA_DEFENSOR_MS = 3000;
+
 // Papel automático: quem está mais perto da bola assume o ataque
 constexpr bool  PAPEL_AUTO_DESEMPATE_ATACANTE = true;
 constexpr float PAPEL_AUTO_JANELA_EMPATE_CM   = 0.5f;
@@ -989,6 +994,18 @@ void enviarReferenciaBussolaParaCabeca(bool forcar = false) {
   ultimoEnvioRefBussolaMs = millis();
 }
 
+// Envia para a Cabeca uma zona de teste (A/B/C) para forcar no ESP-NOW,
+// ou "AUTO" para voltar ao calculo automatico pela camera. Uso: tela de
+// teste do defensor, para comprovar o reposicionamento do atacante.
+void enviarZonaTesteParaCabeca(char zona) {
+  Serial1.print("TESTZONA:");
+  if (zona == 'A' || zona == 'B' || zona == 'C') {
+    Serial1.println(zona);
+  } else {
+    Serial1.println("AUTO");
+  }
+}
+
 // Solicita leituras brutas de sensor ao Pé (somente na tela de sensores)
 void solicitarSensoresBrutosPe(bool forcar = false) {
   if (estadoAtual != FUNCAO || subMenuFuncao != SUBFUNCAO_SENSORES) {
@@ -1344,6 +1361,15 @@ if (msg.startsWith("MOD:")) {
     String sEsn = msg.substring(4); sEsn.trim();
     espnowOK = (sEsn == "1"); ultimoRxEspnowMs = millis();
     atualizarSozinhoLocal(); atualizarPapelAutomaticoPorParceria();
+    comunicacaoCabecaOK = true; ultimoRxCabeca = millis(); return;
+  }
+
+  // Zona da bola vista pelo parceiro (papel defensor): ZONA:A / ZONA:B / ZONA:C
+  if (msg.startsWith("ZONA:")) {
+    String sZona = msg.substring(5); sZona.trim();
+    if (sZona == "A" || sZona == "B" || sZona == "C") {
+      zonaDefensorRecebida = sZona[0]; ultimoRxZonaDefensorMs = millis();
+    }
     comunicacaoCabecaOK = true; ultimoRxCabeca = millis(); return;
   }
 }

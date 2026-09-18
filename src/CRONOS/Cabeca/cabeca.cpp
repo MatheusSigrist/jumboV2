@@ -422,6 +422,7 @@ struct EspNowMsg {
   int16_t uF;
   int16_t uT;
   char text[12];
+  char zona;  // Zona da bola vista pelo defensor: 'A', 'B' ou 'C' (sem bola).
 };
 
 static uint8_t espnowTargetMac[6] = {0};
@@ -437,6 +438,10 @@ static const unsigned long ESPNOW_SEND_INTERVAL_MS = 2000;
 static const unsigned long ESPNOW_TIMEOUT_MS = 6000;
 static const unsigned long ESPNOW_STATUS_INTERVAL_MS = 500;
 static const unsigned long ESPNOW_RETRY_INIT_MS = 2000;
+
+// Zona da bola recebida do parceiro quando ele esta no papel de defensor.
+static char zonaDefensorRecebida = 'C';
+static unsigned long ultimoRxZonaMs = 0;
 
 static bool parseMacStr(const char* s, uint8_t* out) {
   unsigned int b[6];
@@ -491,6 +496,26 @@ bool calcularSozinhoEmJogo() {
   return (!espnowComOK) || (!espnowRecente);
 }
 
+// Zona da bola do ponto de vista do defensor: A (0-135), B (225-360) ou C (sem bola / faixa cega 136-224).
+char calcularZonaBolaDefensor() {
+  if (ultimoBallAngle == -999) {
+    return 'C';
+  }
+
+  int16_t ang = ultimoBallAngle;
+  if (ang < 0) ang += 360;
+
+  if (ang >= 0 && ang <= 135) {
+    return 'A';
+  }
+
+  if (ang >= 225 && ang <= 360) {
+    return 'B';
+  }
+
+  return 'C';
+}
+
 void enviarPacoteUltraEspNow(bool resposta) {
   if (!espnowInicializado) {
     return;
@@ -507,6 +532,8 @@ void enviarPacoteUltraEspNow(bool resposta) {
   msg.uF = pacoteRecente ? ultimoUltraFX10 : -10;
   msg.uT = pacoteRecente ? ultimoUltraTX10 : -10;
   strncpy(msg.text, resposta ? "ULTRA_RESP" : "ULTRA_REQ", sizeof(msg.text) - 1);
+  // So o defensor envia a zona da bola; o atacante manda um valor neutro.
+  msg.zona = atacanteCfg ? 'C' : calcularZonaBolaDefensor();
 
   esp_err_t sendRes = esp_now_send(espnowTargetMac, (uint8_t*)&msg, sizeof(msg));
   if (sendRes != ESP_OK) {
@@ -547,6 +574,11 @@ void onEspNowRecv(const uint8_t* mac, const uint8_t* data, int len) {
   ultimoUltraRemotoFX10 = rx.uF;
   ultimoUltraRemotoTX10 = rx.uT;
   ultimoRxUltraRemotoMs = millis();
+
+  if (rx.zona == 'A' || rx.zona == 'B' || rx.zona == 'C') {
+    zonaDefensorRecebida = rx.zona;
+    ultimoRxZonaMs = millis();
+  }
 
   if (ehReq) {
     enviarPacoteUltraEspNow(true);
@@ -618,6 +650,12 @@ void atualizarEspNow() {
     espnowUltimoStatusMusculoMs = agora;
     SerialMusculo.print("ESN:");
     SerialMusculo.println(espnowComOK ? "1" : "0");
+
+    // So o atacante precisa da zona da bola vista pelo defensor.
+    if (atacanteCfg) {
+      SerialMusculo.print("ZONA:");
+      SerialMusculo.println(zonaDefensorRecebida);
+    }
   }
 }
 

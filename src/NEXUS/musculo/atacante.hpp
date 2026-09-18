@@ -295,6 +295,26 @@ extern const int VELOCIDADE_GIRO_ALINHAMENTO;
 extern const int SINAL_GIRO_PID;
 
 
+// ------------------------------------------------------------
+// Zona da bola recebida do parceiro (papel defensor) via ESP-NOW
+// ------------------------------------------------------------
+
+extern char zonaDefensorRecebida;
+
+extern unsigned long ultimoRxZonaDefensorMs;
+
+extern const unsigned long TIMEOUT_ZONA_DEFENSOR_MS;
+
+
+// ------------------------------------------------------------
+// Dimensoes do campo (cm)
+// ------------------------------------------------------------
+
+extern const float CAMPO_LARGURA_CM;
+
+extern const float CAMPO_ALTURA_CM;
+
+
 // ============================================================
 // FUNÇÕES COMPARTILHADAS
 // DEFINIDAS EM OUTROS MÓDULOS / musculo.cpp
@@ -348,6 +368,19 @@ void girarNoEixo(
 void moverFrenteComGiro(
     int velocidade,
     int cmdGiro
+);
+
+bool moverParaComGiro(
+    float xCm,
+    float yCm
+);
+
+void atualizarLeiturasPosicionamento(
+    float ultraEsquerdaCm,
+    float ultraDireitaCm,
+    float ultraFrenteCm,
+    float ultraTrasCm,
+    bool leiturasValidas
 );
 
 

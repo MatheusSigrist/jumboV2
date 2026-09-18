@@ -135,8 +135,8 @@ struct MotoresPosicionamentoConfig {
   float saltoMaximoCm = 35.0f;
 
   // Faixa de PWM usada durante o deslocamento ate o alvo.
-  int velocidadePwmMax = 150;
-  int velocidadePwmMin = 100;
+  int velocidadePwmMax = 255;
+  int velocidadePwmMin = 200;
   float distanciaRampaCm = 80.0f;
 
   // Regras de orientacao para o modo com giro.

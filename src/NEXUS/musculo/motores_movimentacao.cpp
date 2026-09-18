@@ -1,4 +1,5 @@
 #include "motores_movimentacao.hpp"
+#include "posicao_campo.hpp"
 
 namespace {
 MotoresMovimentacaoConfig g_cfg;
@@ -408,18 +409,7 @@ namespace {
 MotoresPosicionamentoConfig g_posCfg;
 MotoresPosicionamentoOrientacaoHooks g_posHooks;
 
-float g_ultraEcm = -1.0f;
-float g_ultraDcm = -1.0f;
-float g_ultraFcm = -1.0f;
-float g_ultraTcm = -1.0f;
-bool g_ultrasPosValidos = false;
-
-float g_posicaoXcm = 91.0f;
-float g_posicaoYcm = 121.5f;
-float g_confiancaPos = 0.0f;
 float g_anguloAlvoGraus = 0.0f;
-unsigned long g_ultimaEstimativaPosMs = 0;
-bool g_posicaoAtualValida = false;
 
 float normalizarAngulo360Pos(float ang) {
   while (ang >= 360.0f) ang -= 360.0f;
@@ -440,73 +430,6 @@ float mapearFaixaClampedPos(float valor,
   if (proporcao < 0.0f) proporcao = 0.0f;
   if (proporcao > 1.0f) proporcao = 1.0f;
   return saidaMin + ((saidaMax - saidaMin) * proporcao);
-}
-
-bool ultraValidoParaPosicao(float v) {
-  return isfinite(v) && v > 1.0f && v < 350.0f;
-}
-
-float filtroComplementarPos(float anterior, float medicao, float confianca, float dtSec) {
-  float tau = (confianca >= 0.8f) ? g_posCfg.filtroTauRapido : g_posCfg.filtroTauLento;
-  if (tau < 0.02f) tau = 0.02f;
-  float alpha = expf(-dtSec / tau);
-  alpha = constrain(alpha + ((1.0f - confianca) * 0.18f), 0.08f, 0.96f);
-  return (alpha * anterior) + ((1.0f - alpha) * medicao);
-}
-
-struct EixoPosResultado {
-  float valor;
-  float confianca;
-};
-
-EixoPosResultado estimarEixoPosicao(float leituraA,
-                                    float leituraB,
-                                    float campo,
-                                    float ultimo,
-                                    float dtSec) {
-  const bool temA = ultraValidoParaPosicao(leituraA);
-  const bool temB = ultraValidoParaPosicao(leituraB);
-  const float minimo = g_posCfg.roboRaioCm;
-  const float maximo = campo - g_posCfg.roboRaioCm;
-  const float utilizavel = campo - (2.0f * g_posCfg.roboRaioCm);
-
-  float medida = ultimo;
-  float confianca = 0.05f;
-
-  if (temA && temB) {
-    float diretoA = constrain(leituraA + g_posCfg.roboRaioCm, minimo, maximo);
-    float diretoB = constrain(campo - (leituraB + g_posCfg.roboRaioCm), minimo, maximo);
-    float soma = leituraA + leituraB;
-    if (soma < 1.0f) soma = 1.0f;
-    float residual = fabsf((leituraA + leituraB + (2.0f * g_posCfg.roboRaioCm)) - campo);
-
-    if (residual <= g_posCfg.compToleranciaCm) {
-      medida = 0.5f * (diretoA + diretoB);
-      confianca = 0.95f;
-    } else {
-      float fracA = constrain(leituraA / soma, 0.0f, 1.0f);
-      float fracB = constrain(leituraB / soma, 0.0f, 1.0f);
-      float mapaA = minimo + (fracA * utilizavel);
-      float mapaB = minimo + ((1.0f - fracB) * utilizavel);
-      medida = 0.5f * (mapaA + mapaB);
-      confianca = 0.56f;
-    }
-  } else if (temA) {
-    medida = constrain(leituraA + g_posCfg.roboRaioCm, minimo, maximo);
-    confianca = 0.62f;
-  } else if (temB) { // Teste para o commit
-    medida = constrain(campo - (leituraB + g_posCfg.roboRaioCm), minimo, maximo);
-    confianca = 0.62f;
-  }
-
-  float salto = medida - ultimo;
-  float medidaLimitada = ultimo + constrain(salto, -g_posCfg.saltoMaximoCm, g_posCfg.saltoMaximoCm);
-  float filtrada = filtroComplementarPos(ultimo, medidaLimitada, confianca, dtSec);
-
-  EixoPosResultado out;
-  out.valor = constrain(filtrada, minimo, maximo);
-  out.confianca = confianca;
-  return out;
 }
 
 int calcularVelocidadePosicionamento(float distanciaCm) {
@@ -535,7 +458,7 @@ bool preencherVetorParaAlvo(float alvoX,
                             float& erroY,
                             float& distanciaCm,
                             float& anguloGraus) {
-  if (!g_posicaoAtualValida && !atualizarPosicaoAtual()) {
+  if (!atualizarPosicaoAtual()) {
     return false;
   }
 
@@ -555,12 +478,17 @@ void inicializarMotoresPosicionamento(const MotoresPosicionamentoConfig& config)
   g_posHooks.temReferenciaOrientacao = config.hookTemReferenciaOrientacao;
   g_posHooks.obterErroOrientacaoGraus = config.hookObterErroOrientacaoGraus;
   g_posHooks.calcularComandoGiro = config.hookCalcularComandoGiro;
-  g_posicaoXcm = 0.5f * g_posCfg.campoLarguraCm;
-  g_posicaoYcm = 0.5f * g_posCfg.campoAlturaCm;
-  g_confiancaPos = 0.0f;
   g_anguloAlvoGraus = 0.0f;
-  g_ultimaEstimativaPosMs = 0;
-  g_posicaoAtualValida = false;
+
+  PosicaoCampo::Config posicaoCfg;
+  posicaoCfg.campoLarguraCm = config.campoLarguraCm;
+  posicaoCfg.campoAlturaCm = config.campoAlturaCm;
+  posicaoCfg.roboRaioCm = config.roboRaioCm;
+  posicaoCfg.compToleranciaCm = config.compToleranciaCm;
+  posicaoCfg.filtroTauRapido = config.filtroTauRapido;
+  posicaoCfg.filtroTauLento = config.filtroTauLento;
+  posicaoCfg.saltoMaximoCm = config.saltoMaximoCm;
+  PosicaoCampo::iniciar(posicaoCfg);
 }
 
 void configurarHooksOrientacaoPosicionamento(const MotoresPosicionamentoOrientacaoHooks& hooks) {
@@ -572,55 +500,23 @@ void atualizarLeiturasPosicionamento(float ultraEsquerdaCm,
                                      float ultraFrenteCm,
                                      float ultraTrasCm,
                                      bool leiturasValidas) {
-  g_ultraEcm = ultraEsquerdaCm;
-  g_ultraDcm = ultraDireitaCm;
-  g_ultraFcm = ultraFrenteCm;
-  g_ultraTcm = ultraTrasCm;
-  g_ultrasPosValidos = leiturasValidas;
-  g_posicaoAtualValida = false;
+  PosicaoCampo::atualizarLeituras(ultraEsquerdaCm, ultraDireitaCm, ultraFrenteCm, ultraTrasCm, leiturasValidas);
 }
 
 bool atualizarPosicaoAtual() {
-  if (!g_ultrasPosValidos) {
-    g_posicaoAtualValida = false;
-    return false;
-  }
-
-  unsigned long agora = millis();
-  float dtSec = 0.08f;
-  if (g_ultimaEstimativaPosMs > 0 && agora > g_ultimaEstimativaPosMs) {
-    dtSec = (agora - g_ultimaEstimativaPosMs) / 1000.0f;
-    if (dtSec < 0.05f) dtSec = 0.05f;
-    if (dtSec > 0.8f) dtSec = 0.8f;
-  }
-  g_ultimaEstimativaPosMs = agora;
-
-  EixoPosResultado eixoX = estimarEixoPosicao(g_ultraEcm, g_ultraDcm,
-                                              g_posCfg.campoLarguraCm,
-                                              g_posicaoXcm,
-                                              dtSec);
-  EixoPosResultado eixoY = estimarEixoPosicao(g_ultraFcm, g_ultraTcm,
-                                              g_posCfg.campoAlturaCm,
-                                              g_posicaoYcm,
-                                              dtSec);
-
-  g_posicaoXcm = eixoX.valor;
-  g_posicaoYcm = eixoY.valor;
-  g_confiancaPos = 0.5f * (eixoX.confianca + eixoY.confianca);
-  g_posicaoAtualValida = (eixoX.confianca > 0.1f) && (eixoY.confianca > 0.1f);
-  return g_posicaoAtualValida;
+  return PosicaoCampo::atualizar();
 }
 
 float obterPosicaoX() {
-  return g_posicaoXcm;
+  return PosicaoCampo::obterX();
 }
 
 float obterPosicaoY() {
-  return g_posicaoYcm;
+  return PosicaoCampo::obterY();
 }
 
 float obterConfiancaPosicao() {
-  return g_confiancaPos;
+  return PosicaoCampo::obterConfianca();
 }
 
 float obterAnguloAlvoPosicionamentoGraus() {
@@ -650,7 +546,7 @@ bool moverParaComGiro(float xCm, float yCm) {
     return false;
   }
 
-  int velocidade = calcularVelocidadePosicionamento(distanciaCm);
+  int velocidade = 220; // Velocidade para reposicionamento do campo!! (fixa ao inves de função)
   if (!hooksOrientacaoValidos() || !g_posHooks.temReferenciaOrientacao()) {
     seguirDirecaoPorAngulo(anguloMov, velocidade);
     return true;

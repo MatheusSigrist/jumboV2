@@ -15,7 +15,9 @@
 
 // ===================== ESP-NOW - ALTERE O MAC AQUI =====================
 // MAC da Cabeca do outro robo (CRONOS). Use o ambiente descobridor_mac para encontrar.
-#define ESPNOW_TARGET_MAC_STR "AC:A7:04:2B:9B:60"
+#define ESPNOW_TARGET_MAC_STR "1C:CB:D4:46:CB:FC"
+//"1C:CB:D4:46:CB:FC" NEXUS
+//"AC:A7:04:2B:9B:60" CRONOS
 // =======================================================================
 
 #define RX_MUSCULO 44
@@ -47,23 +49,23 @@
 const uint8_t QMC5883P_ADDR = 0x2C;
 
  
-
+/*
 // ----- CALIBRAÇÃO DO NEXUS -----
 // Valores de calibração validados no teste dedicado do NEXUS.
 const float xOffset = -801.50;
 const float yOffset = 592.00;
 const float xScale  = 1.007877;
 const float yScale  = 0.992246;
+*/
 
 
-/*
 // ----- CALIBRAÇÃO DO CRONOS -----
 // Valores de calibracao validados no teste dedicado do CRONOS.
 const float xOffset = 711.50;
 const float yOffset = -1624.00;
 const float xScale  = 1.013703;
 const float yScale  = 0.986663;
-*/
+
 
 
 int head = 0;
@@ -437,6 +439,7 @@ struct EspNowMsg {
   int16_t uF;
   int16_t uT;
   char text[12];
+  char zona;  // Zona da bola vista pelo defensor: 'A', 'B' ou 'C' (sem bola).
 };
 
 static uint8_t espnowTargetMac[6] = {0};
@@ -452,6 +455,14 @@ static const unsigned long ESPNOW_SEND_INTERVAL_MS = 2000;
 static const unsigned long ESPNOW_TIMEOUT_MS = 6000;
 static const unsigned long ESPNOW_STATUS_INTERVAL_MS = 500;
 static const unsigned long ESPNOW_RETRY_INIT_MS = 2000;
+
+// Zona da bola recebida do parceiro quando ele esta no papel de defensor.
+static char zonaDefensorRecebida = 'C';
+static unsigned long ultimoRxZonaMs = 0;
+
+// Forca uma zona de teste (A/B/C) no lugar do calculo automatico pela camera.
+// 0 = desligado (usa calcularZonaBolaDefensor()). Ativado via TESTZONA: no serial do Musculo.
+static char zonaTesteForcada = 0;
 
 static bool parseMacStr(const char* s, uint8_t* out) {
   unsigned int b[6];
@@ -506,6 +517,31 @@ bool calcularSozinhoEmJogo() {
   return (!espnowComOK) || (!espnowRecente);
 }
 
+// Zona da bola do ponto de vista do defensor, pela faixa do IR (nao pela camera):
+// A (225-330), B (30-135) ou C (sem leitura de IR valida / faixa cega 136-224).
+char calcularZonaBolaDefensor() {
+  bool pacoteRecente = (ultimoRxOlhoMs > 0) && ((millis() - ultimoRxOlhoMs) < TIMEOUT_DADO_OLHO_MS);
+  bool anguloValido = (ultimoAnguloIrX10 >= 0);
+  bool intensidadeValida = (ultimaIntensidadeIrX10 >= INTENSIDADE_MINIMA_IR_X10);
+
+  if (!pacoteRecente || !anguloValido || !intensidadeValida) {
+    return 'C';
+  }
+
+  int16_t ang = ultimoAnguloIrX10 / 10;
+  if (ang < 0) ang += 360;
+
+  if (ang >= 30 && ang <= 179) {
+    return 'A';
+  }
+
+  if (ang >= 181 && ang <= 330) {
+    return 'B';
+  }
+
+  return 'C';
+}
+
 void enviarPacoteUltraEspNow(bool resposta) {
   if (!espnowInicializado) {
     return;
@@ -522,6 +558,8 @@ void enviarPacoteUltraEspNow(bool resposta) {
   msg.uF = pacoteRecente ? ultimoUltraFX10 : -10;
   msg.uT = pacoteRecente ? ultimoUltraTX10 : -10;
   strncpy(msg.text, resposta ? "ULTRA_RESP" : "ULTRA_REQ", sizeof(msg.text) - 1);
+  // So o defensor envia a zona da bola; o atacante manda um valor neutro.
+  msg.zona = atacanteCfg ? 'C' : (zonaTesteForcada != 0 ? zonaTesteForcada : calcularZonaBolaDefensor());
 
   esp_err_t sendRes = esp_now_send(espnowTargetMac, (uint8_t*)&msg, sizeof(msg));
   if (sendRes != ESP_OK) {
@@ -562,6 +600,11 @@ void onEspNowRecv(const uint8_t* mac, const uint8_t* data, int len) {
   ultimoUltraRemotoFX10 = rx.uF;
   ultimoUltraRemotoTX10 = rx.uT;
   ultimoRxUltraRemotoMs = millis();
+
+  if (rx.zona == 'A' || rx.zona == 'B' || rx.zona == 'C') {
+    zonaDefensorRecebida = rx.zona;
+    ultimoRxZonaMs = millis();
+  }
 
   if (ehReq) {
     enviarPacoteUltraEspNow(true);
@@ -633,6 +676,12 @@ void atualizarEspNow() {
     espnowUltimoStatusMusculoMs = agora;
     SerialMusculo.print("ESN:");
     SerialMusculo.println(espnowComOK ? "1" : "0");
+
+    // So o atacante precisa da zona da bola vista pelo defensor.
+    if (atacanteCfg) {
+      SerialMusculo.print("ZONA:");
+      SerialMusculo.println(zonaDefensorRecebida);
+    }
   }
 }
 
@@ -777,6 +826,21 @@ void processarMensagem(String msg) {
     if (ref >= 360) ref %= 360;
     headingReferenciaBussola = (int16_t)ref;
     ultimoRxReferenciaBussolaMs = millis();
+  } else if (msg.startsWith("testzona:")) {
+    // Forca uma zona de teste (A/B/C) no ESP-NOW, ou volta ao automatico (AUTO).
+    String v = msg.substring(9);
+    v.trim();
+    if (v == "a") {
+      zonaTesteForcada = 'A';
+    } else if (v == "b") {
+      zonaTesteForcada = 'B';
+    } else if (v == "c") {
+      zonaTesteForcada = 'C';
+    } else {
+      zonaTesteForcada = 0;
+    }
+    Serial.print("[TESTE] Zona forcada: ");
+    Serial.println(zonaTesteForcada != 0 ? String(zonaTesteForcada) : String("AUTO"));
   } else if (msg.length() > 0) {
     Serial.print("Recebido do musculo: ");
     Serial.println(msg);

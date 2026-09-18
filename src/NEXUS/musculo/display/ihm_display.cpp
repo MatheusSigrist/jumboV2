@@ -27,6 +27,7 @@ constexpr int SUBFUNCAO_POSICIONAMENTO = 2;
 constexpr int SUBFUNCAO_SENSORES = 3;
 constexpr int SUBFUNCAO_LIMIAR_LINHA = 4;
 constexpr int SUBFUNCAO_KICKER = 5;
+constexpr int SUBFUNCAO_ZONA_TESTE = 6;
 
 constexpr int PAPEL_CONFIG_ATACANTE = 0;
 constexpr int PAPEL_CONFIG_DEFENSOR = 1;
@@ -111,6 +112,11 @@ extern float erroAlinhamentoGraus;
 extern bool fugindoLinhaAgora;
 extern bool alinhandoAgora;
 
+// Zona da bola recebida do parceiro (papel defensor) via ESP-NOW.
+extern char zonaDefensorRecebida;
+extern unsigned long ultimoRxZonaDefensorMs;
+extern const unsigned long TIMEOUT_ZONA_DEFENSOR_MS;
+
 // Funcoes globais do musculo.cpp chamadas pela IHM.
 extern bool espnowConectadoRecente();
 extern bool cameraTemGolSelecionadoValido(int16_t &anguloGol);
@@ -129,6 +135,7 @@ extern void enviarLimiarLinhaParaPe();
 extern void solicitarChuteManualkicker();
 extern void enviarReferenciaBussolaParaCabeca(bool forcar);
 extern void aplicarPapelConfiguradoLocal();
+extern void enviarZonaTesteParaCabeca(char zona);
 
 bool iniciarDisplayIHM() {
   return display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR);
@@ -254,15 +261,23 @@ void desenharSubmenuFuncao() {
       display.fillRect(0, 48, 128, 8, SSD1306_WHITE);
       display.setTextColor(SSD1306_BLACK);
       display.setCursor(4, 48);
-      display.println("VOLTAR");
+      display.println(papelAtacante ? "ZONA (ver)" : "ZONA (envia)");
       display.setTextColor(SSD1306_WHITE);
     } else {
       display.setCursor(4, 48);
-      display.println("VOLTAR");
+      display.println(papelAtacante ? "ZONA (ver)" : "ZONA (envia)");
     }
 
-    display.setCursor(0, 56);
-    display.println("OK para entrar");
+    if (itemSubMenuFuncao == 4) {
+      display.fillRect(0, 56, 128, 8, SSD1306_WHITE);
+      display.setTextColor(SSD1306_BLACK);
+      display.setCursor(4, 56);
+      display.println("VOLTAR");
+      display.setTextColor(SSD1306_WHITE);
+    } else {
+      display.setCursor(4, 56);
+      display.println("VOLTAR");
+    }
 
   } else if (subMenuFuncao == SUBFUNCAO_PAPEIS) {
     if (itemSubMenuFuncao == 0) {
@@ -387,6 +402,43 @@ void desenharSubmenuFuncao() {
 
     display.setCursor(0, 56);
     display.println("OK confirma");
+
+  } else if (subMenuFuncao == SUBFUNCAO_ZONA_TESTE) {
+    if (papelAtacante) {
+      // ATACANTE: tela somente leitura, mostra a zona recebida do parceiro.
+      display.println("ZONA (recebida)");
+      display.println();
+      display.setTextSize(2);
+      display.setCursor(24, 20);
+      bool zonaRecente = (ultimoRxZonaDefensorMs > 0) &&
+                         ((millis() - ultimoRxZonaDefensorMs) <= TIMEOUT_ZONA_DEFENSOR_MS);
+      display.println(zonaRecente ? String(zonaDefensorRecebida) : String("-"));
+      display.setTextSize(1);
+      display.setCursor(0, 44);
+      display.print("Status: ");
+      display.println(zonaRecente ? "OK" : "SEM DADOS");
+      display.setCursor(0, 56);
+      display.println("Qualquer BTN volta");
+    } else {
+      // DEFENSOR: escolhe A/B/C/AUTO e envia para a Cabeca via ESP-NOW.
+      display.println("ENVIAR ZONA TESTE");
+      display.println();
+
+      const char* opcoes[5] = {"AUTO", "A", "B", "C", "VOLTAR"};
+      for (int i = 0; i < 5; i++) {
+        int y = 16 + (i * 8);
+        if (itemSubMenuFuncao == i) {
+          display.fillRect(0, y, 128, 8, SSD1306_WHITE);
+          display.setTextColor(SSD1306_BLACK);
+          display.setCursor(4, y);
+          display.println(opcoes[i]);
+          display.setTextColor(SSD1306_WHITE);
+        } else {
+          display.setCursor(4, y);
+          display.println(opcoes[i]);
+        }
+      }
+    }
   }
 
   display.display();
@@ -697,10 +749,10 @@ void processarEventoBotao(uint8_t botao) {
   if (estadoAtual == FUNCAO && subMenuFuncao == SUBFUNCAO_PRINCIPAL) {
     if (botao == 1) {
       itemSubMenuFuncao--;
-      if (itemSubMenuFuncao < 0) itemSubMenuFuncao = 3;
+      if (itemSubMenuFuncao < 0) itemSubMenuFuncao = 4;
     } else if (botao == 2) {
       itemSubMenuFuncao++;
-      if (itemSubMenuFuncao > 3) itemSubMenuFuncao = 0;
+      if (itemSubMenuFuncao > 4) itemSubMenuFuncao = 0;
     } else if (botao == 3) {
       if (itemSubMenuFuncao == 0) {
         subMenuFuncao = SUBFUNCAO_PAPEIS;
@@ -712,6 +764,9 @@ void processarEventoBotao(uint8_t botao) {
         itemSubMenuFuncao = 0;
       } else if (itemSubMenuFuncao == 2) {
         subMenuFuncao = SUBFUNCAO_KICKER;
+        itemSubMenuFuncao = 0;
+      } else if (itemSubMenuFuncao == 3) {
+        subMenuFuncao = SUBFUNCAO_ZONA_TESTE;
         itemSubMenuFuncao = 0;
       } else {
         estadoAtual = MENU;
@@ -797,6 +852,37 @@ void processarEventoBotao(uint8_t botao) {
       } else {
         subMenuFuncao = SUBFUNCAO_PRINCIPAL;
         itemSubMenuFuncao = 2;
+      }
+    }
+    return;
+  }
+
+  if (estadoAtual == FUNCAO && subMenuFuncao == SUBFUNCAO_ZONA_TESTE) {
+    if (papelAtacante) {
+      // ATACANTE: tela so de leitura, qualquer botao volta.
+      if (botao == 1 || botao == 2 || botao == 3) {
+        subMenuFuncao = SUBFUNCAO_PRINCIPAL;
+        itemSubMenuFuncao = 3;
+      }
+      return;
+    }
+
+    // DEFENSOR: navega entre AUTO/A/B/C/VOLTAR e confirma com BTN3.
+    if (botao == 1) {
+      itemSubMenuFuncao--;
+      if (itemSubMenuFuncao < 0) itemSubMenuFuncao = 4;
+    } else if (botao == 2) {
+      itemSubMenuFuncao++;
+      if (itemSubMenuFuncao > 4) itemSubMenuFuncao = 0;
+    } else if (botao == 3) {
+      if (itemSubMenuFuncao == 4) {
+        subMenuFuncao = SUBFUNCAO_PRINCIPAL;
+        itemSubMenuFuncao = 3;
+      } else {
+        const char opcoes[4] = {'0', 'A', 'B', 'C'};  // '0' = AUTO
+        char zona = opcoes[itemSubMenuFuncao];
+        enviarZonaTesteParaCabeca(zona);
+        mensagemBotao = (zona == '0') ? "ZONA: AUTO ENVIADA" : ("ZONA " + String(zona) + " ENVIADA");
       }
     }
     return;
