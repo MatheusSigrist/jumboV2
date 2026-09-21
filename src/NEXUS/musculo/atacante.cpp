@@ -102,7 +102,7 @@ bool obterAlvoReposicionamentoPorZona(float &xCm, float &yCm) {
 void atacante() {
     atualizarLedLinhaAtacante(linhaDetectada);
 
-    int velo = 255;
+    int velo = 220;
     int veloFrente = 220;
 
     float anguloIrAtual = -1.0f;

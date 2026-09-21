@@ -546,7 +546,7 @@ bool moverParaComGiro(float xCm, float yCm) {
     return false;
   }
 
-  int velocidade = 220; // Velocidade para reposicionamento do campo!! (fixa ao inves de função)
+  int velocidade = calcularVelocidadePosicionamento(distanciaCm);
   if (!hooksOrientacaoValidos() || !g_posHooks.temReferenciaOrientacao()) {
     seguirDirecaoPorAngulo(anguloMov, velocidade);
     return true;

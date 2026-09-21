@@ -532,11 +532,11 @@ char calcularZonaBolaDefensor() {
   if (ang < 0) ang += 360;
 
   if (ang >= 30 && ang <= 179) {
-    return 'A';
+    return 'B';     // Zona B = canto direito inferior
   }
 
   if (ang >= 181 && ang <= 330) {
-    return 'B';
+    return 'A';     // Zona A = canto esquerdo inferior
   }
 
   return 'C';
