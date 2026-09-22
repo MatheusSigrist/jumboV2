@@ -125,118 +125,177 @@ void atacante() {
     float anguloFuga = 0.0f;
 
     // =========================================================================
-    // FAILSAFE FINAL DA LINHA
+    // LINHA — TRAVA DE FUGA TRASEIRA
     // =========================================================================
-    static constexpr unsigned long TEMPO_TIMEOUT_FINAL_LINHA_MS = 1500UL;
-    static unsigned long inicioTimeoutFinalLinhaMs = 0UL;
-    static bool fugaLinhaBloqueadaPorTimeout = false;
+    //
+    // Problema observado no robô:
+    //     linha -> fuga 180° -> pequeno intervalo sem linha -> linha 0°
+    //
+    // Essas leituras pertencem à MESMA passagem pela faixa. Depois que uma
+    // fuga traseira começa, o robô mantém 180° e ignora novas leituras de 0°
+    // até ficar continuamente sem linha por um pequeno intervalo.
+    //
+    // Além disso, se a própria linha for detectada na região frontal (0°),
+    // a ação é diretamente recuar em 180°.
+    // =========================================================================
 
     const unsigned long agoraLinhaMs = millis();
 
-    // =========================================================================
-    // TEMPO CONTÍNUO INDO DE FRENTE PARA O GOL
-    // =========================================================================
-    // Quanto mais tempo o robô fica correndo de frente para o gol, maior a
-    // inércia acumulada — por isso o retorno ao pegar a linha precisa ser
-    // proporcionalmente mais longo (só nesse movimento, não nas laterais).
-    static constexpr unsigned long LIMIAR_FRENTE_GOL_PARA_EXTRA_MS = 500UL;
-    static constexpr unsigned long DIVISOR_FRENTE_GOL_PARA_EXTRA   = 2UL;
+    static constexpr unsigned long TEMPO_SEM_LINHA_LIBERAR_TRAVA_MS = 200UL;
+    static constexpr unsigned long TEMPO_MAX_FUGA_TRASEIRA_MS = 1500UL;
+
+    static bool fugaTraseiraTravada = false;
+    static unsigned long inicioFugaTraseiraMs = 0UL;
+    static unsigned long inicioSemLinhaTravaMs = 0UL;
+
+    // Mantidos porque a estratégia normal abaixo usa essas variáveis.
     static unsigned long inicioMovimentoFrenteGolMs = 0UL;
     static unsigned long tempoContinuoFrenteGolMs = 0UL;
     static bool indoDeFrenteParaGolAgora = false;
 
-    static float anguloFugaTravadoExtra = 0.0f;
-    static unsigned long duracaoExtraRetornoMs = 0UL;
-    static unsigned long inicioExtraRetornoMs = 0UL;
-
-    // Tempo seguido sem enxergar a bola (IR nem câmera) antes de reposicionar por zona.
+    // Tempo seguido sem enxergar a bola antes de reposicionar por zona.
     static constexpr unsigned long TEMPO_SEM_BOLA_PARA_REPOSICIONAR_MS = 1500UL;
     static unsigned long inicioSemBolaMs = 0UL;
 
-    if (!linhaDetectada) {
-        inicioTimeoutFinalLinhaMs = 0UL;
-        fugaLinhaBloqueadaPorTimeout = false;
-    }
+    // -------------------------------------------------------------------------
+    // 1) DEFINE AS FAIXAS DA LINHA COM HISTERese
+    // -------------------------------------------------------------------------
+    // Para INICIAR a trava traseira, a linha precisa estar bem na frente:
+    //     330° ... 360° / 0° ... 30°
+    //
+    // Depois que a trava já começou, aceitamos uma faixa frontal um pouco maior:
+    //     300° ... 360° / 0° ... 60°
+    //
+    // Se aparecer uma linha claramente lateral/traseira:
+    //     > 60° e < 300°
+    // a trava de 180° é cancelada imediatamente e sairDaLinha() volta a decidir.
 
-    if (linhaDetectada && !fugaLinhaBloqueadaPorTimeout) {
+    bool linhaFrontalAtivaTrava = false;
+    bool linhaAindaFrontalDuranteTrava = false;
+    bool linhaLateralCancelaTrava = false;
 
-        if (inicioTimeoutFinalLinhaMs == 0UL) {
-            inicioTimeoutFinalLinhaMs = agoraLinhaMs;
-        }
+    if (linhaDetectada && anguloLinhaPe >= 0.0f) {
+        const float anguloLinhaNormalizado =
+            normalizarAngulo360(anguloLinhaPe);
 
-        if ((agoraLinhaMs - inicioTimeoutFinalLinhaMs) >=
-            TEMPO_TIMEOUT_FINAL_LINHA_MS) {
+        linhaFrontalAtivaTrava =
+            (anguloLinhaNormalizado <= 30.0f ||
+             anguloLinhaNormalizado >= 330.0f);
 
-            fugaLinhaBloqueadaPorTimeout = true;
-            fugindoLinhaAgora = false;
-            anguloFugaLinhaCmd = 0.0f;
+        linhaAindaFrontalDuranteTrava =
+            (anguloLinhaNormalizado <= 60.0f ||
+             anguloLinhaNormalizado >= 300.0f);
 
-            girarNoEixo(0);
-            return;
-        }
+        linhaLateralCancelaTrava =
+            (anguloLinhaNormalizado > 60.0f &&
+             anguloLinhaNormalizado < 300.0f);
     }
 
     // -------------------------------------------------------------------------
-    // FUGA NORMAL — sairDaLinha() CONTINUA SENDO A PRINCIPAL
+    // 2) SE JÁ COMEÇOU UMA FUGA PARA TRÁS, DECIDE SE MANTÉM OU CANCELA
     // -------------------------------------------------------------------------
-    if (!fugaLinhaBloqueadaPorTimeout) {
+    if (fugaTraseiraTravada) {
 
-        // Linha acabou de ser pega: define o extra de retorno com base em
-        // quanto tempo o robô já vinha correndo de frente para o gol.
-        if (linhaDetectada && duracaoExtraRetornoMs == 0UL && inicioExtraRetornoMs == 0UL) {
-            if (tempoContinuoFrenteGolMs > LIMIAR_FRENTE_GOL_PARA_EXTRA_MS) {
-                duracaoExtraRetornoMs =
-                    (tempoContinuoFrenteGolMs - LIMIAR_FRENTE_GOL_PARA_EXTRA_MS) /
-                    DIVISOR_FRENTE_GOL_PARA_EXTRA;
-            }
+        // Uma linha lateral real, como 90° ou 270°, tem prioridade sobre a
+        // trava antiga. Cancela a fuga em 180° e deixa sairDaLinha() decidir
+        // a nova direção ainda neste mesmo ciclo.
+        if (linhaLateralCancelaTrava) {
+            fugaTraseiraTravada = false;
+            inicioFugaTraseiraMs = 0UL;
+            inicioSemLinhaTravaMs = 0UL;
         }
+        else {
+            // Failsafe: não permite ficar recuando eternamente se algum sensor travar.
+            if ((agoraLinhaMs - inicioFugaTraseiraMs) >=
+                TEMPO_MAX_FUGA_TRASEIRA_MS) {
 
-        if (sairDaLinha(
-                linhaDetectada,
-                anguloLinhaPe,
-                VELOCIDADE_FUGA_LINHA,
-                &anguloFuga)) {
+                fugaTraseiraTravada = false;
+                inicioFugaTraseiraMs = 0UL;
+                inicioSemLinhaTravaMs = 0UL;
 
-            fugindoLinhaAgora = true;
-            anguloFugaLinhaCmd = anguloFuga;
-            anguloFugaTravadoExtra = anguloFuga;
-//            inicioExtraRetornoMs = 0UL;
+                fugindoLinhaAgora = false;
+                anguloFugaLinhaCmd = 0.0f;
 
-            // sairDaLinha() já comandou a fuga normal neste ciclo.
-            return;
-        }
-
-        // sairDaLinha() encerrou a fuga normal: aplica o extra de retorno
-        // acumulado (apenas quando a corrida de frente para o gol foi longa).
-        if (duracaoExtraRetornoMs > 0UL) {
-
-            if (inicioExtraRetornoMs == 0UL) {
-                inicioExtraRetornoMs = agoraLinhaMs;
+                girarNoEixo(0);
+                return;
             }
 
-            if ((agoraLinhaMs - inicioExtraRetornoMs) < duracaoExtraRetornoMs) {
+            if (linhaDetectada) {
+                // Enquanto a nova leitura ainda estiver na região frontal ampliada
+                // (300°..60°), ela pertence à mesma ocorrência da linha.
+                if (linhaAindaFrontalDuranteTrava) {
+                    inicioSemLinhaTravaMs = 0UL;
+                }
+            }
+            else {
+                // Só libera depois de ficar SEM LINHA continuamente por 200 ms.
+                if (inicioSemLinhaTravaMs == 0UL) {
+                    inicioSemLinhaTravaMs = agoraLinhaMs;
+                }
+
+                if ((agoraLinhaMs - inicioSemLinhaTravaMs) >=
+                    TEMPO_SEM_LINHA_LIBERAR_TRAVA_MS) {
+
+                    fugaTraseiraTravada = false;
+                    inicioFugaTraseiraMs = 0UL;
+                    inicioSemLinhaTravaMs = 0UL;
+
+                    fugindoLinhaAgora = false;
+                    anguloFugaLinhaCmd = 0.0f;
+                }
+            }
+
+            // Enquanto a trava continua ativa, mantém o recuo em 180°.
+            // Ex.: 0° -> 180° -> sem linha curto -> 0° continua em 180°.
+            if (fugaTraseiraTravada) {
                 fugindoLinhaAgora = true;
-                anguloFugaLinhaCmd = anguloFugaTravadoExtra;
+                anguloFugaLinhaCmd = 180.0f;
 
                 seguirDirecaoPorAngulo(
-                    anguloFugaTravadoExtra,
+                    180.0f,
                     VELOCIDADE_FUGA_LINHA
                 );
 
                 return;
             }
-
-            duracaoExtraRetornoMs = 0UL;
-            inicioExtraRetornoMs = 0UL;
         }
     }
-        
-    else {
-        fugindoLinhaAgora = false;
-        anguloFugaLinhaCmd = 0.0f;
-        duracaoExtraRetornoMs = 0UL;
-        inicioExtraRetornoMs = 0UL;
+
+    // -------------------------------------------------------------------------
+    // 3) SÓ UMA LINHA REALMENTE FRONTAL (330°..30°) PODE CRIAR A TRAVA DE 180°
+    // -------------------------------------------------------------------------
+    if (linhaFrontalAtivaTrava) {
+        fugaTraseiraTravada = true;
+        inicioFugaTraseiraMs = agoraLinhaMs;
+        inicioSemLinhaTravaMs = 0UL;
+
+        fugindoLinhaAgora = true;
+        anguloFugaLinhaCmd = 180.0f;
+
+        seguirDirecaoPorAngulo(
+            180.0f,
+            VELOCIDADE_FUGA_LINHA
+        );
+
+        return;
     }
+
+    // -------------------------------------------------------------------------
+    // 4) RESTANTE DAS DIREÇÕES: sairDaLinha() DECIDE NORMALMENTE
+    // -------------------------------------------------------------------------
+    if (sairDaLinha(
+            linhaDetectada,
+            anguloLinhaPe,
+            VELOCIDADE_FUGA_LINHA,
+            &anguloFuga)) {
+
+        fugindoLinhaAgora = true;
+        anguloFugaLinhaCmd = normalizarAngulo360(anguloFuga);
+        return;
+    }
+
+    fugindoLinhaAgora = false;
+    anguloFugaLinhaCmd = 0.0f;
 
     // -------------------------------------------------------------------------
     // ESTRATÉGIA NORMAL DO ATACANTE
@@ -252,7 +311,9 @@ void atacante() {
                 inicioMovimentoFrenteGolMs = agoraLinhaMs;
             }
             tempoContinuoFrenteGolMs = agoraLinhaMs - inicioMovimentoFrenteGolMs;
-
+            // Velocidade frontal fixa: a distancia medida pela camera
+            // nao altera mais a velocidade de avancar para o gol.
+            veloFrente = 220;
             moverFrenteComGiroParaGol(veloFrente);
 
         } else {

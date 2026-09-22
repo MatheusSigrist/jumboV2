@@ -3,1063 +3,750 @@
 #include "motores_movimentacao.hpp"
 
 // =============================================================================
-// PARÂMETROS E CONSTANTES DO DEFENSOR
+// TESTE DO DEFENSOR
+// V9: LINHA + BUSSOLA + FUSAO W + SIG*D
+// =============================================================================
+//
+// Convencao de angulos usada pelo projeto:
+//   0   = frente
+//   90  = direita
+//   180 = tras
+//   270 = esquerda
+//
+// Neste teste:
+// - a linha controla SOMENTE a translacao X/Y;
+// - a bussola controla SOMENTE o giro;
+// - os dois controles atuam ao mesmo tempo;
+// - o vetor da linha e filtrado no referencial FIXO do campo;
+// - o giro do robo pela bussola nao desloca artificialmente o filtro da linha;
+// - a linha continua usando exatamente seu vetor/direcao e intensidade atuais;
+// - a bola vira um vetor lateral: 0..180 -> 90 graus, 181..360 -> 270 graus;
+// - a fusao segue F = W + SIG_BOLA_DEFENSOR * D;
+// - SIG_BOLA_DEFENSOR e ajustado manualmente: maior = mais bola, menor = mais linha;
+// - ultrassons, retorno ao gol e avancos especiais NAO participam.
 // =============================================================================
 
-// Referências de zona da linha
-constexpr float DEFENSOR_REFERENCIA_ZONA_A = 90.0f;
-constexpr float DEFENSOR_REFERENCIA_ZONA_B = 270.0f;
+// -----------------------------------------------------------------------------
+// AJUSTES DA LINHA
+// -----------------------------------------------------------------------------
 
-// Tolerâncias
-constexpr float DEFENSOR_TOLERANCIA_ALINHAMENTO_BOLA_GRAUS = 3.0f;
-constexpr float DEFENSOR_TOLERANCIA_GIRO_GRAUS             = 5.0f;
+// Filtro ADAPTATIVO:
+// - longe do centro responde quase instantaneamente;
+// - perto do centro filtra mais para nao perseguir ruido.
+static constexpr float LINHA_ALPHA_PERTO = 0.28f;
+static constexpr float LINHA_ALPHA_LONGE = 0.82f;
+static constexpr float LINHA_MAG_ALPHA_LONGE = 0.30f;
 
-// Deadzones / suavização
-constexpr float DEFENSOR_DEADZONE_VETOR = 6.0f;
-constexpr float DEFENSOR_DEADZONE_GIRO  = 5.0f;
-constexpr float DEFENSOR_SUAVIZACAO_VETOR = 0.45f;
-constexpr float DEFENSOR_SUAVIZACAO_GIRO  = 0.35f;
+// Abaixo desta magnitude a linha e considerada suficientemente centralizada
+// para nao contribuir na mistura com a bola.
+static constexpr float LINHA_MAG_STOP = 0.055f;
 
-// Velocidades base
-constexpr float DEFENSOR_VELOCIDADE_MIN_PWM            = 180.0f;
-constexpr float DEFENSOR_VELOCIDADE_RETORNO_GOL_PWM    = 220.0f;
-constexpr int   DEFENSOR_VELOCIDADE_MAX_BOLA_PWM       = 255;
-constexpr int   DEFENSOR_VELOCIDADE_MIN_CORRECAO_PWM   = 100;
-constexpr int   DEFENSOR_VELOCIDADE_MAX_CORRECAO_PWM   = 255;
-constexpr float DEFENSOR_MAGNITUDE_MINIMA_PARAR        = 0.2f;
+// Curva de velocidade SEM piso fixo de PWM.
+// Assim a forca realmente tende a zero quando chega ao centro.
+static constexpr float LINHA_MAG_PWM_MAX = 0.30f;
+static constexpr float LINHA_CURVA_EXP = 1.25f;
+static constexpr int LINHA_PWM_MAX = 255;
 
-// Avanço frontal
-const float         DEFENSOR_TOLERANCIA_IR_FRONTAL_GRAUS      = 45.0f;
-const int           DEFENSOR_VELOCIDADE_AVANCO_IR_FRONTAL_PWM = 230;
-const unsigned long DEFENSOR_TEMPO_GATILHO_IR_FRONTAL_MS      = 3000;
-const unsigned long DEFENSOR_TEMPO_AVANCO_IR_FRONTAL_MS       = 1800;
+// Se uma das zonas piscar logo depois de termos A+B, nao podemos interpretar
+// imediatamente isso como erro maximo e mandar 255. Seguramos por alguns ms
+// o ultimo vetor fino e deixamos ele decair.
+static constexpr unsigned long LINHA_GRACA_PERDA_UMA_ZONA_MS = 120;
+static constexpr float LINHA_DECAIMENTO_GRACA = 0.82f;
 
-// PID linha (magnitude)
-constexpr float KP_DEFENSOR_LINHA = 200.0f;
-constexpr float KI_DEFENSOR_LINHA = 0.1f;
-constexpr float KD_DEFENSOR_LINHA = 20.0f;
+// Uma unica zona mantida alem da janela de graca significa deslocamento real:
+// ai sim queremos recuperacao forte. O erro da linha pode chegar a 1.0,
+// mas, se houver bola, a fusao V8 ainda preserva o peso minimo da bola.
+static constexpr float LINHA_GANHO_UMA_ZONA = 1.00f;
 
-// PID bússola
-constexpr float KP_BUSSOLA_NOVINHA = 2.5f;
-constexpr float KI_BUSSOLA_NOVINHA = 0.0f;
-constexpr float KD_BUSSOLA_NOVINHA = 0.8f;
+// Retencao curta para uma perda de pacote/leitura isolada nao desmontar o vetor.
+static constexpr unsigned long LINHA_RETENCAO_MS = 40;
 
-// Pesos de bola / ultra
-constexpr float DEFENSOR_PESO_MIN_BOLA = 75.0f;
-constexpr float DEFENSOR_PESO_MAX_BOLA = 200.0f;
-constexpr float DEFENSOR_PESO_MAX_ULTRA = 100.0f;
-constexpr float DEFENSOR_PESO_MAX_ULTRA_PROFUNDIDADE = 38.0f;
+// -----------------------------------------------------------------------------
+// AJUSTES DA BUSSOLA
+// -----------------------------------------------------------------------------
 
-// Ultras (repulsão/ajuste)
-constexpr float DEFENSOR_ULTRA_LATERAL_ATIVO_CM       = 45.0f;
-constexpr float DEFENSOR_ULTRA_LATERAL_CRITICO_CM     = 30.0f;
-constexpr float DEFENSOR_ULTRA_LATERAL_CONFIRMADOR_CM = 120.0f;
-constexpr float DEFENSOR_ULTRA_FRENTE_LIMITE_CM       = 40.0f;
-constexpr float DEFENSOR_ULTRA_TRAS_LIMITE_CM         = 25.0f;
-constexpr float DEFENSOR_ULTRA_FRONTAL_CONFIRMADOR_CM = 100.0f;
-constexpr float DEFENSOR_ULTRA_PROFUNDIDADE_MAX_CM    = 60.0f;
-constexpr float DEFENSOR_ULTRA_PROFUNDIDADE_MIN_CM    = 10.0f;
+static constexpr float BUSSOLA_KP = 1.35f;
+static constexpr float BUSSOLA_KD = 0.025f;
+static constexpr float BUSSOLA_D_MAX = 25.0f;
+static constexpr float BUSSOLA_DEADZONE_GRAUS = 1.5f;
+static constexpr int BUSSOLA_SAIDA_MAX = 140;
 
-// Velocidade lateral por IR
-constexpr int   DEFENSOR_VEL_BOLA_LATERAL_MIN_PWM = 220;
-constexpr int   DEFENSOR_VEL_BOLA_LATERAL_MAX_PWM = 255;
-constexpr float DEFENSOR_ANGULO_LATERAL_MIN_GRAUS = 0.0f;
-constexpr float DEFENSOR_ANGULO_LATERAL_MAX_GRAUS = 135.0f;
+// Sinal que converte o erro da bussola em orientacao do robo no referencial
+// fixo da linha/campo. Comece com +1.0f.
+// Se ao girar o robo para a DIREITA a compensacao da linha piorar/inverter,
+// troque SOMENTE para -1.0f.
+static constexpr float BUSSOLA_SINAL_REFERENCIAL_LINHA = +1.0f;
 
-// Limites físicos da área de atuação por ultrassom.
+// -----------------------------------------------------------------------------
+// AJUSTES DA BOLA / IR
+// -----------------------------------------------------------------------------
+
+// Intensidade base do vetor D da bola.
+static constexpr int BOLA_VELOCIDADE_PWM = 200;
+
+// AJUSTE MANUAL PRINCIPAL DA FUSAO:
+//   0.00 -> bola nao influencia quando linha + bola existem
+//   0.25 -> linha tende a dominar
+//   0.50 -> influencia moderada da bola
+//   1.00 -> vetor da bola entra com intensidade base completa
+//   1.50 / 2.00 -> bola passa a dominar cada vez mais
 //
-// IMPORTANTE:
-// Não há estado persistente / latch / histerese.
-// A proteção é recalculada em TODOS os ciclos usando somente a leitura atual.
-//
-// Laterais:
-//   > 45 cm          -> movimento normal
-//   30 < d <= 45 cm  -> bloqueia o sentido para fora e corrige para dentro
-//   d <= 30 cm       -> correção forte para dentro
-//
-// Traseiro:
-//   limite NÃO é fixo.
-//   Na borda lateral: proteção ~20 cm / crítico ~15 cm.
-//   No centro do gol: proteção ~32 cm / crítico ~28 cm.
-//   Entre esses pontos o limite varia continuamente conforme os ultras laterais.
-constexpr float ULTRA_LIMITE_LATERAL_DIR_CM        = 50.0f;
-constexpr float ULTRA_LIMITE_LATERAL_ESQ_CM        = 50.0f;
-
-// Limite traseiro DINÂMICO conforme a posição lateral do defensor.
-//
-// Na borda lateral da área:
-//   proteção traseira ~25 cm
-//   crítico traseiro  ~20 cm
-//
-// No centro do gol:
-//   proteção traseira ~32 cm
-//   crítico traseiro  ~30 cm
-//
-// A transição é contínua usando a MENOR leitura lateral.
-// Quanto mais longe das paredes laterais, mais o robô é considerado centralizado.
-constexpr float DEFENSOR_TRAS_LIMITE_BORDA_CM      = 25.0f;
-constexpr float DEFENSOR_TRAS_LIMITE_CENTRO_CM     = 40.0f;
-constexpr float DEFENSOR_TRAS_CRITICO_BORDA_CM     = 20.0f;
-constexpr float DEFENSOR_TRAS_CRITICO_CENTRO_CM    = 35.0f;
-
-// Faixa usada para estimar posição lateral.
-// <=45 cm  -> região de borda
-// >=80 cm  -> região central
-constexpr float DEFENSOR_LATERAL_REF_BORDA_CM      = 50.0f;
-constexpr float DEFENSOR_LATERAL_REF_CENTRO_CM     = 80.0f;
-
-// Intensidade mínima ao entrar na faixa e máxima na zona crítica.
-// Esses valores são componentes vetoriais em PWM.
-constexpr float DEFENSOR_CORRECAO_LIMITE_MIN_PWM   = 100.0f;
-constexpr float DEFENSOR_CORRECAO_LIMITE_MAX_PWM   = 220.0f;
-
-// Prioridade dinâmica: bola domina enquanto a correção de linha é pequena.
-// A linha só ganha força quando o erro cresce e há risco real de sair da região.
-constexpr float DEFENSOR_LINHA_ERRO_INICIO_CONTENCAO = 0.25f;
-constexpr float DEFENSOR_LINHA_ERRO_FORTE_CONTENCAO  = 0.70f;
-constexpr float DEFENSOR_PESO_LINHA_MIN_COM_BOLA     = 0.08f;
-constexpr float DEFENSOR_PESO_LINHA_MAX_COM_BOLA     = 0.2f;
-
-// Robustez da leitura da linha
-// Retém a última leitura válida por um intervalo curto para absorver perdas pontuais.
-constexpr unsigned long DEFENSOR_RETENCAO_LEITURA_LINHA_MS = 50;
-// Se uma zona continua marcada como válida, mas seu timestamp deixa de atualizar,
-// corta a ação atual. Valor deliberadamente maior que a retenção curta acima.
-constexpr unsigned long DEFENSOR_TIMEOUT_ATUALIZACAO_LINHA_MS = 600;
-
-// NOVO: faixa traseira da bola (não perseguir)
-constexpr float DEFENSOR_ANGULO_TRASEIRO_MIN = 135.0f;
-constexpr float DEFENSOR_ANGULO_TRASEIRO_MAX = 225.0f;
-
-// NOVO: centralização lateral sem IR
-constexpr float DEFENSOR_CENTRO_GOL_LATERAL_CM      = 85.0f;
-constexpr float DEFENSOR_CENTRO_GOL_TOLERANCIA_CM   = 8.0f;
-constexpr float DEFENSOR_CENTRO_GOL_ERRO_MAX_REF_CM = 35.0f;
-constexpr float DEFENSOR_CENTRO_GOL_PESO_MAX        = 140.0f;
-
-constexpr unsigned long DEFENSOR_TEMPO_SEM_BOLA_CENTRO_MS = 500;
-constexpr float DEFENSOR_ULTRA_CENTRO_GATILHO_CM = 75.0f;
-constexpr int DEFENSOR_ULTRA_CENTRO_VELOCIDADE_PWM = 220;
-constexpr float DEFENSOR_TOL_LINHA_PARA_CENTRO_ULTRA_GRAUS = 25.0f;
+// Pode alterar este valor manualmente durante os testes.
+static float SIG_BOLA_DEFENSOR = 1.0f;
 
 // =============================================================================
-// PID LINHA
+// ESTADOS INTERNOS
 // =============================================================================
-static float erroAnteriorLinha = 0.0f;
-static float integralLinha = 0.0f;
-static unsigned long tempoAnteriorLinhaMs = 0;
 
-void resetPidLinha() {
-  integralLinha = 0.0f;
-  erroAnteriorLinha = 0.0f;
-  tempoAnteriorLinhaMs = 0;
-}
+struct ErroLinhaVetorial {
+  float x;
+  float y;
+  float magnitude;
+  bool valido;
+  bool duasZonas;
+};
 
-float calcularSaidaPidLinha(float erroMagnitude, unsigned long agora) {
-  float dt = (tempoAnteriorLinhaMs > 0) ? (agora - tempoAnteriorLinhaMs) / 1000.0f : 0.02f;
-  if (dt <= 0.0f) dt = 0.02f;
+static float linhaErroXCampoFiltrado = 0.0f;
+static float linhaErroYCampoFiltrado = 0.0f;
+static bool linhaFiltroInicializado = false;
+static unsigned long linhaUltimaDuasZonasMs = 0;
 
-  float pTerm = KP_DEFENSOR_LINHA * erroMagnitude;
-  integralLinha += erroMagnitude * dt;
-  float iTerm = KI_DEFENSOR_LINHA * integralLinha;
-  float dTerm = KD_DEFENSOR_LINHA * ((erroMagnitude - erroAnteriorLinha) / dt);
-
-  erroAnteriorLinha = erroMagnitude;
-  tempoAnteriorLinhaMs = agora;
-
-  return pTerm + iTerm + dTerm;
-}
-
-// =============================================================================
-// PID BÚSSOLA
-// =============================================================================
-static float erroAnteriorBussola = 0.0f;
-static float integralBussola = 0.0f;
-static unsigned long tempoAnteriorBussolaMs = 0;
-
-void resetPidZimBussola() {
-  integralBussola = 0.0f;
-  erroAnteriorBussola = 0.0f;
-  tempoAnteriorBussolaMs = 0;
-}
-
-float PIDZIMBUSSOLANOVINHA_DEFENSOR(float erroBussola) {
-  unsigned long agora = millis();
-  float dt = (tempoAnteriorBussolaMs > 0) ? (agora - tempoAnteriorBussolaMs) / 1000.0f : 0.02f;
-  if (dt <= 0.0f) dt = 0.02f;
-
-  float pTerm = KP_BUSSOLA_NOVINHA * erroBussola;
-  integralBussola += erroBussola * dt;
-  float iTerm = KI_BUSSOLA_NOVINHA * integralBussola;
-  float dTerm = KD_BUSSOLA_NOVINHA * ((erroBussola - erroAnteriorBussola) / dt);
-
-  erroAnteriorBussola = erroBussola;
-  tempoAnteriorBussolaMs = agora;
-
-  return pTerm + iTerm + dTerm;
-}
+static float bussolaErroAnterior = 0.0f;
+static unsigned long bussolaUltimoPidMs = 0;
+static bool bussolaPidInicializado = false;
 
 // =============================================================================
 // AUXILIARES
 // =============================================================================
-float suavizarDefensor(float atual, float alvo, float fator) {
-  float fatorClamped = constrain(fator, 0.0f, 1.0f);
-  return atual + ((alvo - atual) * fatorClamped);
+
+static float normalizar360Defensor(float angulo) {
+  while (angulo >= 360.0f) angulo -= 360.0f;
+  while (angulo < 0.0f) angulo += 360.0f;
+  return angulo;
 }
 
-float aplicarDeadzoneDefensor(float valor, float deadzone) {
-  return (fabsf(valor) < deadzone) ? 0.0f : valor;
+static float calcularMagnitude(float x, float y) {
+  return sqrtf((x * x) + (y * y));
 }
 
-float calcularMagnitudeVetorDefensor(float vetorX, float vetorY) {
-  return sqrtf((vetorX * vetorX) + (vetorY * vetorY));
-}
-
-float calcularAnguloVetorDefensor(float vetorX, float vetorY) {
-  return normalizarAngulo360(atan2f(vetorX, vetorY) * 180.0f / PI);
-}
-
-void calcularVetorPontoMedioLinha(float anguloA, float anguloB, float &anguloResultante, float &magnitudeResultante) {
-  float radA = anguloA * PI / 180.0f;
-  float radB = anguloB * PI / 180.0f;
-
-  float xA = sinf(radA);
-  float yA = cosf(radA);
-  float xB = sinf(radB);
-  float yB = cosf(radB);
-
-  float xM = (xA + xB) / 2.0f;
-  float yM = (yA + yB) / 2.0f;
-
-  anguloResultante = calcularAnguloVetorDefensor(xM, yM);
-  magnitudeResultante = calcularMagnitudeVetorDefensor(xM, yM);
-}
-
-float calcularAnguloMistoDefesa(float anguloBola, float anguloLinha, float magnitudeLinha) {
-  // BOLA É A PRIORIDADE. A correção da linha começa fraca e cresce apenas
-  // quando o erro de linha indica risco de o robô abandonar a região de defesa.
-  float pesoLinha = DEFENSOR_PESO_LINHA_MIN_COM_BOLA;
-
-  if (magnitudeLinha > DEFENSOR_LINHA_ERRO_INICIO_CONTENCAO) {
-    float t = constrain(
-      (magnitudeLinha - DEFENSOR_LINHA_ERRO_INICIO_CONTENCAO) /
-      (DEFENSOR_LINHA_ERRO_FORTE_CONTENCAO - DEFENSOR_LINHA_ERRO_INICIO_CONTENCAO),
-      0.0f, 1.0f
-    );
-    pesoLinha = DEFENSOR_PESO_LINHA_MIN_COM_BOLA +
-                t * (DEFENSOR_PESO_LINHA_MAX_COM_BOLA - DEFENSOR_PESO_LINHA_MIN_COM_BOLA);
-  }
-
-  float pesoBola = 1.0f - pesoLinha;
-  float radBola  = normalizarAngulo360(anguloBola)  * PI / 180.0f;
-  float radLinha = normalizarAngulo360(anguloLinha) * PI / 180.0f;
-
-  float x = sinf(radBola) * pesoBola + sinf(radLinha) * pesoLinha;
-  float y = cosf(radBola) * pesoBola + cosf(radLinha) * pesoLinha;
-
-  return calcularAnguloVetorDefensor(x, y);
-}
-
-float calcularDirecaoObrigatoriaBolaDefensor(float anguloBola) {
-  if (anguloBola >= 225.0f && anguloBola <= 345.0f) return 270.0f;
-  if (anguloBola >= 15.0f && anguloBola <= 135.0f) return 90.0f;
-
-  anguloBola = normalizarAngulo360(anguloBola);
-  if (anguloBola >= 225.0f) return 270.0f;
-  if (anguloBola <= 135.0f) return 90.0f;
-
-  return anguloBola;
-}
-
-bool bolaEmSetorTraseiro(float anguloBola) {
-  float a = normalizarAngulo360(anguloBola);
-  return (a >= DEFENSOR_ANGULO_TRASEIRO_MIN && a <= DEFENSOR_ANGULO_TRASEIRO_MAX);
-}
-
-int calcularVelocidadeLateralPorIr(float anguloIrBruto) {
-  float a = normalizarAngulo360(anguloIrBruto);
-  float distanciaFrontal = 0.0f;
-
-  if (a >= 0.0f && a <= 135.0f) {
-    distanciaFrontal = a;
-  } else if (a >= 225.0f && a <= 360.0f) {
-    distanciaFrontal = 360.0f - a;
-  } else {
-    return DEFENSOR_VEL_BOLA_LATERAL_MAX_PWM;
-  }
-
-  float ganho = mapearFaixaClamped(
-    distanciaFrontal,
-    DEFENSOR_ANGULO_LATERAL_MIN_GRAUS,
-    DEFENSOR_ANGULO_LATERAL_MAX_GRAUS,
-    0.0f,
-    1.0f
-  );
-
-  return (int)roundf(
-    DEFENSOR_VEL_BOLA_LATERAL_MIN_PWM +
-    ganho * (DEFENSOR_VEL_BOLA_LATERAL_MAX_PWM - DEFENSOR_VEL_BOLA_LATERAL_MIN_PWM)
-  );
-}
-
-// =============================================================================
-// LIMITES FÍSICOS DA ÁREA DE ATUAÇÃO POR ULTRASSOM
-// =============================================================================
-//
-// Esta lógica NÃO guarda estado entre ciclos.
-// Ela usa somente a leitura atual dos ultras.
-//
-// Convenção do movimento:
-//   0°   = frente       -> Y+
-//   90°  = direita      -> X+
-//   180° = trás         -> Y-
-//   270° = esquerda     -> X-
-//
-// Regras:
-// - Entrou na faixa de proteção: nunca permite continuar para fora.
-// - Ao mesmo tempo, garante uma componente mínima no sentido de recuperação.
-// - Quanto mais próximo da zona crítica, maior a correção.
-// - Saiu da faixa no ciclo seguinte: a correção deixa de existir imediatamente.
-
-// Calcula o limite traseiro permitido conforme a posição lateral estimada.
-// Usa a menor distância entre os ultras laterais:
-// - perto de uma lateral -> limite traseiro menor
-// - perto do centro      -> limite traseiro maior
-//
-// Não usa estado persistente. O valor é recalculado a cada ciclo.
-void calcularLimitesTraseirosDinamicos(bool ultrasRecentes,
-                                       float &limiteTrasCm,
-                                       float &criticoTrasCm) {
-  // Fallback conservador caso os ultras laterais não estejam confiáveis.
-  limiteTrasCm  = DEFENSOR_ULTRA_TRAS_LIMITE_CM;
-  criticoTrasCm = DEFENSOR_TRAS_CRITICO_BORDA_CM;
-
-  if (!ultrasRecentes) return;
-  if (ultraDcm < 0.0f || ultraEcm < 0.0f) return;
-
-  float menorLateral = (ultraDcm < ultraEcm) ? ultraDcm : ultraEcm;
-
-  float fatorCentro = mapearFaixaClamped(
-    menorLateral,
-    DEFENSOR_LATERAL_REF_BORDA_CM,
-    DEFENSOR_LATERAL_REF_CENTRO_CM,
-    0.0f,
-    1.0f
-  );
-
-  limiteTrasCm =
-    DEFENSOR_TRAS_LIMITE_BORDA_CM +
-    fatorCentro *
-    (DEFENSOR_TRAS_LIMITE_CENTRO_CM -
-     DEFENSOR_TRAS_LIMITE_BORDA_CM);
-
-  criticoTrasCm =
-    DEFENSOR_TRAS_CRITICO_BORDA_CM +
-    fatorCentro *
-    (DEFENSOR_TRAS_CRITICO_CENTRO_CM -
-     DEFENSOR_TRAS_CRITICO_BORDA_CM);
-
-  if (criticoTrasCm >= limiteTrasCm) {
-    criticoTrasCm = limiteTrasCm - 1.0f;
-  }
-}
-
-
-float calcularForcaCorrecaoLimiteUltra(float distanciaCm,
-                                       float limiteCm,
-                                       float criticoCm) {
-  if (distanciaCm < 0.0f || distanciaCm > limiteCm) {
+// Mantem a mesma convencao angular usada no restante do robo:
+// atan2(X, Y): 0=frente, 90=direita, 180=tras, 270=esquerda.
+static float calcularAnguloDoVetor(float x, float y) {
+  if (fabsf(x) < 0.00001f && fabsf(y) < 0.00001f) {
     return 0.0f;
   }
 
-  if (distanciaCm <= criticoCm) {
-    return DEFENSOR_CORRECAO_LIMITE_MAX_PWM;
+  return normalizar360Defensor(
+    atan2f(x, y) * 180.0f / PI
+  );
+}
+
+// -----------------------------------------------------------------------------
+// TROCA DE REFERENCIAL: ROBO <-> CAMPO
+// -----------------------------------------------------------------------------
+// Convencao: 0=frente, 90=direita, angulos positivos no sentido horario.
+//
+// orientacaoRoboCampoGraus = quanto o robo esta girado em relacao a referencia
+// desejada da bussola. Ao converter para o campo, a rotacao do robo deixa de
+// contaminar o filtro temporal da linha.
+
+static void vetorRoboParaCampo(float xRobo,
+                               float yRobo,
+                               float orientacaoRoboCampoGraus,
+                               float &xCampo,
+                               float &yCampo) {
+  const float psi = orientacaoRoboCampoGraus * PI / 180.0f;
+  const float c = cosf(psi);
+  const float s = sinf(psi);
+
+  xCampo = (xRobo * c) + (yRobo * s);
+  yCampo = (yRobo * c) - (xRobo * s);
+}
+
+static void vetorCampoParaRobo(float xCampo,
+                               float yCampo,
+                               float orientacaoRoboCampoGraus,
+                               float &xRobo,
+                               float &yRobo) {
+  const float psi = orientacaoRoboCampoGraus * PI / 180.0f;
+  const float c = cosf(psi);
+  const float s = sinf(psi);
+
+  xRobo = (xCampo * c) - (yCampo * s);
+  yRobo = (yCampo * c) + (xCampo * s);
+}
+
+// =============================================================================
+// RESET DOS CONTROLES
+// =============================================================================
+
+void resetPidLinha() {
+  linhaErroXCampoFiltrado = 0.0f;
+  linhaErroYCampoFiltrado = 0.0f;
+  linhaFiltroInicializado = false;
+  linhaUltimaDuasZonasMs = 0;
+}
+
+void resetPidZimBussola() {
+  bussolaErroAnterior = 0.0f;
+  bussolaUltimoPidMs = 0;
+  bussolaPidInicializado = false;
+}
+
+// =============================================================================
+// AQUISICAO DA LINHA
+// =============================================================================
+
+static void obterZonasLinha(bool &zonaAValida,
+                            float &anguloA,
+                            bool &zonaBValida,
+                            float &anguloB,
+                            unsigned long agora) {
+
+  const bool zonaAAtual =
+    linhaZonaAValida && (anguloLinhaZonaA >= 0.0f);
+
+  const bool zonaBAtual =
+    linhaZonaBValida && (anguloLinhaZonaB >= 0.0f);
+
+  const bool zonaARetida =
+    !zonaAAtual &&
+    (ultimoAnguloLinhaZonaAValido >= 0.0f) &&
+    (ultimoRxLinhaZonaAMs > 0) &&
+    ((agora - ultimoRxLinhaZonaAMs) <= LINHA_RETENCAO_MS);
+
+  const bool zonaBRetida =
+    !zonaBAtual &&
+    (ultimoAnguloLinhaZonaBValido >= 0.0f) &&
+    (ultimoRxLinhaZonaBMs > 0) &&
+    ((agora - ultimoRxLinhaZonaBMs) <= LINHA_RETENCAO_MS);
+
+  zonaAValida = zonaAAtual || zonaARetida;
+  zonaBValida = zonaBAtual || zonaBRetida;
+
+  anguloA = zonaAAtual
+    ? anguloLinhaZonaA
+    : (zonaARetida ? ultimoAnguloLinhaZonaAValido : -1.0f);
+
+  anguloB = zonaBAtual
+    ? anguloLinhaZonaB
+    : (zonaBRetida ? ultimoAnguloLinhaZonaBValido : -1.0f);
+}
+
+// =============================================================================
+// GEOMETRIA DA LINHA
+// =============================================================================
+//
+// Cada angulo valido vira um vetor unitario apontando PARA a linha.
+//
+// Exemplo ideal:
+//   A = 90 graus  -> (+1, 0)
+//   B = 270 graus -> (-1, 0)
+//
+// Media:
+//   (0, 0) -> robo centralizado.
+//
+// Se os vetores nao se cancelam, a resultante aponta para o lado para onde
+// o centro do robo deve se deslocar.
+// =============================================================================
+
+static ErroLinhaVetorial calcularErroLinhaVetorial(bool zonaAValida,
+                                                    float anguloA,
+                                                    bool zonaBValida,
+                                                    float anguloB) {
+  float x = 0.0f;
+  float y = 0.0f;
+  int quantidade = 0;
+
+  if (zonaAValida) {
+    const float radA = normalizar360Defensor(anguloA) * PI / 180.0f;
+    x += sinf(radA);
+    y += cosf(radA);
+    quantidade++;
   }
 
-  float faixa = limiteCm - criticoCm;
-  if (faixa <= 0.001f) {
-    return DEFENSOR_CORRECAO_LIMITE_MAX_PWM;
+  if (zonaBValida) {
+    const float radB = normalizar360Defensor(anguloB) * PI / 180.0f;
+    x += sinf(radB);
+    y += cosf(radB);
+    quantidade++;
   }
 
-  // 0 no crítico -> 1 no limite.
-  // Queremos MAX no crítico e MIN no limite.
-  float t = (distanciaCm - criticoCm) / faixa;
+  if (quantidade == 0) {
+    return {0.0f, 0.0f, 0.0f, false, false};
+  }
+
+  x /= (float)quantidade;
+  y /= (float)quantidade;
+
+  // Somente uma zona: sabemos para que lado esta a linha, mas nao o erro fino.
+  // Para este teste tratamos isso como erro grande e reagimos com forca.
+  if (quantidade == 1) {
+    x *= LINHA_GANHO_UMA_ZONA;
+    y *= LINHA_GANHO_UMA_ZONA;
+  }
+
+  return {
+    x,
+    y,
+    calcularMagnitude(x, y),
+    true,
+    quantidade == 2
+  };
+}
+
+// =============================================================================
+// CONTROLE DA LINHA - DIRECAO VETORIAL + VELOCIDADE NAO LINEAR
+// =============================================================================
+
+static int calcularVelocidadeLinhaPorMagnitude(float magnitude) {
+  if (magnitude <= LINHA_MAG_STOP) {
+    return 0;
+  }
+
+  // 0 no limite de parada e 1 na regiao de erro grande.
+  float t = (magnitude - LINHA_MAG_STOP) /
+            (LINHA_MAG_PWM_MAX - LINHA_MAG_STOP);
   t = constrain(t, 0.0f, 1.0f);
 
-  return DEFENSOR_CORRECAO_LIMITE_MAX_PWM -
-         t * (DEFENSOR_CORRECAO_LIMITE_MAX_PWM -
-              DEFENSOR_CORRECAO_LIMITE_MIN_PWM);
+  const float curva = powf(t, LINHA_CURVA_EXP);
+  const float pwm = curva * (float)LINHA_PWM_MAX;
+
+  return (int)roundf(constrain(pwm, 0.0f, (float)LINHA_PWM_MAX));
 }
 
-
-// Aplica os limites diretamente nas componentes X/Y do comando.
-//
-// Em vez de criar um novo "modo de recuperação", modifica apenas o comando
-// deste ciclo. Isso evita o problema de continuar andando mesmo depois que
-// o ultra já recuperou a distância.
-void aplicarLimitesUltraAoVetor(float &vetorX,
-                                float &vetorY,
-                                bool ultrasRecentes) {
-  if (!ultrasRecentes) {
-    return;
+// Peso usado na fusao linha + bola:
+//   0.00 = linha perfeitamente centralizada -> bola domina
+//   0.30 = aproximadamente 70% alinhado     -> 30% linha / 70% bola
+//   1.00 = erro maximo                      -> linha domina
+static float calcularPesoLinhaPorMagnitude(float magnitude,
+                                           bool umaZonaPersistente) {
+  if (umaZonaPersistente) {
+    return 1.0f;
   }
 
-  bool limiteDirAtivo =
-    (ultraDcm >= 0.0f) &&
-    (ultraDcm <= ULTRA_LIMITE_LATERAL_DIR_CM);
-
-  bool limiteEsqAtivo =
-    (ultraEcm >= 0.0f) &&
-    (ultraEcm <= ULTRA_LIMITE_LATERAL_ESQ_CM);
-
-  float limiteTrasAtualCm = DEFENSOR_ULTRA_TRAS_LIMITE_CM;
-  float criticoTrasAtualCm = DEFENSOR_TRAS_CRITICO_BORDA_CM;
-
-  calcularLimitesTraseirosDinamicos(
-    ultrasRecentes,
-    limiteTrasAtualCm,
-    criticoTrasAtualCm
-  );
-
-  bool limiteTrasAtivo =
-    (ultraTcm >= 0.0f) &&
-    (ultraTcm <= limiteTrasAtualCm);
-
-
-  // -------------------------------------------------------------------
-  // LATERAIS
-  // -------------------------------------------------------------------
-  //
-  // Se por alguma anomalia os dois limites laterais estiverem ativos ao
-  // mesmo tempo, não força nenhum lado: apenas corta a componente lateral.
-  // Isso evita escolher arbitrariamente direita ou esquerda.
-  if (limiteDirAtivo && limiteEsqAtivo) {
-    vetorX = 0.0f;
-  }
-  else if (limiteDirAtivo) {
-    // Perto demais da direita:
-    // 1) jamais deixa continuar para direita;
-    // 2) garante movimento mínimo para esquerda até sair da faixa.
-    if (vetorX > 0.0f) {
-      vetorX = 0.0f;
-    }
-
-    float correcao = calcularForcaCorrecaoLimiteUltra(
-      ultraDcm,
-      ULTRA_LIMITE_LATERAL_DIR_CM,
-      DEFENSOR_ULTRA_LATERAL_CRITICO_CM
-    );
-
-    // Se o comando original já está indo para esquerda mais forte do que
-    // a correção necessária, preserva esse comando.
-    if (vetorX > -correcao) {
-      vetorX = -correcao;
-    }
-  }
-  else if (limiteEsqAtivo) {
-    // Perto demais da esquerda:
-    // 1) jamais deixa continuar para esquerda;
-    // 2) garante movimento mínimo para direita até sair da faixa.
-    if (vetorX < 0.0f) {
-      vetorX = 0.0f;
-    }
-
-    float correcao = calcularForcaCorrecaoLimiteUltra(
-      ultraEcm,
-      ULTRA_LIMITE_LATERAL_ESQ_CM,
-      DEFENSOR_ULTRA_LATERAL_CRITICO_CM
-    );
-
-    if (vetorX < correcao) {
-      vetorX = correcao;
-    }
+  if (magnitude <= LINHA_MAG_STOP) {
+    return 0.0f;
   }
 
-
-  // -------------------------------------------------------------------
-  // TRASEIRO
-  // -------------------------------------------------------------------
-  if (limiteTrasAtivo) {
-    // Limite traseiro variável conforme a posição lateral.
-    // Na borda fica próximo de 20 cm; no centro, próximo de 32 cm.
-    if (vetorY < 0.0f) {
-      vetorY = 0.0f;
-    }
-
-    float correcao = calcularForcaCorrecaoLimiteUltra(
-      ultraTcm,
-      limiteTrasAtualCm,
-      criticoTrasAtualCm
-    );
-
-    // Se a estratégia já manda para frente com força maior, preserva.
-    if (vetorY < correcao) {
-      vetorY = correcao;
-    }
-  }
+  return constrain(magnitude, 0.0f, 1.0f);
 }
 
+// Calcula o comando da linha MESMO quando o erro e pequeno.
+// Isso e necessario porque agora nao existe mais a troca binaria
+// "linha OU bola": o erro da linha vira um peso continuo da fusao.
+static bool calcularComandoLinha(const ErroLinhaVetorial &erroBruto,
+                                 float orientacaoRoboCampoGraus,
+                                 unsigned long agora,
+                                 float &anguloMovimento,
+                                 int &velocidadePwm,
+                                 float &pesoLinha) {
 
-// ÚNICA saída de translação do defensor com proteção dos ultras.
-//
-// A direção/velocidade solicitada pela estratégia é convertida para X/Y.
-// Depois os ultras modificam somente as componentes necessárias.
-// Por fim o vetor seguro volta a ser convertido para ângulo + PWM.
-void seguirDirecaoDefensorComLimites(float direcaoCmd,
-                                     int velocidadePwm,
-                                     int cmdGiro,
-                                     bool ultrasRecentes) {
-  float anguloRad = normalizarAngulo360(direcaoCmd) * PI / 180.0f;
+  anguloMovimento = 0.0f;
+  velocidadePwm = 0;
+  pesoLinha = 0.0f;
 
-  float velocidade = (float)constrain(velocidadePwm, 0, 255);
-
-  float vetorX = sinf(anguloRad) * velocidade;
-  float vetorY = cosf(anguloRad) * velocidade;
-
-  aplicarLimitesUltraAoVetor(
-    vetorX,
-    vetorY,
-    ultrasRecentes
-  );
-
-  float magnitude = sqrtf(
-    vetorX * vetorX +
-    vetorY * vetorY
-  );
-
-  // Nenhuma translação restante: mantém somente o controle de giro.
-  if (magnitude < 0.5f) {
-    girarNoEixo(cmdGiro);
-    return;
-  }
-
-  float direcaoSegura =
-    calcularAnguloVetorDefensor(vetorX, vetorY);
-
-  int velocidadeSegura =
-    (int)roundf(constrain(magnitude, 0.0f, 255.0f));
-
-  seguirDirecaoComGiroLaterais(
-    direcaoSegura,
-    velocidadeSegura,
-    cmdGiro
-  );
-}
-
-// NOVO: centraliza no gol por ultras laterais (sem IR)
-float calcularCorrecaoCentroGolPorUltraX(bool ultrasRecentes) {
-  if (!ultrasRecentes) return 0.0f;
-  if (ultraDcm < 0.0f || ultraEcm < 0.0f) return 0.0f;
-
-  float erroDir = ultraDcm - DEFENSOR_CENTRO_GOL_LATERAL_CM;
-  float erroEsq = ultraEcm - DEFENSOR_CENTRO_GOL_LATERAL_CM;
-
-  float mediaAbsErro = (fabsf(erroDir) + fabsf(erroEsq)) * 0.5f;
-  if (mediaAbsErro <= DEFENSOR_CENTRO_GOL_TOLERANCIA_CM) return 0.0f;
-
-  // Se direita > esquerda, robô está deslocado para a esquerda -> mover para direita (X+)
-  float erroCentro = (ultraDcm - ultraEcm) * 0.5f;
-
-  return mapearFaixaClamped(
-    erroCentro,
-    -DEFENSOR_CENTRO_GOL_ERRO_MAX_REF_CM,
-     DEFENSOR_CENTRO_GOL_ERRO_MAX_REF_CM,
-    -DEFENSOR_CENTRO_GOL_PESO_MAX,
-     DEFENSOR_CENTRO_GOL_PESO_MAX
-  );
-}
-
-float comporAnguloRetornoBussolaComUltraLaterais(float anguloRetornoBase, bool ultrasRecentes) {
-  float anguloBaseRad = anguloRetornoBase * PI / 180.0f;
-
-  // A bússola continua definindo o avanço para o gol.
-  float vetorX = sinf(anguloBaseRad) * DEFENSOR_VELOCIDADE_RETORNO_GOL_PWM;
-  float vetorY = cosf(anguloBaseRad) * DEFENSOR_VELOCIDADE_RETORNO_GOL_PWM;
-
-  // Durante o retorno, usa exatamente a mesma lógica de centralização lateral
-  // já usada quando o defensor está sobre a linha e perde o IR.
-  // Alvo: ultraD ~= 85 cm e ultraE ~= 85 cm, com tolerância de +/- 8 cm.
-  float correcaoCentroX = calcularCorrecaoCentroGolPorUltraX(ultrasRecentes);
-  vetorX += correcaoCentroX;
-
-  return calcularAnguloVetorDefensor(vetorX, vetorY);
-}
-
-// =============================================================================
-// AVANÇO FRONTAL TEMPORIZADO
-// =============================================================================
-// Sinalizado pelo watchdog da linha para que um avanço/alinhamento temporizado
-// antigo não seja retomado depois que a leitura voltar a atualizar.
-static bool cancelarAvancoFrontalPorWatchdogLinha = false;
-
-// Indica SOMENTE o período em que o robô está realmente executando o avanço
-// frontal temporizado. Enquanto true:
-// - perda/retenção da linha NÃO pode ativar retorno ao gol;
-// - watchdog da linha NÃO pode cortar o avanço;
-// - ao terminar o avanço, a lógica normal da linha volta automaticamente.
-static bool avancoFrontalDefensorAtivo = false;
-
-bool executarAvancoFrontalTemporizadoDefensor(unsigned long agora,
-                                              float &vetorXSuave,
-                                              float &vetorYSuave,
-                                              float &cmdGiroSuave,
-                                              bool ultrasRecentes) {
-  static unsigned long inicioDeteccaoIrFrontalMs = 0;
-  static unsigned long inicioAvancoIrFrontalMs = 0;
-  static bool avancoIrFrontalAtivo = false;
-  static bool alinhamentoIrFrontalAtivo = false;
-  static bool aguardarSaidaJanelaIrFrontal = false;
-  static float ultimoAnguloAvancoIrFrontal = 0.0f;
-
-  if (cancelarAvancoFrontalPorWatchdogLinha) {
-    inicioDeteccaoIrFrontalMs = 0;
-    inicioAvancoIrFrontalMs = 0;
-    avancoIrFrontalAtivo = false;
-    avancoFrontalDefensorAtivo = false;
-    alinhamentoIrFrontalAtivo = false;
-    aguardarSaidaJanelaIrFrontal = false;
-    ultimoAnguloAvancoIrFrontal = 0.0f;
-    cancelarAvancoFrontalPorWatchdogLinha = false;
+  if (!erroBruto.valido) {
+    resetPidLinha();
     return false;
   }
 
-  bool irFrontalAtivo = irDetectado &&
-                        (fabsf(normalizarErro180(anguloIr)) <= DEFENSOR_TOLERANCIA_IR_FRONTAL_GRAUS);
+  // A leitura nasce no referencial do ROBO. Converte para o CAMPO antes
+  // de filtrar para que o giro causado pela bussola nao contamine a linha.
+  float erroXCampo = 0.0f;
+  float erroYCampo = 0.0f;
+  vetorRoboParaCampo(
+    erroBruto.x,
+    erroBruto.y,
+    orientacaoRoboCampoGraus,
+    erroXCampo,
+    erroYCampo
+  );
 
-  if (avancoIrFrontalAtivo) {
-    if ((agora - inicioAvancoIrFrontalMs) < DEFENSOR_TEMPO_AVANCO_IR_FRONTAL_MS) {
-      avancoFrontalDefensorAtivo = true;
-      if (irDetectado) ultimoAnguloAvancoIrFrontal = normalizarAngulo360(anguloIr);
-      alinhandoAgora = false; erroAlinhamentoGraus = 0.0f;
-      resetPidBussola();
-      vetorXSuave = vetorYSuave = cmdGiroSuave = 0.0f;
-      seguirDirecaoDefensorComLimites(ultimoAnguloAvancoIrFrontal, DEFENSOR_VELOCIDADE_AVANCO_IR_FRONTAL_PWM, 0, ultrasRecentes);
-      return true;
-    }
-    avancoIrFrontalAtivo = false;
-    avancoFrontalDefensorAtivo = false;
-    inicioAvancoIrFrontalMs = inicioDeteccaoIrFrontalMs = 0;
+  float alvoX = erroXCampo;
+  float alvoY = erroYCampo;
+  bool usandoGracaUmaZona = false;
+
+  if (erroBruto.duasZonas) {
+    linhaUltimaDuasZonasMs = agora;
+  }
+  else if (linhaFiltroInicializado &&
+           linhaUltimaDuasZonasMs > 0 &&
+           (agora - linhaUltimaDuasZonasMs) <= LINHA_GRACA_PERDA_UMA_ZONA_MS) {
+    // Uma zona acabou de piscar. Nao transforma um pequeno erro fino em
+    // erro maximo instantaneamente.
+    alvoX = linhaErroXCampoFiltrado * LINHA_DECAIMENTO_GRACA;
+    alvoY = linhaErroYCampoFiltrado * LINHA_DECAIMENTO_GRACA;
+    usandoGracaUmaZona = true;
   }
 
-  if (alinhamentoIrFrontalAtivo) {
-    if (!irDetectado) {
-      alinhamentoIrFrontalAtivo = false;
-      avancoFrontalDefensorAtivo = false;
-      inicioDeteccaoIrFrontalMs = 0;
-      aguardarSaidaJanelaIrFrontal = false;
-      resetPidBussola();
-      return false;
-    }
-    float erroAlinhamentoBola = normalizarErro180(anguloIr);
-    ultimoAnguloAvancoIrFrontal = normalizarAngulo360(anguloIr);
-    erroAlinhamentoGraus = erroAlinhamentoBola;
-    if (fabsf(erroAlinhamentoBola) > DEFENSOR_TOLERANCIA_ALINHAMENTO_BOLA_GRAUS) {
-      alinhandoAgora = true;
-      vetorXSuave = vetorYSuave = cmdGiroSuave = 0.0f;
-      int cmdPidBola = calcularSaidaPidBussola(erroAlinhamentoBola);
-      int cmdGiroBola = -SINAL_GIRO_PID * cmdPidBola;
-      girarNoEixo(-cmdGiroBola); return true;
-    }
-    alinhamentoIrFrontalAtivo = false;
-    avancoIrFrontalAtivo = true;
-    avancoFrontalDefensorAtivo = true;
-    inicioAvancoIrFrontalMs = agora;
-    alinhandoAgora = false; erroAlinhamentoGraus = 0.0f;
-    resetPidBussola();
-    vetorXSuave = vetorYSuave = cmdGiroSuave = 0.0f;
-    seguirDirecaoDefensorComLimites(ultimoAnguloAvancoIrFrontal, DEFENSOR_VELOCIDADE_AVANCO_IR_FRONTAL_PWM, 0, ultrasRecentes);
-    return true;
+  const float magnitudeAlvo = calcularMagnitude(alvoX, alvoY);
+
+  // Filtro adaptativo: rapido longe, suave perto.
+  float tAlpha = magnitudeAlvo / LINHA_MAG_ALPHA_LONGE;
+  tAlpha = constrain(tAlpha, 0.0f, 1.0f);
+  float alpha = LINHA_ALPHA_PERTO +
+                tAlpha * (LINHA_ALPHA_LONGE - LINHA_ALPHA_PERTO);
+
+  // Uma unica zona persistente = deslocamento real. Resposta rapida.
+  const bool umaZonaPersistente =
+    !erroBruto.duasZonas && !usandoGracaUmaZona;
+
+  if (umaZonaPersistente) {
+    alpha = LINHA_ALPHA_LONGE;
   }
 
-  if (!irFrontalAtivo) { inicioDeteccaoIrFrontalMs = 0; aguardarSaidaJanelaIrFrontal = false; return false; }
-  if (aguardarSaidaJanelaIrFrontal) return false;
+  if (!linhaFiltroInicializado) {
+    linhaErroXCampoFiltrado = alvoX;
+    linhaErroYCampoFiltrado = alvoY;
+    linhaFiltroInicializado = true;
+  } else {
+    linhaErroXCampoFiltrado += alpha * (alvoX - linhaErroXCampoFiltrado);
+    linhaErroYCampoFiltrado += alpha * (alvoY - linhaErroYCampoFiltrado);
+  }
 
-  if (inicioDeteccaoIrFrontalMs == 0) { inicioDeteccaoIrFrontalMs = agora; return false; }
-  if ((agora - inicioDeteccaoIrFrontalMs) < DEFENSOR_TEMPO_GATILHO_IR_FRONTAL_MS) return false;
+  const float magnitudeFiltrada =
+    calcularMagnitude(linhaErroXCampoFiltrado, linhaErroYCampoFiltrado);
 
-  alinhamentoIrFrontalAtivo = true;
-  aguardarSaidaJanelaIrFrontal = true;
-  ultimoAnguloAvancoIrFrontal = normalizarAngulo360(anguloIr);
-  alinhandoAgora = false; erroAlinhamentoGraus = 0.0f;
-  resetPidBussola();
-  vetorXSuave = vetorYSuave = cmdGiroSuave = 0.0f;
-  return false;
+  pesoLinha = calcularPesoLinhaPorMagnitude(
+    magnitudeFiltrada,
+    umaZonaPersistente
+  );
+
+  // Centralizado: a linha deixa de contribuir para a translacao.
+  if (pesoLinha <= 0.0f) {
+    return false;
+  }
+
+  // Volta do referencial do CAMPO para o referencial atual do ROBO.
+  float comandoXRobo = 0.0f;
+  float comandoYRobo = 0.0f;
+  vetorCampoParaRobo(
+    linhaErroXCampoFiltrado,
+    linhaErroYCampoFiltrado,
+    orientacaoRoboCampoGraus,
+    comandoXRobo,
+    comandoYRobo
+  );
+
+  const float magnitudeComandoRobo =
+    calcularMagnitude(comandoXRobo, comandoYRobo);
+
+  if (magnitudeComandoRobo < 0.00001f) {
+    pesoLinha = 0.0f;
+    return false;
+  }
+
+  anguloMovimento = calcularAnguloDoVetor(
+    comandoXRobo,
+    comandoYRobo
+  );
+
+  if (umaZonaPersistente) {
+    velocidadePwm = LINHA_PWM_MAX;
+  } else {
+    velocidadePwm = calcularVelocidadeLinhaPorMagnitude(
+      magnitudeFiltrada
+    );
+  }
+
+  return velocidadePwm > 0;
 }
 
 // =============================================================================
-// ESTRATÉGIA DO DEFENSOR
+// CONTROLE DA BOLA / IR
 // =============================================================================
-void defensor() {
+//
+// Novo algoritmo pedido:
+//   bola entre   0 e 180 graus -> vetor D = 90 graus
+//   bola entre 181 e 360 graus -> vetor D = 270 graus
+//
+// O angulo bruto serve apenas para decidir o LADO da bola.
+// A fusao posterior usa esse vetor D junto ao vetor W da linha.
+// =============================================================================
+
+static bool obterDirecaoMovimentoBola(float &anguloMovimentoBola) {
   float anguloBola = -1.0f;
-  bool bolaDisponivel = obterAnguloIrDisponivel(anguloBola);
 
-  static float vetorXSuave = 0.0f;
-  static float vetorYSuave = 0.0f;
-  static float cmdGiroSuave = 0.0f;
-  static bool retornoGolAtivo = false;
-  static unsigned long inicioSemBolaMs = 0;
-
-  bool temZonaAAtual = linhaZonaAValida && (anguloLinhaZonaA >= 0.0f);
-  bool temZonaBAtual = linhaZonaBValida && (anguloLinhaZonaB >= 0.0f);
-  float anguloZonaAUsado = temZonaAAtual ? anguloLinhaZonaA : -1.0f;
-  float anguloZonaBUsado = temZonaBAtual ? anguloLinhaZonaB : -1.0f;
-
-  unsigned long agora = millis();
-
-  bool temZonaARetida =
-    (!temZonaAAtual) &&
-    (ultimoAnguloLinhaZonaAValido >= 0.0f) &&
-    ((agora - ultimoRxLinhaZonaAMs) <= DEFENSOR_RETENCAO_LEITURA_LINHA_MS);
-
-  bool temZonaBRetida =
-    (!temZonaBAtual) &&
-    (ultimoAnguloLinhaZonaBValido >= 0.0f) &&
-    ((agora - ultimoRxLinhaZonaBMs) <= DEFENSOR_RETENCAO_LEITURA_LINHA_MS);
-
-  if (temZonaARetida) anguloZonaAUsado = ultimoAnguloLinhaZonaAValido;
-  if (temZonaBRetida) anguloZonaBUsado = ultimoAnguloLinhaZonaBValido;
-
-  bool temZonaA = temZonaAAtual || temZonaARetida;
-  bool temZonaB = temZonaBAtual || temZonaBRetida;
-
-  alinhandoAgora = false;
-  fugindoLinhaAgora = false;
-  erroAlinhamentoGraus = 0.0f;
-
-  const bool centroLinhaValido = temZonaA && temZonaB;
-  const bool algumaLinhaValida = temZonaA || temZonaB;
-  const bool ultrasRecentes =
-    ultrasValidos &&
-    (ultimoRxUltraMs > 0) &&
-    ((agora - ultimoRxUltraMs) <= TIMEOUT_ULTRA_MS);
-
-  if (bolaDisponivel) {
-    inicioSemBolaMs = 0;
-  } else if (inicioSemBolaMs == 0) {
-    inicioSemBolaMs = agora;
+  if (!obterAnguloIrDisponivel(anguloBola)) {
+    return false;
   }
 
-  bool semBolaTempoSuficiente =
-    !bolaDisponivel &&
-    (inicioSemBolaMs > 0) &&
-    ((agora - inicioSemBolaMs) >= DEFENSOR_TEMPO_SEM_BOLA_CENTRO_MS);
-
-  bool linhaAlinhadaParaCentroUltra = false;
-
-  if (temZonaA && temZonaB) {
-    float ang = 0.0f;
-    float mag = 0.0f;
-    calcularVetorPontoMedioLinha(
-      anguloZonaAUsado,
-      anguloZonaBUsado,
-      ang,
-      mag
-    );
-    linhaAlinhadaParaCentroUltra =
-      (mag <= DEFENSOR_MAGNITUDE_MINIMA_PARAR);
-  }
-  else if (temZonaA) {
-    float erroA = fabsf(
-      normalizarErro180(
-        normalizarAngulo360(anguloZonaAUsado) -
-        DEFENSOR_REFERENCIA_ZONA_A
-      )
-    );
-    linhaAlinhadaParaCentroUltra =
-      (erroA <= DEFENSOR_TOL_LINHA_PARA_CENTRO_ULTRA_GRAUS);
-  }
-  else if (temZonaB) {
-    float erroB = fabsf(
-      normalizarErro180(
-        normalizarAngulo360(anguloZonaBUsado) -
-        DEFENSOR_REFERENCIA_ZONA_B
-      )
-    );
-    linhaAlinhadaParaCentroUltra =
-      (erroB <= DEFENSOR_TOL_LINHA_PARA_CENTRO_ULTRA_GRAUS);
+  // Preserva explicitamente o caso 360 graus conforme a regra pedida.
+  if (anguloBola >= 0.0f && anguloBola <= 180.0f) {
+    anguloMovimentoBola = 90.0f;
+    return true;
   }
 
-  const bool suspenderLogicaLinhaPorAvanco =
-    avancoFrontalDefensorAtivo;
-
-  bool zonaASemAtualizacao =
-    temZonaAAtual &&
-    (ultimoRxLinhaZonaAMs > 0) &&
-    ((agora - ultimoRxLinhaZonaAMs) >
-      DEFENSOR_TIMEOUT_ATUALIZACAO_LINHA_MS);
-
-  bool zonaBSemAtualizacao =
-    temZonaBAtual &&
-    (ultimoRxLinhaZonaBMs > 0) &&
-    ((agora - ultimoRxLinhaZonaBMs) >
-      DEFENSOR_TIMEOUT_ATUALIZACAO_LINHA_MS);
-
-  bool timeoutAtualizacaoLinha =
-    zonaASemAtualizacao || zonaBSemAtualizacao;
-
-  bool exatamenteCentroLinha = false;
-
-  if (centroLinhaValido) {
-    float a = 0.0f;
-    float m = 0.0f;
-    calcularVetorPontoMedioLinha(
-      anguloZonaAUsado,
-      anguloZonaBUsado,
-      a,
-      m
-    );
-    exatamenteCentroLinha =
-      (m <= DEFENSOR_MAGNITUDE_MINIMA_PARAR);
+  if (anguloBola > 180.0f && anguloBola <= 360.0f) {
+    anguloMovimentoBola = 270.0f;
+    return true;
   }
 
-  bool exatamenteCentroGol =
-    ultrasRecentes &&
-    (ultraDcm >= 0.0f) &&
-    (ultraEcm >= 0.0f) &&
-    (fabsf(ultraDcm - DEFENSOR_CENTRO_GOL_LATERAL_CM)
-      <= DEFENSOR_CENTRO_GOL_TOLERANCIA_CM) &&
-    (fabsf(ultraEcm - DEFENSOR_CENTRO_GOL_LATERAL_CM)
-      <= DEFENSOR_CENTRO_GOL_TOLERANCIA_CM);
+  // Fallback para qualquer valor fora da faixa nominal.
+  const float a = normalizar360Defensor(anguloBola);
+  anguloMovimentoBola = (a <= 180.0f) ? 90.0f : 270.0f;
+  return true;
+}
 
-  bool ultraPedeCentro =
-    ultrasRecentes &&
-    (
-      ((ultraDcm >= 0.0f) &&
-       (ultraDcm < DEFENSOR_ULTRA_CENTRO_GATILHO_CM))
-      ||
-      ((ultraEcm >= 0.0f) &&
-       (ultraEcm < DEFENSOR_ULTRA_CENTRO_GATILHO_CM))
+// =============================================================================
+// NOVA FUSAO VETORIAL: F = W + SIG * D
+// =============================================================================
+//
+// W = vetor atual calculado pela LINHA.
+//     A direcao e anguloLinha e sua intensidade real e velocidadeLinha.
+//
+// D = vetor lateral definido pela BOLA.
+//     0..180 -> 90 graus
+//     181..360 -> 270 graus
+//     intensidade base = BOLA_VELOCIDADE_PWM
+//
+// SIG = SIG_BOLA_DEFENSOR, ajustado manualmente.
+//
+// IMPORTANTE:
+// Nao fazemos "anguloLinha + SIG*anguloBola" porque angulos nao podem ser
+// somados diretamente. Somamos as componentes X/Y dos dois vetores:
+//
+//   Fx = Wx + SIG*Dx
+//   Fy = Wy + SIG*Dy
+//
+// e somente no final convertemos F de volta para um angulo.
+// =============================================================================
+
+static bool combinarLinhaEBolaNovo(float anguloLinha,
+                                   int velocidadeLinha,
+                                   bool linhaDisponivel,
+                                   float anguloBola,
+                                   int velocidadeBola,
+                                   bool bolaDisponivel,
+                                   float sigBola,
+                                   float &anguloFinal,
+                                   int &velocidadeFinal) {
+  anguloFinal = 0.0f;
+  velocidadeFinal = 0;
+
+  if (!linhaDisponivel && !bolaDisponivel) {
+    return false;
+  }
+
+  // Sem bola: preserva EXATAMENTE o comando atual da linha.
+  if (linhaDisponivel && !bolaDisponivel) {
+    anguloFinal = normalizar360Defensor(anguloLinha);
+    velocidadeFinal = constrain(velocidadeLinha, 0, 255);
+    return velocidadeFinal > 0;
+  }
+
+  // Sem linha: segue a bola normalmente. SIG serve como relacao linha/bola,
+  // portanto nao reduz a velocidade quando nao existe vetor W para competir.
+  if (!linhaDisponivel && bolaDisponivel) {
+    anguloFinal = normalizar360Defensor(anguloBola);
+    velocidadeFinal = constrain(velocidadeBola, 0, 255);
+    return velocidadeFinal > 0;
+  }
+
+  // Linha + bola presentes.
+  const float sig = (sigBola < 0.0f) ? 0.0f : sigBola;
+
+  const float radLinha =
+    normalizar360Defensor(anguloLinha) * PI / 180.0f;
+
+  const float radBola =
+    normalizar360Defensor(anguloBola) * PI / 180.0f;
+
+  // W usa a intensidade que o controlador da linha JA calculou.
+  const float forcaLinha =
+    constrain((float)velocidadeLinha, 0.0f, 255.0f);
+
+  // D recebe a intensidade base da bola multiplicada por SIG.
+  // Nao limitamos a 255 antes da soma, pois SIG e justamente a autoridade
+  // relativa da bola. Limitamos apenas o vetor FINAL enviado aos motores.
+  const float forcaBola =
+    constrain((float)velocidadeBola, 0.0f, 255.0f) * sig;
+
+  const float xLinha = sinf(radLinha) * forcaLinha;
+  const float yLinha = cosf(radLinha) * forcaLinha;
+
+  const float xBola = sinf(radBola) * forcaBola;
+  const float yBola = cosf(radBola) * forcaBola;
+
+  const float xFinal = xLinha + xBola;
+  const float yFinal = yLinha + yBola;
+
+  const float magnitudeFinal =
+    calcularMagnitude(xFinal, yFinal);
+
+  // Se dois vetores opostos se anularem quase perfeitamente, nao escolhemos
+  // uma direcao aleatoria por ruido numerico.
+  if (magnitudeFinal < 0.5f) {
+    return false;
+  }
+
+  anguloFinal =
+    calcularAnguloDoVetor(xFinal, yFinal);
+
+  velocidadeFinal =
+    (int)roundf(
+      constrain(magnitudeFinal, 0.0f, 255.0f)
     );
 
-  bool podeIgnorarWatchdogParaUltra =
-    semBolaTempoSuficiente &&
-    algumaLinhaValida &&
-    linhaAlinhadaParaCentroUltra &&
-    ultraPedeCentro &&
-    !retornoGolAtivo;
+  return velocidadeFinal > 0;
+}
 
-  if (!suspenderLogicaLinhaPorAvanco &&
-      timeoutAtualizacaoLinha &&
-      !podeIgnorarWatchdogParaUltra &&
-      !(exatamenteCentroLinha && exatamenteCentroGol)) {
+// =============================================================================
+// PD DA BUSSOLA
+// =============================================================================
 
-    cancelarAvancoFrontalPorWatchdogLinha = true;
-    vetorXSuave = 0.0f;
-    vetorYSuave = 0.0f;
-    cmdGiroSuave = 0.0f;
-    resetPidLinha();
+float PIDZIMBUSSOLANOVINHA_DEFENSOR(float erroBussola) {
+  const unsigned long agora = millis();
+
+  if (fabsf(erroBussola) <= BUSSOLA_DEADZONE_GRAUS) {
+    bussolaErroAnterior = erroBussola;
+    bussolaUltimoPidMs = agora;
+    bussolaPidInicializado = true;
+    return 0.0f;
+  }
+
+  float derivada = 0.0f;
+
+  if (bussolaPidInicializado && bussolaUltimoPidMs > 0) {
+    float dt = (agora - bussolaUltimoPidMs) / 1000.0f;
+
+    if (dt >= 0.002f && dt <= 0.10f) {
+      derivada = (erroBussola - bussolaErroAnterior) / dt;
+    }
+  }
+
+  bussolaErroAnterior = erroBussola;
+  bussolaUltimoPidMs = agora;
+  bussolaPidInicializado = true;
+
+  const float termoD = constrain(
+    BUSSOLA_KD * derivada,
+    -BUSSOLA_D_MAX,
+    BUSSOLA_D_MAX
+  );
+
+  return (BUSSOLA_KP * erroBussola) + termoD;
+}
+
+static int calcularComandoGiroBussola(float erroBussola) {
+  return constrain(
+    (int)roundf(
+      -PIDZIMBUSSOLANOVINHA_DEFENSOR(erroBussola)
+    ),
+    -BUSSOLA_SAIDA_MAX,
+    BUSSOLA_SAIDA_MAX
+  );
+}
+
+// =============================================================================
+// LOOP DO DEFENSOR - LINHA + BOLA + BUSSOLA
+// =============================================================================
+
+void defensor() {
+  const unsigned long agora = millis();
+
+  // ---------------------------------------------------------------------------
+  // 1. BUSSOLA: SEMPRE ATIVA
+  // ---------------------------------------------------------------------------
+  if (!bussolaTemReferenciaValida()) {
     resetPidZimBussola();
+    resetPidLinha();
     girarNoEixo(0);
     return;
   }
 
-  if (suspenderLogicaLinhaPorAvanco) {
-    retornoGolAtivo = false;
-  } else {
-    if (!algumaLinhaValida) {
-      retornoGolAtivo = true;
-    }
+  const float erroBussola = calcularErroReferenciaBussola();
+  const int cmdGiroBussola = calcularComandoGiroBussola(erroBussola);
 
-    if (retornoGolAtivo && algumaLinhaValida) {
-      retornoGolAtivo = false;
-      resetPidLinha();
-    }
-  }
+  const float orientacaoRoboCampoGraus =
+    BUSSOLA_SINAL_REFERENCIAL_LINHA * erroBussola;
 
-  float erroBussola = calcularErroReferenciaBussola();
+  // ---------------------------------------------------------------------------
+  // 2. LE A LINHA
+  // ---------------------------------------------------------------------------
+  bool zonaAValida = false;
+  bool zonaBValida = false;
+  float anguloA = -1.0f;
+  float anguloB = -1.0f;
 
-  int cmdGiroBussola =
-    constrain(
-      (int)roundf(
-        -PIDZIMBUSSOLANOVINHA_DEFENSOR(erroBussola)
-      ),
-      -255,
-      255
+  obterZonasLinha(
+    zonaAValida,
+    anguloA,
+    zonaBValida,
+    anguloB,
+    agora
+  );
+
+  const ErroLinhaVetorial erroLinha =
+    calcularErroLinhaVetorial(
+      zonaAValida,
+      anguloA,
+      zonaBValida,
+      anguloB
     );
 
-  // 1) RETORNO TEM PRIORIDADE TOTAL
-  if (retornoGolAtivo) {
-    resetPidLinha();
+  // ---------------------------------------------------------------------------
+  // 3. CALCULA VETOR / PESO DA LINHA
+  // ---------------------------------------------------------------------------
+  float anguloLinha = 0.0f;
+  int velocidadeLinha = 0;
+  float pesoLinha = 0.0f; // mantido pelo controlador da linha; nao e o SIG da bola
 
-    if (bussolaTemReferenciaValida()) {
-      float anguloRetornoBase =
-        calcularAnguloRetornoGolPorBussola();
+  const bool linhaDisponivel =
+    calcularComandoLinha(
+      erroLinha,
+      orientacaoRoboCampoGraus,
+      agora,
+      anguloLinha,
+      velocidadeLinha,
+      pesoLinha
+    );
 
-      float anguloRetornoFinal =
-        comporAnguloRetornoBussolaComUltraLaterais(
-          anguloRetornoBase,
-          ultrasRecentes
-        );
+  // ---------------------------------------------------------------------------
+  // 4. CALCULA VETOR DA BOLA
+  // ---------------------------------------------------------------------------
+  float anguloBola = 0.0f;
+  const bool bolaDisponivel =
+    obterDirecaoMovimentoBola(anguloBola);
 
-      seguirDirecaoDefensorComLimites(
-        anguloRetornoFinal,
-        (int)DEFENSOR_VELOCIDADE_RETORNO_GOL_PWM,
-        cmdGiroBussola,
-        ultrasRecentes
-      );
-    } else {
-      girarNoEixo(cmdGiroBussola);
-    }
+  // ---------------------------------------------------------------------------
+  // 5. FUSAO NOVA: F = W + SIG * D
+  // ---------------------------------------------------------------------------
+  // Quando linha + bola existem:
+  //   F = W + SIG_BOLA_DEFENSOR * D
+  //
+  // Maior SIG -> resultado puxado mais para a bola.
+  // Menor SIG -> resultado puxado mais para a linha.
+  //
+  // Somente linha -> preserva o comando da linha.
+  // Somente bola  -> segue a bola.
+  // Nenhum        -> somente bussola.
+  float anguloFinal = 0.0f;
+  int velocidadeFinal = 0;
 
+  const bool temTranslacao =
+    combinarLinhaEBolaNovo(
+      anguloLinha,
+      velocidadeLinha,
+      linhaDisponivel,
+      anguloBola,
+      BOLA_VELOCIDADE_PWM,
+      bolaDisponivel,
+      SIG_BOLA_DEFENSOR,
+      anguloFinal,
+      velocidadeFinal
+    );
+
+  if (temTranslacao) {
+    seguirDirecaoComGiroLaterais(
+      anguloFinal,
+      velocidadeFinal,
+      cmdGiroBussola
+    );
     return;
   }
 
-  // 2) AVANÇO FRONTAL
-  if (executarAvancoFrontalTemporizadoDefensor(
-        agora,
-        vetorXSuave,
-        vetorYSuave,
-        cmdGiroSuave,
-        ultrasRecentes)) {
-    return;
-  }
-
-  bool bolaTraseira =
-    bolaDisponivel &&
-    bolaEmSetorTraseiro(anguloBola);
-
-  // 3) BOLA TEM PRIORIDADE SOBRE CENTRALIZAÇÃO ULTRA
-  if (bolaDisponivel && !bolaTraseira) {
-
-    if (centroLinhaValido) {
-      float anguloCorrecaoLinha = 0.0f;
-      float magnitudeErroLinha = 0.0f;
-
-      calcularVetorPontoMedioLinha(
-        anguloZonaAUsado,
-        anguloZonaBUsado,
-        anguloCorrecaoLinha,
-        magnitudeErroLinha
-      );
-
-      float direcaoObrigatoria =
-        calcularDirecaoObrigatoriaBolaDefensor(anguloBola);
-
-      float anguloResultante =
-        calcularAnguloMistoDefesa(
-          direcaoObrigatoria,
-          anguloCorrecaoLinha,
-          magnitudeErroLinha
-        );
-
-      int velocidadeBola =
-        calcularVelocidadeLateralPorIr(anguloBola);
-
-      int velocidadePwm =
-        (magnitudeErroLinha > DEFENSOR_MAGNITUDE_MINIMA_PARAR)
-        ? (int)constrain(
-            DEFENSOR_VELOCIDADE_MIN_CORRECAO_PWM +
-              calcularSaidaPidLinha(
-                magnitudeErroLinha,
-                agora
-              ),
-            DEFENSOR_VELOCIDADE_MIN_CORRECAO_PWM,
-            velocidadeBola
-          )
-        : velocidadeBola;
-
-      seguirDirecaoDefensorComLimites(
-        anguloResultante,
-        velocidadePwm,
-        cmdGiroBussola,
-        ultrasRecentes
-      );
-      return;
-    }
-
-    if (algumaLinhaValida) {
-      resetPidLinha();
-
-      float direcaoObrigatoria =
-        calcularDirecaoObrigatoriaBolaDefensor(anguloBola);
-
-      int velocidadeBola =
-        calcularVelocidadeLateralPorIr(anguloBola);
-
-      seguirDirecaoDefensorComLimites(
-        direcaoObrigatoria,
-        velocidadeBola,
-        cmdGiroBussola,
-        ultrasRecentes
-      );
-      return;
-    }
-  }
-
-  // 4) SE A LINHA PRECISA CORRIGIR, IGNORA ULTRA
-  if (centroLinhaValido) {
-    float anguloCorrecaoLinha = 0.0f;
-    float magnitudeErroLinha = 0.0f;
-
-    calcularVetorPontoMedioLinha(
-      anguloZonaAUsado,
-      anguloZonaBUsado,
-      anguloCorrecaoLinha,
-      magnitudeErroLinha
-    );
-
-    if (magnitudeErroLinha > DEFENSOR_MAGNITUDE_MINIMA_PARAR) {
-      float saidaPidLinha =
-        calcularSaidaPidLinha(
-          magnitudeErroLinha,
-          agora
-        );
-
-      int velocidadeLinha =
-        (int)constrain(
-          DEFENSOR_VELOCIDADE_MIN_CORRECAO_PWM +
-            saidaPidLinha,
-          DEFENSOR_VELOCIDADE_MIN_CORRECAO_PWM,
-          DEFENSOR_VELOCIDADE_MAX_CORRECAO_PWM
-        );
-
-      seguirDirecaoDefensorComLimites(
-        anguloCorrecaoLinha,
-        velocidadeLinha,
-        cmdGiroBussola,
-        ultrasRecentes
-      );
-      return;
-    }
-  }
-
-  // 5) CENTRALIZAÇÃO ULTRA SOMENTE EM REPOUSO DEFENSIVO
-  bool podeCentralizarPorUltra =
-    !bolaDisponivel &&
-    semBolaTempoSuficiente &&
-    algumaLinhaValida &&
-    linhaAlinhadaParaCentroUltra &&
-    ultrasRecentes;
-
-  if (podeCentralizarPorUltra) {
-
-    if ((ultraDcm >= 0.0f) &&
-        (ultraDcm < DEFENSOR_ULTRA_CENTRO_GATILHO_CM)) {
-
-      resetPidLinha();
-
-      seguirDirecaoComGiroLaterais(
-        270.0f,
-        DEFENSOR_ULTRA_CENTRO_VELOCIDADE_PWM,
-        cmdGiroBussola
-      );
-      return;
-    }
-
-    if ((ultraEcm >= 0.0f) &&
-        (ultraEcm < DEFENSOR_ULTRA_CENTRO_GATILHO_CM)) {
-
-      resetPidLinha();
-
-      seguirDirecaoComGiroLaterais(
-        90.0f,
-        DEFENSOR_ULTRA_CENTRO_VELOCIDADE_PWM,
-        cmdGiroBussola
-      );
-      return;
-    }
-  }
-
-  resetPidLinha();
+  // Sem vetor translacional: a bussola continua obrigatoriamente alinhando.
   girarNoEixo(cmdGiroBussola);
 }

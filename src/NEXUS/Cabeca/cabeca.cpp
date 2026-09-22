@@ -15,7 +15,7 @@
 
 // ===================== ESP-NOW - ALTERE O MAC AQUI =====================
 // MAC da Cabeca do outro robo (CRONOS). Use o ambiente descobridor_mac para encontrar.
-#define ESPNOW_TARGET_MAC_STR "1C:CB:D4:46:CB:FC"
+#define ESPNOW_TARGET_MAC_STR "AC:A7:04:2B:9B:60"
 //"1C:CB:D4:46:CB:FC" NEXUS
 //"AC:A7:04:2B:9B:60" CRONOS
 // =======================================================================
@@ -49,23 +49,23 @@
 const uint8_t QMC5883P_ADDR = 0x2C;
 
  
-/*
+
 // ----- CALIBRAÇÃO DO NEXUS -----
 // Valores de calibração validados no teste dedicado do NEXUS.
 const float xOffset = -801.50;
 const float yOffset = 592.00;
 const float xScale  = 1.007877;
 const float yScale  = 0.992246;
-*/
 
 
+/*
 // ----- CALIBRAÇÃO DO CRONOS -----
 // Valores de calibracao validados no teste dedicado do CRONOS.
 const float xOffset = 711.50;
 const float yOffset = -1624.00;
 const float xScale  = 1.013703;
 const float yScale  = 0.986663;
-
+*/
 
 
 int head = 0;
@@ -406,7 +406,7 @@ void prepararTrocaPapelPe() {
 }
 
 const unsigned long INTERVALO_ENVIO_IR_MS = 120;
-const unsigned long INTERVALO_ENVIO_BUSSOLA_MS = 120;
+const unsigned long INTERVALO_ENVIO_BUSSOLA_MS = 20;
 const unsigned long INTERVALO_ENVIO_GOL_MS = 120;
 const unsigned long INTERVALO_ENVIO_LINHA_MS = 2;
 const unsigned long INTERVALO_ENVIO_INT_MS = 120;

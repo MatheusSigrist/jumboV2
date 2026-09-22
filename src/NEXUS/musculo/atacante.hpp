@@ -161,7 +161,7 @@ extern const float ALPHA_MOVIMENTO_ALVO;
 
 extern const float PASSO_MAX_MOVIMENTO_ALVO_GRAUS;
 
-
+extern uint16_t cameraGolSelecionadoDist;
 // ------------------------------------------------------------
 // Estado interno do PID de movimento
 // ------------------------------------------------------------
