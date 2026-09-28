@@ -19,6 +19,23 @@ constexpr float DEFENSOR_DEADZONE_VETOR = 6.0f;
 constexpr float DEFENSOR_DEADZONE_GIRO  = 5.0f;
 constexpr float DEFENSOR_SUAVIZACAO_VETOR = 0.45f;
 constexpr float DEFENSOR_SUAVIZACAO_GIRO  = 0.35f;
+// -----------------------------------------------------------------------------
+// GERENCIADOR DE ACAO PROGRESSIVA
+// -----------------------------------------------------------------------------
+// Toda translacao do defensor passa por este filtro antes de chegar aos motores.
+// A estrategia continua podendo mudar o alvo instantaneamente, mas a acao fisica
+// muda de forma progressiva em X/Y e no giro. As taxas sao por segundo, portanto
+// o comportamento fica praticamente independente da frequencia do loop.
+constexpr float DEFENSOR_FILTRO_ALVO_TAU_MS          = 45.0f;
+constexpr float DEFENSOR_FILTRO_GIRO_TAU_MS          = 35.0f;
+constexpr float DEFENSOR_RAMPA_ACEL_PWM_S            = 1800.0f;
+constexpr float DEFENSOR_RAMPA_FREIO_PWM_S           = 3000.0f;
+constexpr float DEFENSOR_RAMPA_INVERSAO_PWM_S        = 2400.0f;
+constexpr float DEFENSOR_RAMPA_GIRO_PWM_S            = 3600.0f;
+constexpr float DEFENSOR_RAMPA_RAPIDA_PWM_S          = 7600.0f;
+constexpr float DEFENSOR_DT_MIN_S                     = 0.001f;
+constexpr float DEFENSOR_DT_MAX_S                     = 0.050f;
+constexpr float DEFENSOR_SAIDA_ZERO_PWM               = 4.0f;
 
 // Velocidades base
 constexpr float DEFENSOR_VELOCIDADE_MIN_PWM            = 180.0f;
@@ -56,6 +73,9 @@ constexpr float DEFENSOR_ULTRA_LATERAL_CRITICO_CM     = 30.0f;
 constexpr float DEFENSOR_ULTRA_LATERAL_CONFIRMADOR_CM = 120.0f;
 constexpr float DEFENSOR_ULTRA_FRENTE_LIMITE_CM       = 40.0f;
 constexpr float DEFENSOR_ULTRA_TRAS_LIMITE_CM         = 25.0f;
+// O ultrassonico traseiro so pode atuar quando o robo estiver proximo
+// de pelo menos uma das laterais. Se D e E forem >= 55 cm, o T e ignorado.
+constexpr float DEFENSOR_ULTRA_TRAS_HABILITA_LATERAL_CM = 55.0f;
 constexpr float DEFENSOR_ULTRA_FRONTAL_CONFIRMADOR_CM = 100.0f;
 constexpr float DEFENSOR_ULTRA_PROFUNDIDADE_MAX_CM    = 60.0f;
 constexpr float DEFENSOR_ULTRA_PROFUNDIDADE_MIN_CM    = 10.0f;
@@ -119,7 +139,6 @@ constexpr float DEFENSOR_LINHA_ERRO_INICIO_CONTENCAO = 0.25f;
 constexpr float DEFENSOR_LINHA_ERRO_FORTE_CONTENCAO  = 0.70f;
 constexpr float DEFENSOR_PESO_LINHA_MIN_COM_BOLA     = 0.08f;
 constexpr float DEFENSOR_PESO_LINHA_MAX_COM_BOLA     = 0.2f;
-
 
 // Robustez da leitura da linha
 // Retém a última leitura válida por um intervalo curto para absorver perdas pontuais.
@@ -328,6 +347,29 @@ int calcularVelocidadeLateralPorIr(float anguloIrBruto) {
 // - perto do centro      -> limite traseiro maior
 //
 // Não usa estado persistente. O valor é recalculado a cada ciclo.
+bool ultraTrasHabilitadoPelasLaterais(bool ultrasRecentes) {
+  if (!ultrasRecentes) return false;
+
+  const bool direitaHabilita =
+    (ultraDcm >= 0.0f) &&
+    (ultraDcm < DEFENSOR_ULTRA_TRAS_HABILITA_LATERAL_CM);
+
+  const bool esquerdaHabilita =
+    (ultraEcm >= 0.0f) &&
+    (ultraEcm < DEFENSOR_ULTRA_TRAS_HABILITA_LATERAL_CM);
+
+  // Nova condicao: se faltar a Zona A OU a Zona B, o ultra traseiro
+  // tambem fica autorizado a atuar, mesmo com D/E acima de 55 cm.
+  const bool zonaAAusente =
+    (!linhaZonaAValida) || (anguloLinhaZonaA < 0.0f);
+
+  const bool zonaBAusente =
+    (!linhaZonaBValida) || (anguloLinhaZonaB < 0.0f);
+
+  const bool linhaIncompleta = zonaAAusente || zonaBAusente;
+
+  return direitaHabilita || esquerdaHabilita || linhaIncompleta;
+}
 void calcularLimitesTraseirosDinamicos(bool ultrasRecentes,
                                        float &limiteTrasCm,
                                        float &criticoTrasCm) {
@@ -365,7 +407,6 @@ void calcularLimitesTraseirosDinamicos(bool ultrasRecentes,
   }
 }
 
-
 float calcularForcaCorrecaoLimiteUltra(float distanciaCm,
                                        float limiteCm,
                                        float criticoCm) {
@@ -391,7 +432,6 @@ float calcularForcaCorrecaoLimiteUltra(float distanciaCm,
          t * (DEFENSOR_CORRECAO_LIMITE_MAX_PWM -
               DEFENSOR_CORRECAO_LIMITE_MIN_PWM);
 }
-
 
 // Aplica os limites diretamente nas componentes X/Y do comando.
 //
@@ -422,10 +462,14 @@ void aplicarLimitesUltraAoVetor(float &vetorX,
     criticoTrasAtualCm
   );
 
+  // O traseiro so participa quando D OU E estiver abaixo de 55 cm.
+  // Se os dois laterais estiverem >= 55 cm, o T nao altera o vetor.
+  const bool ultraTrasPermitido =
+    ultraTrasHabilitadoPelasLaterais(ultrasRecentes);
   bool limiteTrasAtivo =
+    ultraTrasPermitido &&
     (ultraTcm >= 0.0f) &&
     (ultraTcm <= limiteTrasAtualCm);
-
 
   // -------------------------------------------------------------------
   // LATERAIS
@@ -476,7 +520,6 @@ void aplicarLimitesUltraAoVetor(float &vetorX,
     }
   }
 
-
   // -------------------------------------------------------------------
   // TRASEIRO
   // -------------------------------------------------------------------
@@ -500,53 +543,206 @@ void aplicarLimitesUltraAoVetor(float &vetorX,
   }
 }
 
-
+// =============================================================================
+// GERENCIADOR CENTRAL DE MOVIMENTO PROGRESSIVO
+// =============================================================================
+//
+// Fluxo:
+//   estrategia -> vetor alvo -> limites dos ultras -> filtro -> rampa -> motores
+//
+// O filtro remove mudancas muito curtas do alvo. A rampa impede saltos bruscos de
+// velocidade e, principalmente, inversoes instantaneas (+PWM -> -PWM).
+//
+// Em situacao critica de ultrassom a resposta fica bem mais rapida, mas ainda
+// passa pela mesma saida centralizada.
+struct EstadoMovimentoProgressivoDefensor {
+  float alvoFiltradoX = 0.0f;
+  float alvoFiltradoY = 0.0f;
+  float saidaX = 0.0f;
+  float saidaY = 0.0f;
+  float giroFiltrado = 0.0f;
+  float giroSaida = 0.0f;
+  unsigned long ultimoMs = 0;
+  bool inicializado = false;
+};
+static EstadoMovimentoProgressivoDefensor movimentoProgressivoDefensor;
+void resetMovimentoProgressivoDefensor() {
+  movimentoProgressivoDefensor.alvoFiltradoX = 0.0f;
+  movimentoProgressivoDefensor.alvoFiltradoY = 0.0f;
+  movimentoProgressivoDefensor.saidaX = 0.0f;
+  movimentoProgressivoDefensor.saidaY = 0.0f;
+  movimentoProgressivoDefensor.giroFiltrado = 0.0f;
+  movimentoProgressivoDefensor.giroSaida = 0.0f;
+  movimentoProgressivoDefensor.ultimoMs = 0;
+  movimentoProgressivoDefensor.inicializado = false;
+}
+float calcularAlphaFiltroDefensor(float dt, float tauMs) {
+  float tauS = tauMs / 1000.0f;
+  if (tauS <= 0.0001f) return 1.0f;
+  return constrain(dt / (tauS + dt), 0.0f, 1.0f);
+}
+float aplicarRampaProgressivaDefensor(float atual,
+                                      float alvo,
+                                      float dt,
+                                      bool respostaRapida) {
+  float erro = alvo - atual;
+  if (fabsf(erro) <= 0.001f) return alvo;
+  float taxa = DEFENSOR_RAMPA_ACEL_PWM_S;
+  if (respostaRapida) {
+    taxa = DEFENSOR_RAMPA_RAPIDA_PWM_S;
+  } else {
+    bool invertendo =
+      (fabsf(atual) > DEFENSOR_SAIDA_ZERO_PWM) &&
+      (fabsf(alvo)  > DEFENSOR_SAIDA_ZERO_PWM) &&
+      ((atual > 0.0f && alvo < 0.0f) ||
+       (atual < 0.0f && alvo > 0.0f));
+    if (invertendo) {
+      taxa = DEFENSOR_RAMPA_INVERSAO_PWM_S;
+    } else if (fabsf(alvo) < fabsf(atual)) {
+      taxa = DEFENSOR_RAMPA_FREIO_PWM_S;
+    }
+  }
+  float deltaMax = taxa * dt;
+  erro = constrain(erro, -deltaMax, deltaMax);
+  return atual + erro;
+}
+bool ultraEmCondicaoCriticaDefensor(bool ultrasRecentes) {
+  if (!ultrasRecentes) return false;
+  if ((ultraDcm >= 0.0f && ultraDcm <= DEFENSOR_ULTRA_LATERAL_CRITICO_CM) ||
+      (ultraEcm >= 0.0f && ultraEcm <= DEFENSOR_ULTRA_LATERAL_CRITICO_CM)) {
+    return true;
+  }
+  // Mesmo a resposta rapida do traseiro respeita a mesma condicao:
+  // T so existe para a estrategia se D OU E estiver abaixo de 55 cm.
+  if (!ultraTrasHabilitadoPelasLaterais(ultrasRecentes)) {
+    return false;
+  }
+  float limiteTras = DEFENSOR_ULTRA_TRAS_LIMITE_CM;
+  float criticoTras = DEFENSOR_TRAS_CRITICO_BORDA_CM;
+  calcularLimitesTraseirosDinamicos(ultrasRecentes, limiteTras, criticoTras);
+  return (ultraTcm >= 0.0f && ultraTcm <= criticoTras);
+}
+void executarMovimentoProgressivoDefensor(float alvoX,
+                                          float alvoY,
+                                          int cmdGiro,
+                                          bool respostaRapida = false) {
+  unsigned long agora = millis();
+  float dt = 0.02f;
+  if (movimentoProgressivoDefensor.inicializado &&
+      movimentoProgressivoDefensor.ultimoMs > 0) {
+    dt = (agora - movimentoProgressivoDefensor.ultimoMs) / 1000.0f;
+  }
+  dt = constrain(dt, DEFENSOR_DT_MIN_S, DEFENSOR_DT_MAX_S);
+  movimentoProgressivoDefensor.ultimoMs = agora;
+  if (!movimentoProgressivoDefensor.inicializado) {
+    movimentoProgressivoDefensor.inicializado = true;
+  }
+  alvoX = constrain(alvoX, -255.0f, 255.0f);
+  alvoY = constrain(alvoY, -255.0f, 255.0f);
+  float giroAlvo = (float)constrain(cmdGiro, -255, 255);
+  // Deadzone somente no alvo. Evita que pequenos residuos mantenham o robo vibrando.
+  alvoX = aplicarDeadzoneDefensor(alvoX, DEFENSOR_DEADZONE_VETOR);
+  alvoY = aplicarDeadzoneDefensor(alvoY, DEFENSOR_DEADZONE_VETOR);
+  giroAlvo = aplicarDeadzoneDefensor(giroAlvo, DEFENSOR_DEADZONE_GIRO);
+  // 1) Filtro de primeira ordem no comando desejado.
+  // Em emergencia a filtragem fica praticamente transparente.
+  float alphaVetor = respostaRapida
+    ? 0.85f
+    : calcularAlphaFiltroDefensor(dt, DEFENSOR_FILTRO_ALVO_TAU_MS);
+  float alphaGiro = respostaRapida
+    ? 0.90f
+    : calcularAlphaFiltroDefensor(dt, DEFENSOR_FILTRO_GIRO_TAU_MS);
+  movimentoProgressivoDefensor.alvoFiltradoX = suavizarDefensor(
+    movimentoProgressivoDefensor.alvoFiltradoX, alvoX, alphaVetor);
+  movimentoProgressivoDefensor.alvoFiltradoY = suavizarDefensor(
+    movimentoProgressivoDefensor.alvoFiltradoY, alvoY, alphaVetor);
+  movimentoProgressivoDefensor.giroFiltrado = suavizarDefensor(
+    movimentoProgressivoDefensor.giroFiltrado, giroAlvo, alphaGiro);
+  // 2) Rampa de aceleracao/frenagem/inversao.
+  movimentoProgressivoDefensor.saidaX = aplicarRampaProgressivaDefensor(
+    movimentoProgressivoDefensor.saidaX,
+    movimentoProgressivoDefensor.alvoFiltradoX,
+    dt,
+    respostaRapida);
+  movimentoProgressivoDefensor.saidaY = aplicarRampaProgressivaDefensor(
+    movimentoProgressivoDefensor.saidaY,
+    movimentoProgressivoDefensor.alvoFiltradoY,
+    dt,
+    respostaRapida);
+  float taxaGiro = respostaRapida
+    ? DEFENSOR_RAMPA_RAPIDA_PWM_S
+    : DEFENSOR_RAMPA_GIRO_PWM_S;
+  float erroGiro = movimentoProgressivoDefensor.giroFiltrado -
+                   movimentoProgressivoDefensor.giroSaida;
+  float deltaGiroMax = taxaGiro * dt;
+  erroGiro = constrain(erroGiro, -deltaGiroMax, deltaGiroMax);
+  movimentoProgressivoDefensor.giroSaida += erroGiro;
+  // Zera residuos quando tanto alvo quanto saida ja estao praticamente parados.
+  if (fabsf(alvoX) <= DEFENSOR_SAIDA_ZERO_PWM &&
+      fabsf(movimentoProgressivoDefensor.saidaX) <= DEFENSOR_SAIDA_ZERO_PWM) {
+    movimentoProgressivoDefensor.alvoFiltradoX = 0.0f;
+    movimentoProgressivoDefensor.saidaX = 0.0f;
+  }
+  if (fabsf(alvoY) <= DEFENSOR_SAIDA_ZERO_PWM &&
+      fabsf(movimentoProgressivoDefensor.saidaY) <= DEFENSOR_SAIDA_ZERO_PWM) {
+    movimentoProgressivoDefensor.alvoFiltradoY = 0.0f;
+    movimentoProgressivoDefensor.saidaY = 0.0f;
+  }
+  if (fabsf(giroAlvo) <= DEFENSOR_SAIDA_ZERO_PWM &&
+      fabsf(movimentoProgressivoDefensor.giroSaida) <= DEFENSOR_SAIDA_ZERO_PWM) {
+    movimentoProgressivoDefensor.giroFiltrado = 0.0f;
+    movimentoProgressivoDefensor.giroSaida = 0.0f;
+  }
+  float magnitude = calcularMagnitudeVetorDefensor(
+    movimentoProgressivoDefensor.saidaX,
+    movimentoProgressivoDefensor.saidaY);
+  int giroFinal = constrain(
+    (int)roundf(movimentoProgressivoDefensor.giroSaida),
+    -255,
+    255);
+  if (magnitude < 0.5f) {
+    girarNoEixo(giroFinal);
+    return;
+  }
+  float direcaoFinal = calcularAnguloVetorDefensor(
+    movimentoProgressivoDefensor.saidaX,
+    movimentoProgressivoDefensor.saidaY);
+  int velocidadeFinal = (int)roundf(constrain(magnitude, 0.0f, 255.0f));
+  seguirDirecaoComGiroLaterais(
+    direcaoFinal,
+    velocidadeFinal,
+    giroFinal
+  );
+}
+void girarDefensorProgressivo(int cmdGiro, bool respostaRapida = false) {
+  executarMovimentoProgressivoDefensor(0.0f, 0.0f, cmdGiro, respostaRapida);
+}
 // ÚNICA saída de translação do defensor com proteção dos ultras.
 //
-// A direção/velocidade solicitada pela estratégia é convertida para X/Y.
-// Depois os ultras modificam somente as componentes necessárias.
-// Por fim o vetor seguro volta a ser convertido para ângulo + PWM.
+// A direcao/velocidade solicitada pela estrategia e convertida para X/Y.
+// Os ultras modificam somente as componentes necessarias.
+// Depois o resultado passa pelo gerenciador progressivo antes dos motores.
 void seguirDirecaoDefensorComLimites(float direcaoCmd,
                                      int velocidadePwm,
                                      int cmdGiro,
                                      bool ultrasRecentes) {
   float anguloRad = normalizarAngulo360(direcaoCmd) * PI / 180.0f;
-
   float velocidade = (float)constrain(velocidadePwm, 0, 255);
-
   float vetorX = sinf(anguloRad) * velocidade;
   float vetorY = cosf(anguloRad) * velocidade;
-
   aplicarLimitesUltraAoVetor(
     vetorX,
     vetorY,
     ultrasRecentes
   );
-
-  float magnitude = sqrtf(
-    vetorX * vetorX +
-    vetorY * vetorY
-  );
-
-  // Nenhuma translação restante: mantém somente o controle de giro.
-  if (magnitude < 0.5f) {
-    girarNoEixo(cmdGiro);
-    return;
-  }
-
-  float direcaoSegura =
-    calcularAnguloVetorDefensor(vetorX, vetorY);
-
-  int velocidadeSegura =
-    (int)roundf(constrain(magnitude, 0.0f, 255.0f));
-
-  seguirDirecaoComGiroLaterais(
-    direcaoSegura,
-    velocidadeSegura,
-    cmdGiro
+  bool respostaRapida = ultraEmCondicaoCriticaDefensor(ultrasRecentes);
+  executarMovimentoProgressivoDefensor(
+    vetorX,
+    vetorY,
+    cmdGiro,
+    respostaRapida
   );
 }
-
 // NOVO: centraliza no gol por ultras laterais (sem IR)
 float calcularCorrecaoCentroGolPorUltraX(bool ultrasRecentes) {
   if (!ultrasRecentes) return 0.0f;
@@ -659,7 +855,7 @@ bool executarAvancoFrontalTemporizadoDefensor(unsigned long agora,
       vetorXSuave = vetorYSuave = cmdGiroSuave = 0.0f;
       int cmdPidBola = calcularSaidaPidBussola(erroAlinhamentoBola);
       int cmdGiroBola = -SINAL_GIRO_PID * cmdPidBola;
-      girarNoEixo(-cmdGiroBola); return true;
+      girarDefensorProgressivo(-cmdGiroBola, true); return true;
     }
     alinhamentoIrFrontalAtivo = false;
     avancoIrFrontalAtivo = true;
@@ -850,6 +1046,7 @@ void defensor() {
     cmdGiroSuave = 0.0f;
     resetPidLinha();
     resetPidZimBussola();
+    resetMovimentoProgressivoDefensor();
     girarNoEixo(0);
     return;
   }
@@ -899,7 +1096,7 @@ void defensor() {
         ultrasRecentes
       );
     } else {
-      girarNoEixo(cmdGiroBussola);
+      girarDefensorProgressivo(cmdGiroBussola);
     }
 
     return;
@@ -1039,10 +1236,11 @@ void defensor() {
 
       resetPidLinha();
 
-      seguirDirecaoComGiroLaterais(
+      seguirDirecaoDefensorComLimites(
         270.0f,
         DEFENSOR_ULTRA_CENTRO_VELOCIDADE_PWM,
-        cmdGiroBussola
+        cmdGiroBussola,
+        ultrasRecentes
       );
       return;
     }
@@ -1052,15 +1250,16 @@ void defensor() {
 
       resetPidLinha();
 
-      seguirDirecaoComGiroLaterais(
+      seguirDirecaoDefensorComLimites(
         90.0f,
         DEFENSOR_ULTRA_CENTRO_VELOCIDADE_PWM,
-        cmdGiroBussola
+        cmdGiroBussola,
+        ultrasRecentes
       );
       return;
     }
   }
 
   resetPidLinha();
-  girarNoEixo(cmdGiroBussola);
+  girarDefensorProgressivo(cmdGiroBussola);
 }
