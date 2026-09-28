@@ -213,10 +213,10 @@ void seguirDirecaoComGiro(float anguloGraus, int velocidade, int cmdGiro) {
   v3 += termoGiro; // 135
   v4 += termoGiro - 50; //45
   }else{
-  v1 += termoGiro + 15; // 315
+  v1 += termoGiro + 50; // 315
   v2 += termoGiro; // 225
   v3 += termoGiro; // 135
-  v4 += termoGiro + 15; //45
+  v4 += termoGiro + 50; //45
   }
 
 
@@ -546,7 +546,8 @@ bool moverParaComGiro(float xCm, float yCm) {
     return false;
   }
 
-  int velocidade = calcularVelocidadePosicionamento(distanciaCm);
+  //int velocidade = calcularVelocidadePosicionamento(distanciaCm);
+  int velocidade = 220;
   if (!hooksOrientacaoValidos() || !g_posHooks.temReferenciaOrientacao()) {
     seguirDirecaoPorAngulo(anguloMov, velocidade);
     return true;
