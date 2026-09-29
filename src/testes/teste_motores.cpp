@@ -207,7 +207,7 @@ void loop() {
 
   moverPorAnguloVetorialPlaca(angulo, velocidade);
   delay(1000);
-  moverRobo(0, 0, 0, 0);
+  moverRobo(255, 0, 0, 0);
   delay(2000);
 
 }

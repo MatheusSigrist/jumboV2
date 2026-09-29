@@ -116,18 +116,29 @@ void atacante() {
     float anguloFuga = 0.0f;
 
     // =========================================================================
-    // LINHA — TRAVA DE FUGA TRASEIRA
+    // LINHA — TRAVA DE FUGA PARA TRÁS
     // =========================================================================
     //
-    // Problema observado no robô:
-    //     linha -> fuga 180° -> pequeno intervalo sem linha -> linha 0°
+    // Sequência problemática observada:
     //
-    // Essas leituras pertencem à MESMA passagem pela faixa. Depois que uma
-    // fuga traseira começa, o robô mantém 180° e ignora novas leituras de 0°
-    // até ficar continuamente sem linha por um pequeno intervalo.
+    //      linha 180° -> pequeno trecho sem linha -> linha 0°
     //
-    // Além disso, se a própria linha for detectada na região frontal (0°),
-    // a ação é diretamente recuar em 180°.
+    // O 180° é a fuga para trás gerada quando o robô entra na linha pela
+    // frente. Depois, por causa da região morta/velocidade, os sensores de trás
+    // podem devolver 0°. Esse 0° NÃO deve inverter imediatamente a fuga.
+    //
+    // IMPORTANTE:
+    // Um 0° isolado NÃO cria mais a trava, porque uma linha fisicamente atrás
+    // do robô também pode devolver 0°. Nesse caso sairDaLinha() decide
+    // normalmente e o robô pode fugir para frente.
+    //
+    // A trava só pode NASCER quando:
+    //   1) o último movimento normal tinha componente frontal; E
+    //   2) a linha está pedindo fuga aproximadamente para 180°.
+    //
+    // Depois de criada, ela tolera:
+    //   • pequenos intervalos sem linha;
+    //   • leitura posterior próxima de 0° da mesma passagem.
     // =========================================================================
 
     const unsigned long agoraLinhaMs = millis();
@@ -135,9 +146,20 @@ void atacante() {
     static constexpr unsigned long TEMPO_SEM_LINHA_LIBERAR_TRAVA_MS = 200UL;
     static constexpr unsigned long TEMPO_MAX_FUGA_TRASEIRA_MS = 1500UL;
 
+    // Faixa que realmente INICIA uma fuga para trás.
+    static constexpr float ANGULO_FUGA_TRAS_MIN = 150.0f;
+    static constexpr float ANGULO_FUGA_TRAS_MAX = 210.0f;
+
+    // Faixa de 0° que pode aparecer DEPOIS que a trava já começou.
+    static constexpr float FAIXA_ZERO_TRAVA_GRAUS = 60.0f;
+
     static bool fugaTraseiraTravada = false;
     static unsigned long inicioFugaTraseiraMs = 0UL;
     static unsigned long inicioSemLinhaTravaMs = 0UL;
+
+    // Guarda se o último comando NORMAL do atacante estava indo
+    // majoritariamente para frente.
+    static bool ultimoMovimentoEraFrente = false;
 
     // Mantidos porque a estratégia normal abaixo usa essas variáveis.
     static unsigned long inicioMovimentoFrenteGolMs = 0UL;
@@ -148,55 +170,54 @@ void atacante() {
     static constexpr unsigned long TEMPO_SEM_BOLA_PARA_REPOSICIONAR_MS = 1500UL;
     static unsigned long inicioSemBolaMs = 0UL;
 
-    // -------------------------------------------------------------------------
-    // 1) DEFINE AS FAIXAS DA LINHA COM HISTERese
-    // -------------------------------------------------------------------------
-    // Para INICIAR a trava traseira, a linha precisa estar bem na frente:
-    //     330° ... 360° / 0° ... 30°
-    //
-    // Depois que a trava já começou, aceitamos uma faixa frontal um pouco maior:
-    //     300° ... 360° / 0° ... 60°
-    //
-    // Se aparecer uma linha claramente lateral/traseira:
-    //     > 60° e < 300°
-    // a trava de 180° é cancelada imediatamente e sairDaLinha() volta a decidir.
-
-    bool linhaFrontalAtivaTrava = false;
-    bool linhaAindaFrontalDuranteTrava = false;
-    bool linhaLateralCancelaTrava = false;
+    bool linhaPodeIniciarTrava180 = false;
+    bool linhaEh180DuranteTrava = false;
+    bool linhaEhZeroDuranteTrava = false;
+    bool linhaIncompativelComTrava = false;
 
     if (linhaDetectada && anguloLinhaPe >= 0.0f) {
         const float anguloLinhaNormalizado =
             normalizarAngulo360(anguloLinhaPe);
 
-        linhaFrontalAtivaTrava =
-            (anguloLinhaNormalizado <= 30.0f ||
-             anguloLinhaNormalizado >= 330.0f);
+        linhaEh180DuranteTrava =
+            (anguloLinhaNormalizado >= ANGULO_FUGA_TRAS_MIN &&
+             anguloLinhaNormalizado <= ANGULO_FUGA_TRAS_MAX);
 
-        linhaAindaFrontalDuranteTrava =
-            (anguloLinhaNormalizado <= 60.0f ||
-             anguloLinhaNormalizado >= 300.0f);
+        linhaEhZeroDuranteTrava =
+            (anguloLinhaNormalizado <= FAIXA_ZERO_TRAVA_GRAUS ||
+             anguloLinhaNormalizado >=
+                 (360.0f - FAIXA_ZERO_TRAVA_GRAUS));
 
-        linhaLateralCancelaTrava =
-            (anguloLinhaNormalizado > 60.0f &&
-             anguloLinhaNormalizado < 300.0f);
+        // NOVO:
+        // 0° sozinho NUNCA cria a trava.
+        // Só uma fuga aproximadamente 180° e vindo de movimento frontal.
+        linhaPodeIniciarTrava180 =
+            ultimoMovimentoEraFrente &&
+            linhaEh180DuranteTrava;
+
+        // Durante uma trava já existente, só aceitamos:
+        //   150°..210° = fuga traseira real
+        //   300°..360°/0°..60° = leitura 0° posterior da mesma passagem
+        linhaIncompativelComTrava =
+            !linhaEh180DuranteTrava &&
+            !linhaEhZeroDuranteTrava;
     }
 
     // -------------------------------------------------------------------------
-    // 2) SE JÁ COMEÇOU UMA FUGA PARA TRÁS, DECIDE SE MANTÉM OU CANCELA
+    // 1) SE A TRAVA JÁ EXISTE, DECIDE SE MANTÉM OU LIBERA
     // -------------------------------------------------------------------------
     if (fugaTraseiraTravada) {
 
-        // Uma linha lateral real, como 90° ou 270°, tem prioridade sobre a
-        // trava antiga. Cancela a fuga em 180° e deixa sairDaLinha() decidir
-        // a nova direção ainda neste mesmo ciclo.
-        if (linhaLateralCancelaTrava) {
+        // Se apareceu uma direção que não combina nem com 180° nem com 0°,
+        // cancela a trava e deixa sairDaLinha() decidir ainda neste ciclo.
+        if (linhaDetectada && linhaIncompativelComTrava) {
             fugaTraseiraTravada = false;
             inicioFugaTraseiraMs = 0UL;
             inicioSemLinhaTravaMs = 0UL;
+            ultimoMovimentoEraFrente = false;
         }
         else {
-            // Failsafe: não permite ficar recuando eternamente se algum sensor travar.
+            // Failsafe: evita recuo infinito caso algum sensor fique travado.
             if ((agoraLinhaMs - inicioFugaTraseiraMs) >=
                 TEMPO_MAX_FUGA_TRASEIRA_MS) {
 
@@ -206,24 +227,27 @@ void atacante() {
 
                 fugindoLinhaAgora = false;
                 anguloFugaLinhaCmd = 0.0f;
+                ultimoMovimentoEraFrente = false;
 
                 girarNoEixo(0);
                 return;
             }
 
             if (linhaDetectada) {
-                // Enquanto a nova leitura ainda estiver na região frontal ampliada
-                // (300°..60°), ela pertence à mesma ocorrência da linha.
-                if (linhaAindaFrontalDuranteTrava) {
+                // Tanto 180° quanto 0° continuam pertencendo à mesma passagem.
+                if (linhaEh180DuranteTrava ||
+                    linhaEhZeroDuranteTrava) {
+
                     inicioSemLinhaTravaMs = 0UL;
                 }
             }
             else {
-                // Só libera depois de ficar SEM LINHA continuamente por 200 ms.
+                // Mantém 180° durante um intervalo curto sem linha.
                 if (inicioSemLinhaTravaMs == 0UL) {
                     inicioSemLinhaTravaMs = agoraLinhaMs;
                 }
 
+                // Só libera quando ficar continuamente sem linha pelo tempo definido.
                 if ((agoraLinhaMs - inicioSemLinhaTravaMs) >=
                     TEMPO_SEM_LINHA_LIBERAR_TRAVA_MS) {
 
@@ -233,14 +257,18 @@ void atacante() {
 
                     fugindoLinhaAgora = false;
                     anguloFugaLinhaCmd = 0.0f;
+                    ultimoMovimentoEraFrente = false;
                 }
             }
 
-            // Enquanto a trava continua ativa, mantém o recuo em 180°.
-            // Ex.: 0° -> 180° -> sem linha curto -> 0° continua em 180°.
+            // Enquanto a trava existir, o comando continua sendo 180°.
             if (fugaTraseiraTravada) {
                 fugindoLinhaAgora = true;
                 anguloFugaLinhaCmd = 180.0f;
+
+                // O movimento atual é para trás, então não carregamos
+                // um estado antigo de "movimento frontal".
+                ultimoMovimentoEraFrente = false;
 
                 seguirDirecaoPorAngulo(
                     180.0f,
@@ -253,15 +281,17 @@ void atacante() {
     }
 
     // -------------------------------------------------------------------------
-    // 3) SÓ UMA LINHA REALMENTE FRONTAL (330°..30°) PODE CRIAR A TRAVA DE 180°
+    // 2) CRIA A TRAVA SOMENTE EM UMA FUGA REAL PARA 180°
     // -------------------------------------------------------------------------
-    if (linhaFrontalAtivaTrava) {
+    if (linhaPodeIniciarTrava180) {
         fugaTraseiraTravada = true;
         inicioFugaTraseiraMs = agoraLinhaMs;
         inicioSemLinhaTravaMs = 0UL;
 
         fugindoLinhaAgora = true;
         anguloFugaLinhaCmd = 180.0f;
+
+        ultimoMovimentoEraFrente = false;
 
         seguirDirecaoPorAngulo(
             180.0f,
@@ -272,7 +302,14 @@ void atacante() {
     }
 
     // -------------------------------------------------------------------------
-    // 4) RESTANTE DAS DIREÇÕES: sairDaLinha() DECIDE NORMALMENTE
+    // 3) TODAS AS OUTRAS LINHAS VÃO PARA A LÓGICA NORMAL
+    // -------------------------------------------------------------------------
+    //
+    // Isto inclui principalmente:
+    //      linha traseira isolada -> anguloLinhaPe = 0°
+    //
+    // Como 0° não cria mais a trava, sairDaLinha() volta a responder
+    // normalmente a essa leitura.
     // -------------------------------------------------------------------------
     if (sairDaLinha(
             linhaDetectada,
@@ -282,6 +319,9 @@ void atacante() {
 
         fugindoLinhaAgora = true;
         anguloFugaLinhaCmd = normalizarAngulo360(anguloFuga);
+
+        // O comando atual é uma fuga da linha, e não um avanço normal.
+        ultimoMovimentoEraFrente = false;
         return;
     }
 
@@ -297,14 +337,21 @@ void atacante() {
 
         if (irNaFaixaFrontal(anguloIrAtual)) {
 
+            // Movimento frontal real: permite que uma futura fuga 180°
+            // crie a trava especial.
+            ultimoMovimentoEraFrente = true;
+
             if (!indoDeFrenteParaGolAgora) {
                 indoDeFrenteParaGolAgora = true;
                 inicioMovimentoFrenteGolMs = agoraLinhaMs;
             }
-            tempoContinuoFrenteGolMs = agoraLinhaMs - inicioMovimentoFrenteGolMs;
-            // Velocidade frontal fixa: a distancia medida pela camera
-            // nao altera mais a velocidade de avancar para o gol.
+
+            tempoContinuoFrenteGolMs =
+                agoraLinhaMs - inicioMovimentoFrenteGolMs;
+
+            // Velocidade frontal fixa.
             veloFrente = 220;
+
             moverFrenteComGiroParaGol(veloFrente);
 
         } else {
@@ -317,6 +364,15 @@ void atacante() {
             float anguloMovimento =
                 mapearAnguloBolaParaMovimento(anguloIrAtual);
 
+            const float anguloMovimentoNormalizado =
+                normalizarAngulo360(anguloMovimento);
+
+            // Se o comando ainda aponta majoritariamente para a frente,
+            // também consideramos que existe componente frontal.
+            ultimoMovimentoEraFrente =
+                (anguloMovimentoNormalizado <= 60.0f ||
+                 anguloMovimentoNormalizado >= 300.0f);
+
             seguirDirecaoComGiro(
                 anguloMovimento,
                 velo,
@@ -324,40 +380,48 @@ void atacante() {
             );
         }
 
-    } 
-    
-    // Se IR não estiver disponível (SEM BOLA!!)
+    }
 
+    // Se IR não estiver disponível (SEM BOLA!!)
     else {
         indoDeFrenteParaGolAgora = false;
         tempoContinuoFrenteGolMs = 0UL;
 
-        // So reposiciona pela zona apos 3s seguidos sem enxergar a bola.
+        // Sem bola, não deixa um estado antigo ativar a trava especial.
+        ultimoMovimentoEraFrente = false;
+
         if (inicioSemBolaMs == 0UL) {
             inicioSemBolaMs = agoraLinhaMs;
         }
 
         const bool semBolaHaTempoSuficiente =
-            (agoraLinhaMs - inicioSemBolaMs) >= TEMPO_SEM_BOLA_PARA_REPOSICIONAR_MS;
+            (agoraLinhaMs - inicioSemBolaMs) >=
+            TEMPO_SEM_BOLA_PARA_REPOSICIONAR_MS;
 
         float alvoX = 0.0f;
         float alvoY = 0.0f;
+
         if (semBolaHaTempoSuficiente &&
             obterAlvoReposicionamentoPorZona(alvoX, alvoY))
-           {
-            // moverParaComGiro() depende da posicao estimada por PosicaoCampo,
-            // que so e atualizada se alimentarmos as leituras a cada ciclo aqui.
-            atualizarLeiturasPosicionamento(ultraEcm, ultraDcm, ultraFcm, ultraTcm, ultrasValidos);
+        {
+            atualizarLeiturasPosicionamento(
+                ultraEcm,
+                ultraDcm,
+                ultraFcm,
+                ultraTcm,
+                ultrasValidos
+            );
+
             if (moverParaComGiro(alvoX, alvoY)) {
                 return;
             }
         }
-
-      else {
-        girarNoEixo(cmdGiro);
-        return;
+        else {
+            girarNoEixo(cmdGiro);
+            return;
+        }
     }
-  }
+
     return;
 }
 
