@@ -14,7 +14,7 @@ int g_v4Atual = 0;
 void motor1(int vel) {
   int pwm = constrain(abs(vel), 0, 255);
   ledcWrite(g_cfg.pwm_ch1, pwm);
-  if (vel <= 0) {
+  if (vel >= 0) {
     digitalWrite(g_cfg.in1_1_a, HIGH);
     digitalWrite(g_cfg.in2_1_a, LOW);
   } else {
@@ -26,7 +26,7 @@ void motor1(int vel) {
 void motor2(int vel) {
   int pwm = constrain(abs(vel), 0, 255);
   ledcWrite(g_cfg.pwm_ch2, pwm);
-  if (vel <= 0) {
+  if (vel >= 0) {
     digitalWrite(g_cfg.in1_2_a, HIGH);
     digitalWrite(g_cfg.in2_2_a, LOW);
   } else {
@@ -38,7 +38,7 @@ void motor2(int vel) {
 void motor4(int vel) {
   int pwm = constrain(abs(vel), 0, 255);
   ledcWrite(g_cfg.pwm_ch3, pwm);
-  if (vel <= 0) {
+  if (vel >= 0) {
     digitalWrite(g_cfg.in1_1_b, HIGH);
     digitalWrite(g_cfg.in2_1_b, LOW);
   } else {
@@ -50,7 +50,7 @@ void motor4(int vel) {
 void motor3(int vel) {
   int pwm = constrain(abs(vel), 0, 255);
   ledcWrite(g_cfg.pwm_ch4, pwm);
-  if (vel <= 0) {
+  if (vel >= 0) {
     digitalWrite(g_cfg.in1_2_b, HIGH);
     digitalWrite(g_cfg.in2_2_b, LOW);
   } else {
